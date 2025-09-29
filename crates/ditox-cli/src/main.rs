@@ -5,7 +5,9 @@ use ditox_core::clipboard::NoopClipboard as SystemClipboard;
 #[cfg(target_os = "linux")]
 use ditox_core::clipboard::{ArboardClipboard as SystemClipboard, Clipboard as _};
 use ditox_core::{ClipKind, Query, Store, StoreImpl};
+use image::ImageEncoder;
 use std::path::PathBuf;
+// config module is declared at the top; avoid duplicate re-declaration here
 
 #[derive(Parser)]
 #[command(name = "ditox", version, about = "Ditox clipboard CLI (scaffold)")]
@@ -38,6 +40,11 @@ enum Commands {
         /// Read image from system clipboard
         #[arg(long, conflicts_with = "text")]
         image_from_clipboard: bool,
+    },
+    /// Sync commands
+    Sync {
+        #[command(subcommand)]
+        cmd: SyncCmd,
     },
     /// List recent entries
     List {
@@ -103,6 +110,19 @@ enum Commands {
     },
 }
 
+#[derive(Subcommand)]
+enum SyncCmd {
+    /// Run one sync iteration (push+pull by default)
+    Run {
+        #[arg(long)]
+        push_only: bool,
+        #[arg(long)]
+        pull_only: bool,
+    },
+    /// Show sync status
+    Status,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let settings = load_settings();
@@ -121,18 +141,43 @@ fn main() -> Result<()> {
             image_path,
             image_from_clipboard,
         } => {
+            let path_mode = settings
+                .images
+                .as_ref()
+                .and_then(|i| i.local_file_path_mode)
+                .unwrap_or(false);
             if let Some(path) = image_path {
-                let bytes = std::fs::read(&path)?;
-                let img = image::load_from_memory(&bytes)?;
-                let rgba = img.to_rgba8();
-                let (w, h) = rgba.dimensions();
-                let clip = store.add_image_rgba(w, h, &rgba.into_raw())?;
-                println!("added image {} ({}x{})", clip.id, w, h);
+                if path_mode {
+                    let clip = store.add_image_from_path(&path)?;
+                    println!("added image {} (file) {}", clip.id, path.display());
+                } else {
+                    let bytes = std::fs::read(&path)?;
+                    let img = image::load_from_memory(&bytes)?;
+                    let rgba = img.to_rgba8();
+                    let (w, h) = rgba.dimensions();
+                    let clip = store.add_image_rgba(w, h, &rgba.into_raw())?;
+                    println!("added image {} ({}x{})", clip.id, w, h);
+                }
             } else if image_from_clipboard {
                 let cb = SystemClipboard::new();
                 if let Some(img) = cb.get_image()? {
-                    let clip = store.add_image_rgba(img.width, img.height, &img.bytes)?;
-                    println!("added image {} ({}x{})", clip.id, img.width, img.height);
+                    if path_mode {
+                        let dir = crate::config::images_dir(&settings);
+                        std::fs::create_dir_all(&dir)?;
+                        let dest = dir.join(format!("{}.png", chrono_like_timestamp()));
+                        image::codecs::png::PngEncoder::new(std::fs::File::create(&dest)?)
+                            .write_image(
+                                &img.bytes,
+                                img.width,
+                                img.height,
+                                image::ExtendedColorType::Rgba8,
+                            )?;
+                        let clip = store.add_image_from_path(&dest)?;
+                        println!("added image {} (file) {}", clip.id, dest.display());
+                    } else {
+                        let clip = store.add_image_rgba(img.width, img.height, &img.bytes)?;
+                        println!("added image {} ({}x{})", clip.id, img.width, img.height);
+                    }
                 } else {
                     eprintln!("no image in clipboard");
                 }
@@ -167,17 +212,25 @@ fn main() -> Result<()> {
                         "id": c.id,
                         "favorite": c.is_favorite,
                         "created_at": c.created_at,
+                        "path": c.image_path,
                         "meta": {"format": m.format, "width": m.width, "height": m.height, "size_bytes": m.size_bytes}
                     })).collect::<Vec<_>>())?);
                 } else {
                     for (c, m) in items {
                         println!(
-                            "{}\t{}\t{}x{} {}",
+                            "{}\t{}\t{}x{} {} {}",
                             c.id,
                             if c.is_favorite { "*" } else { " " },
                             m.width,
                             m.height,
-                            m.format
+                            m.format,
+                            c.image_path
+                                .as_deref()
+                                .map(|p| std::path::Path::new(p)
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or(p))
+                                .unwrap_or("")
                         );
                     }
                 }
@@ -271,10 +324,14 @@ fn main() -> Result<()> {
                     }
                     ClipKind::Image => {
                         if let Some(m) = store.get_image_meta(&id)? {
-                            println!("id:\t{}\nkind:\timage\ncreated:\t{}\nfavorite:\t{}\nformat:\t{}\nsize:\t{} bytes\ndims:\t{}x{}\nsha256:\t{}",
-                                c.id, c.created_at, c.is_favorite, m.format, m.size_bytes, m.width, m.height, m.sha256);
+                            println!("id:\t{}\nkind:\timage\ncreated:\t{}\nfavorite:\t{}\nformat:\t{}\nsize:\t{} bytes\ndims:\t{}x{}\nsha256:\t{}\npath:\t{}",
+                                c.id, c.created_at, c.is_favorite, m.format, m.size_bytes, m.width, m.height, m.sha256, c.image_path.as_deref().unwrap_or("<in-entry>"));
                         } else {
-                            println!("id:\t{}\nkind:\timage (metadata missing)", id);
+                            println!(
+                                "id:\t{}\nkind:\timage (metadata missing)\npath:\t{}",
+                                id,
+                                c.image_path.as_deref().unwrap_or("<unknown>")
+                            );
                         }
                     }
                 }
@@ -346,6 +403,45 @@ fn main() -> Result<()> {
                 store_impl.migrate_all()?;
                 let s = store_impl.migration_status()?;
                 println!("migrated to version {}", s.current);
+            }
+        }
+        Commands::Sync { cmd } => {
+            let cfg = &settings;
+            let local_db = match &cli.db {
+                Some(p) => p.clone(),
+                None => default_db_path(),
+            };
+            let (url, token) = match &cfg.storage {
+                config::Storage::Turso { url, auth_token } => {
+                    (Some(url.as_str()), auth_token.as_deref())
+                }
+                _ => (None, None),
+            };
+            let device_id = cfg
+                .sync
+                .as_ref()
+                .and_then(|s| s.device_id.clone())
+                .or_else(|| std::env::var("DITOX_DEVICE_ID").ok())
+                .or_else(|| Some(whoami::hostname()))
+                .unwrap_or_else(|| "local".into());
+            let batch = cfg.sync.as_ref().and_then(|s| s.batch_size).unwrap_or(500);
+            let engine =
+                ditox_core::sync::SyncEngine::new(&local_db, url, token, Some(&device_id), batch)?;
+            match cmd {
+                SyncCmd::Run {
+                    push_only,
+                    pull_only,
+                } => {
+                    let rep = engine.run(push_only, pull_only)?;
+                    println!("sync: pushed={} pulled={}", rep.pushed, rep.pulled);
+                }
+                SyncCmd::Status => {
+                    let st = engine.status()?;
+                    println!(
+                        "last_push_updated_at={:?}\nlast_pull_updated_at={:?}\npending_local={}",
+                        st.last_push, st.last_pull, st.pending_local
+                    );
+                }
             }
         }
         Commands::Config { json } => {

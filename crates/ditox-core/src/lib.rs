@@ -13,6 +13,8 @@ pub struct Clip {
     pub created_at: OffsetDateTime,
     pub is_favorite: bool,
     pub kind: ClipKind,
+    pub is_image: bool,
+    pub image_path: Option<String>,
 }
 
 impl Clip {
@@ -23,6 +25,8 @@ impl Clip {
             created_at: OffsetDateTime::now_utc(),
             is_favorite: false,
             kind: ClipKind::Text,
+            is_image: false,
+            image_path: None,
         }
     }
 }
@@ -73,6 +77,9 @@ pub trait Store: Send + Sync {
     fn get_image_meta(&self, id: &str) -> anyhow::Result<Option<ImageMeta>>;
     fn get_image_rgba(&self, id: &str) -> anyhow::Result<Option<ImageRgba>>;
     fn list_images(&self, q: Query) -> anyhow::Result<Vec<(Clip, ImageMeta)>>;
+    fn add_image_from_path(&self, _path: &std::path::Path) -> anyhow::Result<Clip> {
+        anyhow::bail!("not supported")
+    }
     // Retention
     fn prune(
         &self,
@@ -106,7 +113,15 @@ fn gen_id() -> String {
 
 impl Store for MemStore {
     fn add(&self, text: &str) -> anyhow::Result<Clip> {
-        let clip = Clip::new(gen_id(), text.to_string());
+        let clip = Clip {
+            id: gen_id(),
+            text: text.to_string(),
+            created_at: OffsetDateTime::now_utc(),
+            is_favorite: false,
+            kind: ClipKind::Text,
+            is_image: false,
+            image_path: None,
+        };
         let mut v = self.inner.write().expect("poisoned");
         v.insert(0, clip.clone());
         Ok(clip)
@@ -164,6 +179,8 @@ impl Store for MemStore {
             created_at: OffsetDateTime::now_utc(),
             is_favorite: false,
             kind: ClipKind::Image,
+            is_image: true,
+            image_path: None,
         };
         self.images.write().unwrap().insert(
             id.clone(),
@@ -338,7 +355,7 @@ mod sqlite_store {
     use crate::blobstore::BlobStore;
     use image::codecs::png::PngEncoder;
     use image::ImageEncoder;
-    use image::{ImageFormat, ImageReader};
+    use image::{GenericImageView, ImageFormat, ImageReader};
     use include_dir::{include_dir, Dir};
     use rusqlite::{params, Connection, OptionalExtension};
     use std::io::Cursor;
@@ -472,9 +489,15 @@ mod sqlite_store {
             let id = super::gen_id();
             let created_at = OffsetDateTime::now_utc().unix_timestamp();
             let conn = self.conn.lock().unwrap();
+            let updated_at = created_at;
+            let lamport: i64 = conn
+                .query_row("SELECT COALESCE(MAX(lamport),0)+1 FROM clips", [], |r| {
+                    r.get(0)
+                })
+                .unwrap_or(1);
             conn.execute(
-                "INSERT INTO clips(id, kind, text, created_at, is_favorite) VALUES(?, 'text', ?, ?, 0)",
-                params![id, text, created_at],
+                "INSERT INTO clips(id, kind, text, created_at, is_favorite, updated_at, lamport, device_id) VALUES(?, 'text', ?, ?, 0, ?, ?, '')",
+                params![id, text, created_at, updated_at, lamport],
             )?;
             let clip = Clip {
                 id,
@@ -482,6 +505,8 @@ mod sqlite_store {
                 created_at: OffsetDateTime::from_unix_timestamp(created_at)?,
                 is_favorite: false,
                 kind: ClipKind::Text,
+                is_image: false,
+                image_path: None,
             };
             Ok(clip)
         }
@@ -514,6 +539,8 @@ mod sqlite_store {
                             created_at: OffsetDateTime::from_unix_timestamp(created)?,
                             is_favorite: row.get::<_, i64>(3)? != 0,
                             kind: ClipKind::Text,
+                            is_image: false,
+                            image_path: None,
                         });
                     }
                     if let Some(limit) = q.limit {
@@ -538,6 +565,8 @@ mod sqlite_store {
                             created_at: OffsetDateTime::from_unix_timestamp(created)?,
                             is_favorite: row.get::<_, i64>(3)? != 0,
                             kind: ClipKind::Text,
+                            is_image: false,
+                            image_path: None,
                         });
                     }
                     return Ok(out);
@@ -558,6 +587,8 @@ mod sqlite_store {
                     created_at: OffsetDateTime::from_unix_timestamp(created)?,
                     is_favorite: row.get::<_, i64>(3)? != 0,
                     kind: ClipKind::Text,
+                    is_image: false,
+                    image_path: None,
                 });
             }
             Ok(out)
@@ -565,7 +596,7 @@ mod sqlite_store {
 
         fn get(&self, id: &str) -> anyhow::Result<Option<Clip>> {
             let conn = self.conn.lock().unwrap();
-            let mut stmt = conn.prepare("SELECT id, kind, text, created_at, is_favorite FROM clips WHERE id = ? AND deleted_at IS NULL")?;
+            let mut stmt = conn.prepare("SELECT id, kind, text, created_at, is_favorite, COALESCE(image_path,''), CASE WHEN kind='image' THEN 1 ELSE 0 END FROM clips WHERE id = ? AND deleted_at IS NULL")?;
             let opt = stmt
                 .query_row([id], |row| {
                     let created: i64 = row.get(3)?;
@@ -575,6 +606,8 @@ mod sqlite_store {
                     } else {
                         ClipKind::Text
                     };
+                    let path: String = row.get(5)?;
+                    let is_image: i64 = row.get(6)?;
                     Ok(Clip {
                         id: row.get(0)?,
                         text: row.get(2)?,
@@ -582,6 +615,8 @@ mod sqlite_store {
                             .unwrap_or(OffsetDateTime::now_utc()),
                         is_favorite: row.get::<_, i64>(4)? != 0,
                         kind,
+                        is_image: is_image != 0,
+                        image_path: if path.is_empty() { None } else { Some(path) },
                     })
                 })
                 .optional()?;
@@ -590,9 +625,15 @@ mod sqlite_store {
 
         fn favorite(&self, id: &str, fav: bool) -> anyhow::Result<()> {
             let conn = self.conn.lock().unwrap();
+            let lamport: i64 = conn
+                .query_row("SELECT COALESCE(MAX(lamport),0)+1 FROM clips", [], |r| {
+                    r.get(0)
+                })
+                .unwrap_or(1);
+            let now = OffsetDateTime::now_utc().unix_timestamp();
             conn.execute(
-                "UPDATE clips SET is_favorite = ? WHERE id = ?",
-                params![if fav { 1 } else { 0 }, id],
+                "UPDATE clips SET is_favorite = ?, updated_at = ?, lamport = ? WHERE id = ?",
+                params![if fav { 1 } else { 0 }, now, lamport, id],
             )?;
             Ok(())
         }
@@ -607,6 +648,28 @@ mod sqlite_store {
             let conn = self.conn.lock().unwrap();
             conn.execute("DELETE FROM clips", [])?;
             Ok(())
+        }
+
+        fn add_image_from_path(&self, path: &std::path::Path) -> anyhow::Result<Clip> {
+            let img = ImageReader::open(path)?.with_guessed_format()?.decode()?;
+            let (w, h) = img.dimensions();
+            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            let id = super::gen_id();
+            let created_at = OffsetDateTime::now_utc().unix_timestamp();
+            let conn = self.conn.lock().unwrap();
+            let tx = conn.unchecked_transaction()?;
+            tx.execute("INSERT INTO clips(id, kind, text, created_at, is_favorite, image_path) VALUES(?, 'image', '', ?, 0, ?)", params![id, created_at, path.to_string_lossy()])?;
+            tx.execute("INSERT OR REPLACE INTO images(clip_id, format, width, height, size_bytes, sha256, thumb_path) VALUES(?, 'png', ?, ?, ?, '', NULL)", params![id, w as i64, h as i64, size as i64])?;
+            tx.commit()?;
+            Ok(Clip {
+                id,
+                text: String::new(),
+                created_at: OffsetDateTime::from_unix_timestamp(created_at)?,
+                is_favorite: false,
+                kind: ClipKind::Image,
+                is_image: true,
+                image_path: Some(path.to_string_lossy().into()),
+            })
         }
 
         fn add_image_rgba(&self, width: u32, height: u32, rgba: &[u8]) -> anyhow::Result<Clip> {
@@ -639,6 +702,8 @@ mod sqlite_store {
                 created_at: OffsetDateTime::from_unix_timestamp(created_at)?,
                 is_favorite: false,
                 kind: ClipKind::Image,
+                is_image: true,
+                image_path: None,
             })
         }
 
@@ -661,6 +726,19 @@ mod sqlite_store {
         }
 
         fn get_image_rgba(&self, id: &str) -> anyhow::Result<Option<ImageRgba>> {
+            // Prefer image_path if present
+            if let Some(c) = self.get(id)? {
+                if let Some(p) = c.image_path {
+                    let img = ImageReader::open(&p)?.decode()?;
+                    let rgba8 = img.to_rgba8();
+                    let (w, h) = rgba8.dimensions();
+                    return Ok(Some(ImageRgba {
+                        width: w,
+                        height: h,
+                        bytes: rgba8.into_raw(),
+                    }));
+                }
+            }
             let meta = match self.get_image_meta(id)? {
                 Some(m) => m,
                 None => return Ok(None),
@@ -685,7 +763,7 @@ mod sqlite_store {
 
         fn list_images(&self, q: Query) -> anyhow::Result<Vec<(Clip, ImageMeta)>> {
             let conn = self.conn.lock().unwrap();
-            let mut sql = String::from("SELECT c.id, c.created_at, c.is_favorite, i.format, i.width, i.height, i.size_bytes, i.sha256, i.thumb_path FROM clips c JOIN images i ON i.clip_id = c.id WHERE c.deleted_at IS NULL AND c.kind = 'image'");
+            let mut sql = String::from("SELECT c.id, c.created_at, c.is_favorite, c.image_path, i.format, i.width, i.height, i.size_bytes, i.sha256, i.thumb_path FROM clips c JOIN images i ON i.clip_id = c.id WHERE c.deleted_at IS NULL AND c.kind = 'image'");
             if q.favorites_only {
                 sql.push_str(" AND c.is_favorite = 1");
             }
@@ -704,14 +782,16 @@ mod sqlite_store {
                     created_at: OffsetDateTime::from_unix_timestamp(created)?,
                     is_favorite: row.get::<_, i64>(2)? != 0,
                     kind: ClipKind::Image,
+                    is_image: true,
+                    image_path: row.get::<_, Option<String>>(3)?,
                 };
                 let meta = ImageMeta {
-                    format: row.get(3)?,
-                    width: row.get::<_, i64>(4)? as u32,
-                    height: row.get::<_, i64>(5)? as u32,
-                    size_bytes: row.get::<_, i64>(6)? as u64,
-                    sha256: row.get(7)?,
-                    thumb_path: row.get(8)?,
+                    format: row.get(4)?,
+                    width: row.get::<_, i64>(5)? as u32,
+                    height: row.get::<_, i64>(6)? as u32,
+                    size_bytes: row.get::<_, i64>(7)? as u64,
+                    sha256: row.get(8)?,
+                    thumb_path: row.get(9)?,
                 };
                 out.push((clip, meta));
             }
@@ -824,6 +904,251 @@ pub mod blobstore {
             let (a, b) = (&sha256[0..2], &sha256[2..4]);
             let path = self.root.join("objects").join(a).join(b).join(sha256);
             fs::read(path)
+        }
+    }
+}
+
+// Sync engine: local-first with optional remote (libsql)
+pub mod sync {
+    use super::*;
+    #[cfg(feature = "libsql")]
+    use libsql::{self};
+    #[cfg(feature = "sqlite")]
+    use rusqlite::Connection;
+    #[cfg(feature = "libsql")]
+    use tokio::runtime::Runtime;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+    pub struct SyncReport {
+        pub pushed: usize,
+        pub pulled: usize,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+    pub struct SyncStatus {
+        pub last_push: Option<i64>,
+        pub last_pull: Option<i64>,
+        pub pending_local: usize,
+    }
+
+    pub struct SyncEngine {
+        #[cfg(feature = "sqlite")]
+        local: Connection,
+        #[cfg(feature = "libsql")]
+        remote: Option<libsql::Database>,
+        #[cfg(feature = "libsql")]
+        rt: Option<Runtime>,
+        device_id: String,
+        batch_size: usize,
+    }
+
+    impl SyncEngine {
+        #[allow(unused_variables)]
+        pub fn new(
+            local_db_path: &std::path::Path,
+            remote_url: Option<&str>,
+            remote_token: Option<&str>,
+            device_id: Option<&str>,
+            batch_size: usize,
+        ) -> anyhow::Result<Self> {
+            #[cfg(feature = "sqlite")]
+            let local = Connection::open(local_db_path)?;
+            #[cfg(feature = "sqlite")]
+            {
+                let _ = local.pragma_update(None, "foreign_keys", &1);
+                // Best-effort schema add
+                let _ = local.execute("ALTER TABLE clips ADD COLUMN updated_at INTEGER", []);
+                let _ = local.execute("ALTER TABLE clips ADD COLUMN lamport INTEGER DEFAULT 0", []);
+                let _ = local.execute("ALTER TABLE clips ADD COLUMN device_id TEXT DEFAULT ''", []);
+                local.execute_batch(
+                    r#"
+                    CREATE TABLE IF NOT EXISTS sync_state(key TEXT PRIMARY KEY, val INTEGER);
+                    INSERT OR IGNORE INTO sync_state(key,val) VALUES('last_push_updated_at',0);
+                    INSERT OR IGNORE INTO sync_state(key,val) VALUES('last_pull_updated_at',0);
+                    "#,
+                )?;
+            }
+
+            #[cfg(feature = "libsql")]
+            let (remote, rt) = if let Some(url) = remote_url {
+                let rt = Runtime::new()?;
+                let token = remote_token.unwrap_or("").to_string();
+                let db = rt.block_on(async {
+                    libsql::Builder::new_remote(url.to_string(), token)
+                        .build()
+                        .await
+                })?;
+                (Some(db), Some(rt))
+            } else {
+                (None, None)
+            };
+
+            Ok(Self {
+                #[cfg(feature = "sqlite")]
+                local,
+                #[cfg(feature = "libsql")]
+                remote,
+                #[cfg(feature = "libsql")]
+                rt,
+                device_id: device_id
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "local".to_string()),
+                batch_size: if batch_size == 0 { 500 } else { batch_size },
+            })
+        }
+
+        pub fn status(&self) -> anyhow::Result<SyncStatus> {
+            #[cfg(feature = "sqlite")]
+            {
+                let last_push: Option<i64> = self
+                    .local
+                    .query_row(
+                        "SELECT val FROM sync_state WHERE key='last_push_updated_at'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                let last_pull: Option<i64> = self
+                    .local
+                    .query_row(
+                        "SELECT val FROM sync_state WHERE key='last_pull_updated_at'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                let pending: i64 = self.local.query_row("SELECT COUNT(1) FROM clips WHERE kind='text' AND COALESCE(updated_at, created_at) > COALESCE((SELECT val FROM sync_state WHERE key='last_push_updated_at'),0)", [], |r| r.get(0)).unwrap_or(0);
+                return Ok(SyncStatus {
+                    last_push,
+                    last_pull,
+                    pending_local: pending as usize,
+                });
+            }
+            #[allow(unreachable_code)]
+            Ok(SyncStatus::default())
+        }
+
+        pub fn run(&self, push_only: bool, pull_only: bool) -> anyhow::Result<SyncReport> {
+            let mut pushed = 0usize;
+            let mut pulled = 0usize;
+            #[cfg(all(feature = "sqlite", feature = "libsql"))]
+            if let (Some(remote), Some(rt)) = (&self.remote, &self.rt) {
+                if !pull_only {
+                    if let Err(e) = self.push(remote, rt).map(|n| pushed = n) {
+                        let _ = self.local.execute(
+                            "INSERT OR REPLACE INTO sync_state(key,val) VALUES('last_error', ?)",
+                            rusqlite::params![e.to_string()],
+                        );
+                        return Err(e);
+                    }
+                }
+                if !push_only {
+                    if let Err(e) = self.pull(remote, rt).map(|n| pulled = n) {
+                        let _ = self.local.execute(
+                            "INSERT OR REPLACE INTO sync_state(key,val) VALUES('last_error', ?)",
+                            rusqlite::params![e.to_string()],
+                        );
+                        return Err(e);
+                    }
+                }
+            }
+            Ok(SyncReport { pushed, pulled })
+        }
+
+        #[cfg(all(feature = "sqlite", feature = "libsql"))]
+        fn push(&self, remote: &libsql::Database, rt: &Runtime) -> anyhow::Result<usize> {
+            let last_push: i64 = self
+                .local
+                .query_row(
+                    "SELECT val FROM sync_state WHERE key='last_push_updated_at'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            let mut stmt = self.local.prepare(
+                "SELECT id, kind, text, created_at, is_favorite, COALESCE(updated_at, created_at) AS ua, COALESCE(lamport,0) FROM clips WHERE COALESCE(updated_at, created_at) > ? ORDER BY ua ASC LIMIT ?"
+            )?;
+            let rows = stmt.query_map(params![last_push, self.batch_size as i64], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, i64>(6)?,
+                ))
+            })?;
+            let mut max_ua = last_push;
+            let mut count = 0usize;
+            let conn = remote.connect()?;
+            for row in rows.flatten() {
+                let (id, kind, text, created_at, fav, ua, lamport) = row;
+                let fav = if fav != 0 { 1 } else { 0 };
+                max_ua = max_ua.max(ua);
+                count += 1;
+                rt.block_on(async {
+                    conn.execute(
+                        "INSERT INTO clips(id, kind, text, created_at, is_favorite, updated_at, lamport, device_id) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                         ON CONFLICT(id) DO UPDATE SET text=excluded.text, is_favorite=excluded.is_favorite, updated_at=excluded.updated_at, lamport=excluded.lamport, device_id=excluded.device_id
+                         WHERE (clips.lamport,clips.updated_at,COALESCE(clips.device_id,'')) < (excluded.lamport,excluded.updated_at,excluded.device_id)",
+                        libsql::params!(id, kind, text, created_at, fav, ua, lamport, self.device_id.clone()),
+                    ).await
+                })?;
+            }
+            if count > 0 {
+                let _ = self.local.execute(
+                    "INSERT OR REPLACE INTO sync_state(key,val) VALUES('last_push_updated_at', ?)",
+                    params![max_ua],
+                );
+            }
+            Ok(count)
+        }
+
+        #[cfg(all(feature = "sqlite", feature = "libsql"))]
+        fn pull(&self, remote: &libsql::Database, rt: &Runtime) -> anyhow::Result<usize> {
+            let last_pull: i64 = self
+                .local
+                .query_row(
+                    "SELECT val FROM sync_state WHERE key='last_pull_updated_at'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            let conn = remote.connect()?;
+            let mut rows = rt.block_on(async {
+                conn.query(
+                    "SELECT id, kind, text, created_at, is_favorite, COALESCE(updated_at, created_at) AS ua, COALESCE(lamport,0), COALESCE(device_id,'') FROM clips WHERE ua > ? ORDER BY ua ASC LIMIT ?",
+                    libsql::params!(last_pull, self.batch_size as i64),
+                ).await
+            })?;
+            let mut max_ua = last_pull;
+            let mut count = 0usize;
+            while let Some(r) = rt.block_on(async { rows.next().await.transpose() })? {
+                let id: String = r.get::<String>(0)?;
+                let kind: String = r.get::<String>(1)?;
+                let text: String = r.get::<String>(2)?;
+                let created_at: i64 = r.get::<i64>(3)?;
+                let fav: i64 = r.get::<i64>(4)?;
+                let ua: i64 = r.get::<i64>(5)?;
+                let lamport: i64 = r.get::<i64>(6)?;
+                let device: String = r.get::<String>(7)?;
+                max_ua = max_ua.max(ua);
+                count += 1;
+                self.local.execute(
+                    "INSERT INTO clips(id, kind, text, created_at, is_favorite, updated_at, lamport, device_id)
+                     VALUES(?,?,?,?,?,?,?,?)
+                     ON CONFLICT(id) DO UPDATE SET text=excluded.text, is_favorite=excluded.is_favorite, updated_at=excluded.updated_at, lamport=excluded.lamport, device_id=excluded.device_id
+                     WHERE (clips.lamport,clips.updated_at,COALESCE(clips.device_id,'')) < (excluded.lamport,excluded.updated_at,excluded.device_id)",
+                    params![id, kind, text, created_at, fav, ua, lamport, device],
+                )?;
+            }
+            if count > 0 {
+                let _ = self.local.execute(
+                    "INSERT OR REPLACE INTO sync_state(key,val) VALUES('last_pull_updated_at', ?)",
+                    params![max_ua],
+                );
+            }
+            Ok(count)
         }
     }
 }

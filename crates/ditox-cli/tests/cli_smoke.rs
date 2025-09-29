@@ -1,6 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 // use std::process;
+use std::env;
 use std::fs;
 use tempfile::tempdir;
 
@@ -217,6 +218,61 @@ fn favorites_and_prune() {
             .unwrap(),
         first_id
     );
+}
+
+#[test]
+fn doctor_missing_image_reports() {
+    // Isolate config dir
+    let dir = tempdir().unwrap();
+    let cfg = dir.path().join("config");
+    let _ = std::fs::create_dir_all(&cfg);
+    env::set_var("XDG_CONFIG_HOME", &cfg);
+    // settings with path-mode images to a temp imgs dir
+    let imgs = dir.path().join("imgs");
+    std::fs::create_dir_all(&imgs).unwrap();
+    let cfg_ditox = cfg.join("ditox");
+    std::fs::create_dir_all(&cfg_ditox).unwrap();
+    std::fs::write(
+        cfg_ditox.join("settings.toml"),
+        format!(
+            "[images]\nlocal_file_path_mode=true\ndir=\"{}\"\n",
+            imgs.display()
+        ),
+    )
+    .unwrap();
+
+    // Init DB
+    let db = dir.path().join("ditox.db");
+    bin().arg("--db").arg(&db).arg("init-db").assert().success();
+    // Add image via file
+    let img_path = dir.path().join("tiny.png");
+    use base64::{engine::general_purpose, Engine as _};
+    let b64 = include_str!("fixtures/tiny.png.b64");
+    let bytes = general_purpose::STANDARD.decode(b64.trim()).unwrap();
+    fs::write(&img_path, &bytes).unwrap();
+    bin()
+        .arg("--db")
+        .arg(&db)
+        .args(["add", "--image-path"])
+        .arg(&img_path)
+        .assert()
+        .success();
+    // Remove original file to simulate missing path (since add used --image-path)
+    std::fs::remove_file(&img_path).unwrap();
+    // Doctor should warn
+    let out = String::from_utf8(
+        bin()
+            .arg("--db")
+            .arg(&db)
+            .arg("doctor")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap();
+    assert!(out.contains("clipboard:"));
 }
 
 #[test]

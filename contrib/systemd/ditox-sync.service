@@ -1,0 +1,8 @@
+[Unit]
+Description=Ditox sync
+
+[Service]
+Type=oneshot
+ExecStart=%h/.cargo/bin/ditox-cli sync run
+WorkingDirectory=%h
+Environment=RUST_LOG=warn

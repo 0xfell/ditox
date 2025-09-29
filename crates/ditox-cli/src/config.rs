@@ -6,6 +6,8 @@ pub struct Settings {
     pub storage: Storage,
     pub prune: Option<Prune>,
     pub max_storage_mb: Option<u64>,
+    pub sync: Option<Sync>,
+    pub images: Option<Images>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +34,35 @@ pub struct Prune {
     pub keep_favorites: Option<bool>,
     pub max_items: Option<usize>,
     pub max_age: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Sync {
+    pub enabled: Option<bool>,
+    pub interval: Option<String>,
+    pub batch_size: Option<usize>,
+    pub device_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Images {
+    pub local_file_path_mode: Option<bool>,
+    pub dir: Option<String>,
+    pub encoding: Option<String>,
+}
+
+pub fn images_dir(settings: &Settings) -> std::path::PathBuf {
+    use std::path::PathBuf;
+    let base = config_dir();
+    if let Some(img) = &settings.images {
+        if let Some(dir) = &img.dir {
+            if !dir.trim().is_empty() {
+                let p = shellexpand::tilde(dir).to_string();
+                return PathBuf::from(p);
+            }
+        }
+    }
+    base.join("data").join("imgs")
 }
 
 pub fn config_dir() -> PathBuf {
