@@ -106,15 +106,13 @@ jobs:
 
           echo "## Assets" >> dist/RELEASE_NOTES.md
           cat >> dist/RELEASE_NOTES.md << 'EOS'
-The following artifacts are attached to this release once all jobs finish:
+ The following artifacts are attached to this release once all jobs finish:
 
-- ditox-Linux-x86_64.zip
-- ditox-macOS-arm64.zip
-- ditox-Windows-AMD64.zip
-- ditox-cli-nix-linux-x86_64.tar.gz
-
-Each asset includes a matching SHA256 file (.sha256).
-EOS
+ - ditox-Linux-x86_64.zip
+ - ditox-macOS-arm64.zip
+ - ditox-Windows-AMD64.zip
+ - ditox-cli-nix-linux-x86_64.tar.gz
+ EOS
 
       - name: Create/Update GitHub Release with notes
         uses: softprops/action-gh-release@v2
@@ -154,12 +152,6 @@ EOS
           ZIP="ditox-${{ runner.os }}-${ARCH}.zip"
           (cd dist && zip -9 "../${ZIP}" ditox clipd)
           echo "asset=${ZIP}" >> "$GITHUB_OUTPUT"
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "$ZIP" | tee "$ZIP.sha256" >/dev/null
-          else
-            shasum -a 256 "$ZIP" | tee "$ZIP.sha256" >/dev/null
-          fi
-          echo "checksum=$ZIP.sha256" >> "$GITHUB_OUTPUT"
       - name: Package (Windows)
         if: runner.os == 'Windows'
         id: pack_win
@@ -172,29 +164,16 @@ EOS
           $zip = "ditox-Windows-$arch.zip"
           Compress-Archive -Path dist/* -DestinationPath $zip -Force
           "asset=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          $hash = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLower()
-          "$hash  $zip" | Out-File -FilePath "$zip.sha256" -Encoding ascii
-          "checksum=$zip.sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - name: Upload to Release (Unix)
         if: runner.os != 'Windows'
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.pack_unix.outputs.asset }}
-      - name: Upload checksum (Unix)
-        if: runner.os != 'Windows'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ steps.pack_unix.outputs.checksum }}
       - name: Upload to Release (Windows)
         if: runner.os == 'Windows'
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.pack_win.outputs.asset }}
-      - name: Upload checksum (Windows)
-        if: runner.os == 'Windows'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ steps.pack_win.outputs.checksum }}
 
   nix_upload:
     needs: create_release
@@ -217,11 +196,3 @@ EOS
         uses: softprops/action-gh-release@v2
         with:
           files: dist/ditox-cli-nix-linux-x86_64.tar.gz
-      - name: Upload Nix checksum
-        run: |
-          sha256sum dist/ditox-cli-nix-linux-x86_64.tar.gz > dist/ditox-cli-nix-linux-x86_64.tar.gz.sha256
-        shell: bash
-      - name: Attach Nix checksum
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/ditox-cli-nix-linux-x86_64.tar.gz.sha256
