@@ -1,0 +1,22 @@
+[package]
+name = "ditox-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core library for Ditox clipboard manager"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = ["mem-store"]
+mem-store = []
+sqlite = ["dep:rusqlite"]
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+time = "0.3"
+
+# Optional SQLite backend
+rusqlite = { version = "0.31", optional = true, features = ["bundled"] }
+

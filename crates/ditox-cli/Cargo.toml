@@ -1,0 +1,14 @@
+[package]
+name = "ditox-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Ditox clipboard CLI"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ditox-core = { path = "../ditox-core" }
+
