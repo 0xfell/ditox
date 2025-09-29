@@ -7,6 +7,8 @@ Semantic Versioning where practical.
 
 Unreleased
 ----------
+- Docs: unify remote sync guidance (feature‑gated `libsql` + runtime selection).
+- Docs: remove transient task notes (`task-*.md`).
 - Planned: background daemon (`clipd`), interactive picker, import/export tools.
 - Planned: image thumbnails/filters, remote image strategy, improved conflict tooling.
 
@@ -40,4 +42,3 @@ Changed
 Notes
 - Images are intentionally excluded from remote sync in this release.
 - Release workflow expects tags like `rust-v0.1.0` for packaging.
-

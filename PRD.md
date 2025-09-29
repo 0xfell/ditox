@@ -4,7 +4,7 @@
 
 - Working title: Ditox (enterprise‑friendly clipboard history for developers and teams).
 - Vision: a secure, fast, cross‑platform clipboard history with powerful search, favorites, and optional sync — designed for Linux first, then macOS and Windows.
-- Scope (current): Linux‑first CLI with a reusable core library. Text clips are fully supported; image clips are implemented locally (store, list, copy). Optional remote sync (libSQL/Turso) is available for text and is selected at runtime via settings; images remain local‑only.
+- Scope (current): Linux‑first CLI with a reusable core library. Text clips are fully supported; image clips are implemented locally (store, list, copy). Optional remote sync (libSQL/Turso) is available for text when built with the `libsql` feature and is selected at runtime via settings; images remain local‑only.
 
 ## Goals (v0.1.x)
 

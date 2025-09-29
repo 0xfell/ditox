@@ -363,7 +363,7 @@ fn clipboard_watch_loop(store: Arc<ditox_core::StoreImpl>, poll_ms: u64) {
     #[cfg(target_os = "linux")]
     let cb = ditox_core::clipboard::ArboardClipboard::new();
     #[cfg(not(target_os = "linux"))]
-    let cb = ditox_core::clipboard::NoopClipboard::default();
+    let cb = ditox_core::clipboard::NoopClipboard;
     let last = Arc::new(Mutex::new((None::<String>, 0usize)));
     loop {
         if let Ok(Some(text)) = cb.get_text() {

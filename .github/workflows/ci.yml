@@ -1,15 +1,19 @@
 name: CI
 
 on:
-  push:
-    branches: [ main ]
-    tags: [ 'v*' ]
   pull_request:
-    branches: [ main ]
+    branches: [ master ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build and Test (${{ matrix.os }})
+  rust:
+    name: Rust Build and Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -49,3 +53,46 @@ jobs:
           name: ditox-${{ runner.os }}
           path: artifacts/*
 
+  nix:
+    name: Nix Build (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Configure Cachix (optional)
+        id: cachix_conf
+        shell: bash
+        env:
+          CACHIX_CACHE: ${{ vars.CACHIX_CACHE }}
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: |
+          if [ -n "${CACHIX_AUTH_TOKEN}" ] && [ -n "${CACHIX_CACHE}" ]; then
+            echo "use_cachix=true" >> $GITHUB_OUTPUT
+            echo "cache_name=${CACHIX_CACHE}" >> $GITHUB_OUTPUT
+          else
+            echo "use_cachix=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Enable Cachix
+        if: steps.cachix_conf.outputs.use_cachix == 'true'
+        uses: cachix/cachix-action@v14
+        with:
+          name: ${{ steps.cachix_conf.outputs.cache_name }}
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Build flake
+        run: nix build -L .#ditox
+      - name: Run flake checks
+        run: nix flake check -L
+      - name: Archive binary
+        run: |
+          mkdir -p dist
+          cp result/bin/ditox-cli dist/
+          tar -czf dist/ditox-cli-nix-linux-x86_64.tar.gz -C dist ditox-cli
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ditox-cli-nix-linux-x86_64
+          path: dist/ditox-cli-nix-linux-x86_64.tar.gz

@@ -20,8 +20,8 @@ DDDDDDDDDDDDD        iiiiiiii         ttttttttttt     ooooooooooo xxxxxxx      x
 # Ditox — Clipboard History for Developers (CLI + Core)
 
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](#)
-[![CI](https://github.com/YOUR_ORG/YOUR_REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_ORG/YOUR_REPO/actions/workflows/ci.yml)
-<!-- Update the CI badge URLs with your GitHub org/repo -->
+[![CI](https://github.com/0xfell/ditox/actions/workflows/ci.yml/badge.svg)](https://github.com/0xfell/ditox/actions/workflows/ci.yml)
+<!-- CI badge points to https://github.com/0xfell/ditox/actions/workflows/ci.yml -->
 
 Note: Docs below use the command name `ditox` for readability. If you installed from source without a wrapper, your binary name may be `ditox-cli` — use that instead (e.g., `ditox-cli list`).
 
@@ -58,7 +58,7 @@ The default database lives at `~/.config/ditox/db/ditox.db` (XDG). You can overr
 
 Optional features:
 
-- libSQL/Turso remote store: runtime‑selectable via `[storage.backend = "turso"]`; one binary supports both local and remote.
+- libSQL/Turso remote sync (text only): feature‑gated. Build with `cargo build -p ditox-cli --features libsql`. When built with this feature, remote is selected at runtime via `[storage.backend = "turso"]` in settings; otherwise the CLI operates fully locally.
 
 ## Usage
 
@@ -160,7 +160,7 @@ Runtime selection (examples):
 backend = "localsqlite"   # or "turso" for remote sync
 # db_path = "/custom/path/ditox.db"   # optional override of the XDG default
 
-# Alternative remote backend (no special build flags needed)
+# Alternative remote backend (requires building with the `libsql` feature)
 # [storage]
 # backend = "turso"
 # url = "libsql://<your-db>.turso.io"
@@ -209,7 +209,6 @@ Per‑user systemd timers can automate pruning and optional remote sync:
 
 - Workspace build: `cargo build`
 - CLI only: `cargo build -p ditox-cli`
-- Default build already includes remote support: `cargo build`
 - Lint and format: `cargo fmt --all` and `cargo clippy --all-targets -- -D warnings`
 - Tests: `cargo test --all`
     - Clipboard E2E image test runs on Linux only and is guarded by `DITOX_E2E_CLIPBOARD=1`.

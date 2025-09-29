@@ -313,7 +313,7 @@ pub fn run_picker_with(
                                     #[cfg(target_os = "linux")]
                                     let cb = crate::SystemClipboard::new();
                                     #[cfg(not(target_os = "linux"))]
-                                    let cb = ditox_core::clipboard::NoopClipboard::default();
+                                    let cb = ditox_core::clipboard::NoopClipboard;
                                     let _ = cb.set_text(text);
                                     println!("{}", id);
                                     if !draw {
@@ -325,7 +325,7 @@ pub fn run_picker_with(
                                         #[cfg(target_os = "linux")]
                                         let cb = crate::SystemClipboard::new();
                                         #[cfg(not(target_os = "linux"))]
-                                        let cb = ditox_core::clipboard::NoopClipboard::default();
+                                        let cb = ditox_core::clipboard::NoopClipboard;
                                         let _ = cb.set_image(&img);
                                     }
                                     println!("{}", id);
