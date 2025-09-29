@@ -1,9 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use directories::ProjectDirs;
 #[cfg(not(target_os = "linux"))]
 use ditox_core::clipboard::NoopClipboard as SystemClipboard;
-#[cfg(all(target_os = "linux"))]
+#[cfg(target_os = "linux")]
 use ditox_core::clipboard::{ArboardClipboard as SystemClipboard, Clipboard as _};
 use ditox_core::{ClipKind, Query, Store, StoreImpl};
 use std::path::PathBuf;
@@ -307,13 +306,8 @@ fn main() -> Result<()> {
         }
         Commands::Doctor => {
             // Clipboard check
-            let cb_ok = {
-                let cb = SystemClipboard::new();
-                match cb.get_text() {
-                    Ok(_) => true,
-                    Err(_) => false,
-                }
-            };
+            let cb = SystemClipboard::new();
+            let cb_ok = cb.get_text().is_ok();
             println!("clipboard: {}", if cb_ok { "ok" } else { "unavailable" });
             // Store check: run a quick FTS probe via list(search)
             let _ = store.add("_doctor_probe_");
@@ -358,7 +352,9 @@ fn main() -> Result<()> {
             let cfg_dir = config::config_dir();
             let settings_path = cfg_dir.join("settings.toml");
             let db_path = match &settings.storage {
-                config::Storage::LocalSqlite { db_path } => db_path.clone().unwrap_or_else(default_db_path),
+                config::Storage::LocalSqlite { db_path } => {
+                    db_path.clone().unwrap_or_else(default_db_path)
+                }
                 _ => default_db_path(),
             };
             if json {
@@ -379,11 +375,24 @@ fn main() -> Result<()> {
                 println!("settings:  {}", settings_path.display());
                 println!("db_path:   {}", db_path.display());
                 match &settings.storage {
-                    config::Storage::LocalSqlite { db_path } => println!("storage:  localsqlite (db_path={})", db_path.as_ref().map(|p| p.display().to_string()).unwrap_or("default".into())),
+                    config::Storage::LocalSqlite { db_path } => println!(
+                        "storage:  localsqlite (db_path={})",
+                        db_path
+                            .as_ref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or("default".into())
+                    ),
                     config::Storage::Turso { url, .. } => println!("storage:  turso (url={})", url),
                 }
-                if let Some(p) = &settings.prune { println!("prune:     every={:?} keep_favorites={:?} max_items={:?} max_age={:?}", p.every, p.keep_favorites, p.max_items, p.max_age); }
-                if let Some(m) = settings.max_storage_mb { println!("max_storage_mb: {}", m); }
+                if let Some(p) = &settings.prune {
+                    println!(
+                        "prune:     every={:?} keep_favorites={:?} max_items={:?} max_age={:?}",
+                        p.every, p.keep_favorites, p.max_items, p.max_age
+                    );
+                }
+                if let Some(m) = settings.max_storage_mb {
+                    println!("max_storage_mb: {}", m);
+                }
             }
         }
     }
@@ -409,9 +418,17 @@ enum StoreKind {
 
 fn build_store(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>> {
     // Prefer Turso/libSQL if requested in settings
-    if let config::Storage::Turso { url, auth_token } = &settings.storage {
+    if let config::Storage::Turso {
+        url: _url,
+        auth_token: _auth_token,
+    } = &settings.storage
+    {
         #[cfg(feature = "libsql")]
         {
+            let (url, auth_token) = match &settings.storage {
+                config::Storage::Turso { url, auth_token } => (url, auth_token),
+                _ => unreachable!(),
+            };
             let s = ditox_core::libsql_backend::LibsqlStore::new(url, auth_token.as_deref())?;
             return Ok(Box::new(s));
         }
@@ -439,9 +456,17 @@ fn build_store(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>>
 }
 
 fn build_store_readonly(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>> {
-    if let config::Storage::Turso { url, auth_token } = &settings.storage {
+    if let config::Storage::Turso {
+        url: _url,
+        auth_token: _auth_token,
+    } = &settings.storage
+    {
         #[cfg(feature = "libsql")]
         {
+            let (url, auth_token) = match &settings.storage {
+                config::Storage::Turso { url, auth_token } => (url, auth_token),
+                _ => unreachable!(),
+            };
             let s = ditox_core::libsql_backend::LibsqlStore::new(url, auth_token.as_deref())?;
             return Ok(Box::new(s));
         }
@@ -512,4 +537,4 @@ fn parse_human_duration(s: &str) -> Result<time::Duration> {
     Ok(dur)
 }
 mod config;
-use config::{load_settings, settings_path};
+use config::load_settings;

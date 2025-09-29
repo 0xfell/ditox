@@ -1,4 +1,3 @@
-use assert_cmd::prelude::*;
 use assert_cmd::Command;
 use predicates::prelude::*;
 // use std::process;
@@ -38,7 +37,7 @@ fn text_flow() {
         .stdout
         .clone();
     let v: serde_json::Value = serde_json::from_slice(&output).unwrap();
-    assert!(v.as_array().unwrap().len() >= 1);
+    assert!(!v.as_array().unwrap().is_empty());
 
     // search json
     let output = bin()
@@ -51,7 +50,7 @@ fn text_flow() {
         .stdout
         .clone();
     let v: serde_json::Value = serde_json::from_slice(&output).unwrap();
-    assert!(v.as_array().unwrap().len() >= 1);
+    assert!(!v.as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -62,8 +61,9 @@ fn image_from_file() {
 
     // decode tiny PNG fixture
     let img_path = dir.path().join("tiny.png");
+    use base64::{engine::general_purpose, Engine as _};
     let b64 = include_str!("fixtures/tiny.png.b64");
-    let bytes = base64::decode(b64.trim()).unwrap();
+    let bytes = general_purpose::STANDARD.decode(b64.trim()).unwrap();
     fs::write(&img_path, &bytes).unwrap();
 
     bin()
@@ -235,8 +235,9 @@ fn clipboard_image_copy_guarded() {
 
     // decode tiny PNG fixture and add
     let img_path = dir.path().join("tiny.png");
+    use base64::{engine::general_purpose, Engine as _};
     let b64 = include_str!("fixtures/tiny.png.b64");
-    let bytes = base64::decode(b64.trim()).unwrap();
+    let bytes = general_purpose::STANDARD.decode(b64.trim()).unwrap();
     fs::write(&img_path, &bytes).unwrap();
     bin()
         .arg("--db")

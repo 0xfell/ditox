@@ -116,13 +116,13 @@ impl Store for MemStore {
         let v = self.inner.read().expect("poisoned");
         let mut items: Vec<Clip> = v
             .iter()
-            .cloned()
             .filter(|c| !q.favorites_only || c.is_favorite)
             .filter(|c| matches!(c.kind, ClipKind::Text))
             .filter(|c| match &q.contains {
                 Some(s) => c.text.to_lowercase().contains(&s.to_lowercase()),
                 None => true,
             })
+            .cloned()
             .collect();
         if let Some(limit) = q.limit {
             items.truncate(limit);
@@ -132,7 +132,7 @@ impl Store for MemStore {
 
     fn get(&self, id: &str) -> anyhow::Result<Option<Clip>> {
         let v = self.inner.read().expect("poisoned");
-        Ok(v.iter().cloned().find(|c| c.id == id))
+        Ok(v.iter().find(|c| c.id == id).cloned())
     }
 
     fn favorite(&self, id: &str, fav: bool) -> anyhow::Result<()> {
@@ -228,7 +228,6 @@ impl Store for MemStore {
         max_age: Option<time::Duration>,
         keep_favorites: bool,
     ) -> anyhow::Result<usize> {
-        use std::cmp::max;
         let mut v = self.inner.write().unwrap();
         let before = v.len();
         // age-based
@@ -280,6 +279,13 @@ pub mod clipboard {
 
     #[cfg(all(feature = "clipboard", target_os = "linux"))]
     pub struct ArboardClipboard;
+
+    #[cfg(all(feature = "clipboard", target_os = "linux"))]
+    impl Default for ArboardClipboard {
+        fn default() -> Self {
+            Self
+        }
+    }
 
     #[cfg(all(feature = "clipboard", target_os = "linux"))]
     impl ArboardClipboard {
@@ -343,7 +349,7 @@ mod sqlite_store {
     pub struct SqliteStore {
         path: PathBuf,
         conn: Mutex<Connection>,
-        fts_enabled: bool,
+        _fts_enabled: bool,
     }
 
     impl SqliteStore {
@@ -354,12 +360,12 @@ mod sqlite_store {
         pub fn new_with<P: AsRef<Path>>(path: P, auto_migrate: bool) -> anyhow::Result<Self> {
             let path = path.as_ref().to_path_buf();
             let conn = Connection::open(&path)?;
-            conn.pragma_update(None, "foreign_keys", &1)?;
-            let _ = conn.pragma_update(None, "journal_mode", &"WAL");
+            conn.pragma_update(None, "foreign_keys", 1)?;
+            let _ = conn.pragma_update(None, "journal_mode", "WAL");
             let mut store = Self {
                 path,
                 conn: Mutex::new(conn),
-                fts_enabled: false,
+                _fts_enabled: false,
             };
             store.init_with(auto_migrate)?;
             Ok(store)
@@ -606,10 +612,12 @@ mod sqlite_store {
         fn add_image_rgba(&self, width: u32, height: u32, rgba: &[u8]) -> anyhow::Result<Clip> {
             // Encode to PNG
             let mut buf = Vec::new();
-            {
-                let mut enc = PngEncoder::new(&mut buf);
-                enc.write_image(rgba, width, height, image::ColorType::Rgba8.into())?;
-            }
+            PngEncoder::new(&mut buf).write_image(
+                rgba,
+                width,
+                height,
+                image::ColorType::Rgba8.into(),
+            )?;
             let blob_root = self
                 .path
                 .parent()
@@ -836,9 +844,17 @@ pub mod libsql_backend {
         pub fn new(url: &str, auth_token: Option<&str>) -> anyhow::Result<Self> {
             let rt = tokio::runtime::Runtime::new()?;
             let db = if let Some(token) = auth_token {
-                rt.block_on(async { libsql::Builder::new_remote(url.to_string(), token.to_string()).build().await })?
+                rt.block_on(async {
+                    libsql::Builder::new_remote(url.to_string(), token.to_string())
+                        .build()
+                        .await
+                })?
             } else {
-                rt.block_on(async { libsql::Builder::new_remote(url.to_string(), String::new()).build().await })?
+                rt.block_on(async {
+                    libsql::Builder::new_remote(url.to_string(), String::new())
+                        .build()
+                        .await
+                })?
             };
             let s = Self { db, rt };
             s.init()?;
@@ -849,8 +865,12 @@ pub mod libsql_backend {
             self.rt.block_on(async move {
                 for stmt in sql.split(';') {
                     let stmt = stmt.trim();
-                    if stmt.is_empty() { continue; }
-                    conn.execute(stmt, ()).await.map_err(|e| anyhow::anyhow!(e))?;
+                    if stmt.is_empty() {
+                        continue;
+                    }
+                    conn.execute(stmt, ())
+                        .await
+                        .map_err(|e| anyhow::anyhow!(e))?;
                 }
                 Ok(())
             })
@@ -862,7 +882,10 @@ pub mod libsql_backend {
             let current: i64 = self.rt.block_on(async {
                 let mut rows = conn.query("PRAGMA user_version", ()).await?;
                 let r = rows.next().await?;
-                Ok::<i64, libsql::Error>(match r { Some(row) => row.get::<i64>(0)?, None => 0 })
+                Ok::<i64, libsql::Error>(match r {
+                    Some(row) => row.get::<i64>(0)?,
+                    None => 0,
+                })
             })?;
             let mut files: Vec<_> = MIGRATIONS
                 .files()
@@ -870,12 +893,28 @@ pub mod libsql_backend {
                 .collect();
             files.sort_by_key(|f| f.path().to_path_buf());
             for file in files {
-                let name = file.path().file_stem().unwrap().to_string_lossy().to_string();
+                let name = file
+                    .path()
+                    .file_stem()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
                 let ver = super::parse_version_prefix(&name).unwrap_or(0) as i64;
-                if ver <= current { continue; }
-                let sql = file.contents_utf8().ok_or_else(|| anyhow::anyhow!("invalid utf-8 in migration {}", name))?;
-                self.exec_batch(&conn, sql)?;
-                self.exec_batch(&conn, &format!("PRAGMA user_version = {}", ver))?;
+                if ver <= current {
+                    continue;
+                }
+                let sql = file
+                    .contents_utf8()
+                    .ok_or_else(|| anyhow::anyhow!("invalid utf-8 in migration {}", name))?;
+                if let Err(e) = self.exec_batch(&conn, sql) {
+                    if name.contains("fts") || sql.to_lowercase().contains("virtual table") {
+                        // Skip FTS migration if unsupported
+                        continue;
+                    } else {
+                        return Err(e);
+                    }
+                }
+                let _ = self.exec_batch(&conn, &format!("PRAGMA user_version = {}", ver));
             }
             // best-effort FTS rebuild
             let _ = self.exec_batch(&conn, "INSERT INTO clips_fts(clips_fts) VALUES('rebuild')");
@@ -899,29 +938,27 @@ pub mod libsql_backend {
                     libsql::params!(id_clone, text, created_at),
                 ).await
             })?;
-            Ok(Clip { id, text: text.into(), created_at: OffsetDateTime::from_unix_timestamp(created_at)?, is_favorite: false, kind: ClipKind::Text })
+            Ok(Clip {
+                id,
+                text: text.into(),
+                created_at: OffsetDateTime::from_unix_timestamp(created_at)?,
+                is_favorite: false,
+                kind: ClipKind::Text,
+            })
         }
 
         fn list(&self, q: Query) -> anyhow::Result<Vec<Clip>> {
             let conn = self.db.connect()?;
             let mut sql = String::from("SELECT id, text, created_at, is_favorite FROM clips WHERE deleted_at IS NULL AND kind = 'text'");
-            if q.favorites_only { sql.push_str(" AND is_favorite = 1"); }
+            if q.favorites_only {
+                sql.push_str(" AND is_favorite = 1");
+            }
             let rows = if let Some(term) = &q.contains {
-                let has_fts = self.rt.block_on(async {
-                    let mut rows = conn.query("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='clips_fts'", ()).await?;
-                    let r = rows.next().await?;
-                    let c: i64 = match r { Some(row) => row.get(0)?, None => 0 };
-                    Ok::<bool, libsql::Error>(c > 0)
-                })?;
-                if has_fts {
-                    sql = String::from("SELECT c.id, c.text, c.created_at, c.is_favorite FROM clips c JOIN clips_fts f ON f.rowid = c.rowid WHERE c.deleted_at IS NULL AND c.kind = 'text'");
-                    if q.favorites_only { sql.push_str(" AND c.is_favorite = 1"); }
-                    sql.push_str(" AND f.text MATCH ? ORDER BY c.created_at DESC");
-                    self.rt.block_on(async { conn.query(&sql, libsql::params!(term.clone())).await })?
-                } else {
-                    sql.push_str(" AND text LIKE ? ORDER BY created_at DESC");
-                    self.rt.block_on(async { conn.query(&sql, libsql::params!(format!("%{}%", term))).await })?
-                }
+                sql.push_str(" AND text LIKE ? ORDER BY created_at DESC");
+                self.rt.block_on(async {
+                    conn.query(&sql, libsql::params!(format!("%{}%", term)))
+                        .await
+                })?
             } else {
                 sql.push_str(" ORDER BY created_at DESC");
                 self.rt.block_on(async { conn.query(&sql, ()).await })?
@@ -947,10 +984,19 @@ pub mod libsql_backend {
                 Ok::<_, libsql::Error>(tmp)
             })?;
             for (id, text, created, fav) in rows_vec {
-                let created_at = OffsetDateTime::from_unix_timestamp(created).unwrap_or(OffsetDateTime::UNIX_EPOCH);
-                out.push(Clip { id, text, created_at, is_favorite: fav != 0, kind: ClipKind::Text });
+                let created_at = OffsetDateTime::from_unix_timestamp(created)
+                    .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                out.push(Clip {
+                    id,
+                    text,
+                    created_at,
+                    is_favorite: fav != 0,
+                    kind: ClipKind::Text,
+                });
             }
-            if let Some(limit) = q.limit { out.truncate(limit); }
+            if let Some(limit) = q.limit {
+                out.truncate(limit);
+            }
             Ok(out)
         }
 
@@ -962,9 +1008,23 @@ pub mod libsql_backend {
                     Some(r) => {
                         let created: i64 = r.get::<i64>(3)?;
                         let kind: String = r.get::<String>(1)?;
-                        let created_at = OffsetDateTime::from_unix_timestamp(created).unwrap_or(OffsetDateTime::UNIX_EPOCH);
-                        let kind = if kind == "image" { ClipKind::Image } else { ClipKind::Text };
-                        Ok::<Option<Clip>, libsql::Error>(Some(Clip { id: r.get::<String>(0)?, text: r.get::<String>(2)?, created_at, is_favorite: { let v: i64 = r.get::<i64>(4)?; v != 0 }, kind }))
+                        let created_at = OffsetDateTime::from_unix_timestamp(created)
+                            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                        let kind = if kind == "image" {
+                            ClipKind::Image
+                        } else {
+                            ClipKind::Text
+                        };
+                        Ok::<Option<Clip>, libsql::Error>(Some(Clip {
+                            id: r.get::<String>(0)?,
+                            text: r.get::<String>(2)?,
+                            created_at,
+                            is_favorite: {
+                                let v: i64 = r.get::<i64>(4)?;
+                                v != 0
+                            },
+                            kind,
+                        }))
                     }
                     None => Ok::<Option<Clip>, libsql::Error>(None),
                 }
@@ -974,19 +1034,29 @@ pub mod libsql_backend {
 
         fn favorite(&self, id: &str, fav: bool) -> anyhow::Result<()> {
             let conn = self.db.connect()?;
-            self.rt.block_on(async { conn.execute("UPDATE clips SET is_favorite = ? WHERE id = ?", libsql::params!(if fav {1} else {0}, id)).await })?;
+            self.rt.block_on(async {
+                conn.execute(
+                    "UPDATE clips SET is_favorite = ? WHERE id = ?",
+                    libsql::params!(if fav { 1 } else { 0 }, id),
+                )
+                .await
+            })?;
             Ok(())
         }
 
         fn delete(&self, id: &str) -> anyhow::Result<()> {
             let conn = self.db.connect()?;
-            self.rt.block_on(async { conn.execute("DELETE FROM clips WHERE id = ?", libsql::params!(id)).await })?;
+            self.rt.block_on(async {
+                conn.execute("DELETE FROM clips WHERE id = ?", libsql::params!(id))
+                    .await
+            })?;
             Ok(())
         }
 
         fn clear(&self) -> anyhow::Result<()> {
             let conn = self.db.connect()?;
-            self.rt.block_on(async { conn.execute("DELETE FROM clips", ()).await })?;
+            self.rt
+                .block_on(async { conn.execute("DELETE FROM clips", ()).await })?;
             Ok(())
         }
 
@@ -994,10 +1064,21 @@ pub mod libsql_backend {
         fn add_image_rgba(&self, _width: u32, _height: u32, _rgba: &[u8]) -> anyhow::Result<Clip> {
             anyhow::bail!("images are not supported in libsql backend yet")
         }
-        fn get_image_meta(&self, _id: &str) -> anyhow::Result<Option<ImageMeta>> { Ok(None) }
-        fn get_image_rgba(&self, _id: &str) -> anyhow::Result<Option<ImageRgba>> { Ok(None) }
-        fn list_images(&self, _q: Query) -> anyhow::Result<Vec<(Clip, ImageMeta)>> { Ok(vec![]) }
-        fn prune(&self, max_items: Option<usize>, max_age: Option<time::Duration>, keep_favorites: bool) -> anyhow::Result<usize> {
+        fn get_image_meta(&self, _id: &str) -> anyhow::Result<Option<ImageMeta>> {
+            Ok(None)
+        }
+        fn get_image_rgba(&self, _id: &str) -> anyhow::Result<Option<ImageRgba>> {
+            Ok(None)
+        }
+        fn list_images(&self, _q: Query) -> anyhow::Result<Vec<(Clip, ImageMeta)>> {
+            Ok(vec![])
+        }
+        fn prune(
+            &self,
+            max_items: Option<usize>,
+            max_age: Option<time::Duration>,
+            keep_favorites: bool,
+        ) -> anyhow::Result<usize> {
             // Simplified prune: server-side deletes similar to SQLite version
             let conn = self.db.connect()?;
             let mut deleted = 0usize;
@@ -1008,7 +1089,8 @@ pub mod libsql_backend {
                 } else {
                     "DELETE FROM clips WHERE created_at < ? AND deleted_at IS NULL"
                 };
-                self.rt.block_on(async { conn.execute(sql, libsql::params!(cutoff)).await })?;
+                self.rt
+                    .block_on(async { conn.execute(sql, libsql::params!(cutoff)).await })?;
                 // libsql doesn't expose changes(); we skip exact count here
             }
             if let Some(n) = max_items {
@@ -1017,7 +1099,8 @@ pub mod libsql_backend {
                 } else {
                     "DELETE FROM clips WHERE rowid IN (SELECT rowid FROM clips WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT -1 OFFSET ?1)"
                 };
-                self.rt.block_on(async { conn.execute(sql, libsql::params!(n as i64)).await })?;
+                self.rt
+                    .block_on(async { conn.execute(sql, libsql::params!(n as i64)).await })?;
             }
             Ok(deleted)
         }
