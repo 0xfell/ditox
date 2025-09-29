@@ -12,17 +12,78 @@ jobs:
   create_release:
     runs-on: ubuntu-latest
     steps:
-      - name: Create GitHub Release
-        id: create
-        uses: actions/create-release@v1
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate release notes
+        id: notes
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # Find previous annotated semver tag (fallback to first commit)
+          PREV_TAG=$(git tag --sort=creatordate | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | tail -n 2 | head -n 1 || true)
+          if [ -z "${PREV_TAG:-}" ] || [ "${PREV_TAG}" = "${CURRENT_TAG}" ]; then
+            PREV_TAG=$(git tag --sort=creatordate | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)
+          fi
+          echo "prev_tag=${PREV_TAG}" >> "$GITHUB_OUTPUT"
+
+          RANGE="${PREV_TAG}..${CURRENT_TAG}"
+          if [ -z "${PREV_TAG}" ]; then RANGE="${CURRENT_TAG}"; fi
+
+          # Collect commits
+          git log --pretty='%H%x09%s' ${RANGE} > dist/commits.tsv || true
+
+          # Build sections
+          FEATURES=$(awk -F '\t' '/^.+\tfeat(\(|:)/ {print "- " $2}' dist/commits.tsv)
+          FIXES=$(awk -F '\t' '/^.+\tfix(\(|:)/ {print "- " $2}' dist/commits.tsv)
+          OTHER=$(awk -F '\t' '!/\t(feat|fix)(\(|:)/ {print "- " $2}' dist/commits.tsv)
+
+          echo "# ${CURRENT_TAG}" > dist/RELEASE_NOTES.md
+          echo >> dist/RELEASE_NOTES.md
+          echo "## Notable Changes" >> dist/RELEASE_NOTES.md
+          if [ -n "${FEATURES:-}" ]; then
+            echo "### Features" >> dist/RELEASE_NOTES.md
+            echo "$FEATURES" >> dist/RELEASE_NOTES.md
+            echo >> dist/RELEASE_NOTES.md
+          fi
+          if [ -n "${FIXES:-}" ]; then
+            echo "### Fixes" >> dist/RELEASE_NOTES.md
+            echo "$FIXES" >> dist/RELEASE_NOTES.md
+            echo >> dist/RELEASE_NOTES.md
+          fi
+          if [ -n "${OTHER:-}" ]; then
+            echo "### Other" >> dist/RELEASE_NOTES.md
+            echo "$OTHER" >> dist/RELEASE_NOTES.md
+            echo >> dist/RELEASE_NOTES.md
+          fi
+
+          echo "## Merged Commits" >> dist/RELEASE_NOTES.md
+          git log --merges --oneline ${RANGE} | sed 's/^/- /' >> dist/RELEASE_NOTES.md || true
+          echo >> dist/RELEASE_NOTES.md
+
+          echo "## Assets" >> dist/RELEASE_NOTES.md
+          cat >> dist/RELEASE_NOTES.md << 'EOS'
+The following artifacts are attached to this release once all jobs finish:
+
+- ditox-Linux-x86_64.zip
+- ditox-macOS-arm64.zip
+- ditox-Windows-AMD64.zip
+- ditox-cli-nix-linux-x86_64.tar.gz
+
+Checksums are printed in each workflow log; we can add a checksum file in a future iteration if preferred.
+EOS
+
+      - name: Create/Update GitHub Release with notes
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          release_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: dist/RELEASE_NOTES.md
           draft: false
           prerelease: ${{ contains(github.ref_name, 'rc') }}
-          # actions/create-release@v1 doesn't support generate_release_notes; omit to avoid warnings
 
   build_upload:
     needs: create_release
@@ -75,3 +136,25 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.pack_win.outputs.asset }}
+
+  nix_upload:
+    needs: create_release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Build flake
+        run: nix build -L .#ditox
+      - name: Archive Nix binary
+        run: |
+          mkdir -p dist
+          cp result/bin/ditox-cli dist/
+          tar -czf dist/ditox-cli-nix-linux-x86_64.tar.gz -C dist ditox-cli
+      - name: Upload Nix asset to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ditox-cli-nix-linux-x86_64.tar.gz
