@@ -6,17 +6,21 @@ description = "Core library for Ditox clipboard manager"
 license = "MIT OR Apache-2.0"
 
 [features]
-default = ["mem-store"]
+default = ["mem-store", "clipboard"]
 mem-store = []
 sqlite = ["dep:rusqlite"]
+clipboard = ["dep:arboard"]
 
 [dependencies]
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-time = "0.3"
+time = { version = "0.3", features = ["serde"] }
+sha2 = "0.10"
+include_dir = "0.7"
+hex = "0.4"
 
 # Optional SQLite backend
 rusqlite = { version = "0.31", optional = true, features = ["bundled"] }
-
+arboard = { version = "3", optional = true }

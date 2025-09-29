@@ -10,5 +10,6 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-ditox-core = { path = "../ditox-core" }
-
+ditox-core = { path = "../ditox-core", features = ["sqlite", "clipboard"] }
+directories = "5"
+time = { version = "0.3", features = ["formatting"] }

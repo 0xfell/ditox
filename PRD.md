@@ -126,6 +126,7 @@ Trade‑offs
   - Daemon (`clipd`) with event listeners and configurable rules
   - Interactive picker (`--fzf`) and tags
   - Basic import from common managers (CopyQ JSON, Ditto CSV)
+  - Images: capture/store images, thumbnails, dedupe, and copy-out
 - 0.3.x
   - Optional sync (libSQL/Turso) + E2EE
   - Multi‑device merge/conflict policy and device IDs
@@ -152,4 +153,32 @@ Trade‑offs
 - arboard and copypasta crates: https://crates.io/crates/arboard, https://crates.io/crates/copypasta
 - SQLite FTS5: https://www.sqlite.org/fts5.html
 - Turso/libSQL: https://turso.tech/ and https://docs.turso.tech/libsql/overview
+
+---
+
+## Images (planned for v0.2)
+### Goals
+- Capture images from the system clipboard and store them efficiently.
+- Support favorites, metadata search (format/size/dimensions), and copy‑out back to clipboard.
+- Keep DB lean by storing image bytes as content‑addressed files with metadata in SQLite.
+
+### Design
+- Clipboard API: use `arboard` for cross‑platform image read/write (RGBA in, PNG/WebP out).
+- Storage layout:
+  - Table `clips` gains `kind` (Text|Image).
+  - Table `images` keyed by `clip_id` with fields: `format`, `width`, `height`, `size_bytes`, `sha256`, `thumb_path`.
+  - Blob store in `objects/aa/bb/<sha256>`; optional per‑file AEAD encryption.
+- Dedupe: exact via SHA‑256; optional perceptual hash (pHash) for near‑dupes.
+- Thumbnails: small PNG/WebP for fast rendering in future UI.
+- Search:
+  - Text clips: FTS5.
+  - Image clips: metadata filters (format/size/dimensions/favorites/date) and optional similarity via pHash.
+
+### CLI Additions
+- `ditox list --images` and `ditox info <id>` show image metadata.
+- `ditox export --images` exports metadata + blobs.
+- `ditox prune --images` respects size/age quotas.
+
+### Sync Considerations
+- Sync only metadata and blob refs by default; optionally sync blobs to object storage (S3/MinIO). Small images can be stored as DB BLOBs if configured.
 
