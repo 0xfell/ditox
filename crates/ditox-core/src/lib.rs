@@ -69,7 +69,7 @@ pub trait Store: Send + Sync {
     fn get_image_rgba(&self, id: &str) -> anyhow::Result<Option<ImageRgba>>;
     fn list_images(&self, q: Query) -> anyhow::Result<Vec<(Clip, ImageMeta)>>;
     // Retention
-    fn prune(&self, max_items: Option<usize>, max_age_days: Option<i64>) -> anyhow::Result<usize>;
+    fn prune(&self, max_items: Option<usize>, max_age: Option<time::Duration>, keep_favorites: bool) -> anyhow::Result<usize>;
 }
 
 /// Minimal in-memory store used until SQLite backend lands.
@@ -169,17 +169,25 @@ impl Store for MemStore {
         Ok(out)
     }
 
-    fn prune(&self, max_items: Option<usize>, max_age_days: Option<i64>) -> anyhow::Result<usize> {
+    fn prune(&self, max_items: Option<usize>, max_age: Option<time::Duration>, keep_favorites: bool) -> anyhow::Result<usize> {
         use std::cmp::max;
         let mut v = self.inner.write().unwrap();
         let before = v.len();
         // age-based
-        if let Some(days) = max_age_days { 
-            let cutoff = OffsetDateTime::now_utc() - time::Duration::days(days);
-            v.retain(|c| c.created_at >= cutoff);
+        if let Some(age) = max_age { 
+            let cutoff = OffsetDateTime::now_utc() - age;
+            v.retain(|c| c.created_at >= cutoff || (keep_favorites && c.is_favorite));
         }
         // max-items (keep newest first)
-        if let Some(n) = max_items { if v.len() > n { v.truncate(n); } }
+        if let Some(n) = max_items {
+            if v.len() > n {
+                // If keeping favorites, move them to front before truncation
+                if keep_favorites {
+                    v.sort_by_key(|c| (!c.is_favorite, std::cmp::Reverse(c.created_at)));
+                }
+                v.truncate(n);
+            }
+        }
         let after = v.len();
         Ok(before - after)
     }
@@ -506,25 +514,36 @@ mod sqlite_store {
             Ok(out)
         }
 
-        fn prune(&self, max_items: Option<usize>, max_age_days: Option<i64>) -> anyhow::Result<usize> {
+        fn prune(&self, max_items: Option<usize>, max_age: Option<time::Duration>, keep_favorites: bool) -> anyhow::Result<usize> {
             let conn = self.conn.lock().unwrap();
             let tx = conn.unchecked_transaction()?;
             let mut deleted = 0usize;
-            if let Some(days) = max_age_days {
-                let cutoff = OffsetDateTime::now_utc() - time::Duration::days(days);
+            if let Some(age) = max_age {
+                let cutoff = OffsetDateTime::now_utc() - age;
                 let cutoff_ts = cutoff.unix_timestamp();
-                tx.execute("DELETE FROM clips WHERE created_at < ? AND deleted_at IS NULL", rusqlite::params![cutoff_ts])?;
+                let sql = if keep_favorites {
+                    "DELETE FROM clips WHERE created_at < ? AND deleted_at IS NULL AND is_favorite = 0"
+                } else {
+                    "DELETE FROM clips WHERE created_at < ? AND deleted_at IS NULL"
+                };
+                tx.execute(sql, rusqlite::params![cutoff_ts])?;
                 deleted += tx.changes() as usize;
             }
             if let Some(n) = max_items {
-                tx.execute(
+                let sql = if keep_favorites {
+                    "DELETE FROM clips WHERE rowid IN (
+                        SELECT rowid FROM clips WHERE deleted_at IS NULL AND is_favorite = 0
+                        ORDER BY created_at DESC
+                        LIMIT -1 OFFSET ?1
+                    )"
+                } else {
                     "DELETE FROM clips WHERE rowid IN (
                         SELECT rowid FROM clips WHERE deleted_at IS NULL
                         ORDER BY created_at DESC
                         LIMIT -1 OFFSET ?1
-                    )",
-                    rusqlite::params![n as i64],
-                )?;
+                    )"
+                };
+                tx.execute(sql, rusqlite::params![n as i64])?;
                 deleted += tx.changes() as usize;
             }
             tx.commit()?;

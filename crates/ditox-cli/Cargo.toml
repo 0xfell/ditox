@@ -14,6 +14,7 @@ ditox-core = { path = "../ditox-core", features = ["sqlite", "clipboard"] }
 directories = "5"
 time = { version = "0.3", features = ["formatting"] }
 image = { version = "0.25", default-features = false, features = ["png","jpeg","gif","bmp","tiff","webp"] }
+toml = "0.8"
 
 [dev-dependencies]
 assert_cmd = "2"
@@ -21,3 +22,4 @@ predicates = "3"
 tempfile = "3"
 serde_json = { workspace = true }
 base64 = "0.22"
+arboard = "3"

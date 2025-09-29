@@ -64,7 +64,7 @@ enum Commands {
     /// Show details about an entry
     Info { id: String },
     /// Prune history by max items and/or age in days
-    Prune { #[arg(long)] max_items: Option<usize>, #[arg(long)] max_age_days: Option<i64> },
+    Prune { #[arg(long)] max_items: Option<usize>, #[arg(long)] max_age: Option<String>, #[arg(long, default_value_t=true)] keep_favorites: bool },
     /// Self-check for environment capabilities (placeholder)
     Doctor,
     /// Database migrations
@@ -73,7 +73,8 @@ enum Commands {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let store = match cli.command { Commands::Migrate { .. } => build_store_readonly(&cli)?, _ => build_store(&cli)? };
+    let settings = load_settings();
+    let store = match cli.command { Commands::Migrate { .. } => build_store_readonly(&cli, &settings)?, _ => build_store(&cli, &settings)? };
 
     match cli.command {
         Commands::InitDb => {
@@ -176,8 +177,9 @@ fn main() -> Result<()> {
                 }
             } else { eprintln!("not found: {}", id); }
         }
-        Commands::Prune { max_items, max_age_days } => {
-            let n = store.prune(max_items, max_age_days)?;
+        Commands::Prune { max_items, max_age, keep_favorites } => {
+            let age = match max_age.or_else(|| settings.prune.as_ref().and_then(|p| p.max_age.clone())) { Some(s) => Some(parse_human_duration(&s)?), None => None };
+            let n = store.prune(max_items.or_else(|| settings.prune.as_ref().and_then(|p| p.max_items)), age, keep_favorites || settings.prune.as_ref().and_then(|p| p.keep_favorites).unwrap_or(true))?;
             println!("pruned {} entries", n);
         }
         Commands::Doctor => {
@@ -220,14 +222,13 @@ fn preview(s: &str) -> String {
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum StoreKind { Sqlite, Mem }
 
-fn build_store(cli: &Cli) -> Result<Box<dyn Store>> {
+fn build_store(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>> {
     Ok(match cli.store {
         StoreKind::Mem => Box::new(ditox_core::MemStore::new()),
         StoreKind::Sqlite => {
-            let path = match &cli.db {
-                Some(p) => p.clone(),
-                None => default_db_path(),
-            };
+            let path = cli.db.clone()
+                .or_else(|| match &settings.storage { config::Storage::LocalSqlite { db_path } => db_path.clone(), _ => None })
+                .unwrap_or_else(default_db_path);
             std::fs::create_dir_all(path.parent().unwrap())?;
             let s = ditox_core::StoreImpl::new_with(path, cli.auto_migrate)?;
             Box::new(s)
@@ -235,11 +236,13 @@ fn build_store(cli: &Cli) -> Result<Box<dyn Store>> {
     })
 }
 
-fn build_store_readonly(cli: &Cli) -> Result<Box<dyn Store>> {
+fn build_store_readonly(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>> {
     Ok(match cli.store {
         StoreKind::Mem => Box::new(ditox_core::MemStore::new()),
         StoreKind::Sqlite => {
-            let path = match &cli.db { Some(p) => p.clone(), None => default_db_path() };
+            let path = cli.db.clone()
+                .or_else(|| match &settings.storage { config::Storage::LocalSqlite { db_path } => db_path.clone(), _ => None })
+                .unwrap_or_else(default_db_path);
             std::fs::create_dir_all(path.parent().unwrap())?;
             let s = ditox_core::StoreImpl::new_with(path, false)?;
             Box::new(s)
@@ -249,9 +252,12 @@ fn build_store_readonly(cli: &Cli) -> Result<Box<dyn Store>> {
 
 fn default_db_path() -> PathBuf {
     if let Some(pd) = ProjectDirs::from("tech", "Ditox", "ditox") {
-        pd.data_dir().join("ditox.db")
+        let cfg = pd.config_dir().to_path_buf();
+        let p = cfg.join("db").join("ditox.db");
+        std::fs::create_dir_all(p.parent().unwrap()).ok();
+        p
     } else {
-        PathBuf::from("./ditox.db")
+        PathBuf::from("./.config/ditox/db/ditox.db")
     }
 }
 
@@ -269,3 +275,22 @@ fn chrono_like_timestamp() -> String {
     let dt: time::OffsetDateTime = now.into();
     dt.format(&time::format_description::parse("yyyyMMddHHmmss").unwrap()).unwrap()
 }
+
+fn parse_human_duration(s: &str) -> Result<time::Duration> {
+    use anyhow::bail;
+    let s = s.trim();
+    if s.is_empty() { bail!("empty duration") }
+    let (num, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
+    let n: i64 = num.parse().map_err(|_| anyhow::anyhow!("invalid number in duration: {}", s))?;
+    let dur = match unit.trim().to_ascii_lowercase().as_str() {
+        "s" => time::Duration::seconds(n),
+        "m" => time::Duration::minutes(n),
+        "h" => time::Duration::hours(n),
+        "d" | "" => time::Duration::days(n),
+        "w" => time::Duration::weeks(n),
+        other => bail!("invalid unit '{}', use s/m/h/d/w", other),
+    };
+    Ok(dur)
+}
+mod config;
+use config::{load_settings, settings_path};
