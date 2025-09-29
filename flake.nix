@@ -17,12 +17,18 @@
         # Keep test fixtures like `crates/ditox-cli/tests/fixtures/*.b64`
         # by avoiding overly-aggressive source filtering.
         src = craneLib.path ./.;
+        # Build only the CLI without its default (libsql) feature to avoid
+        # compiling libsql-ffi in sandboxed CI environments.
+        # The CLI already enables the needed ditox-core features explicitly.
         commonArgs = rec {
           inherit src;
           pname = "ditox";
           version = "0.1.0";
           cargoToml = ./Cargo.toml;
           cargoLock = ./Cargo.lock;
+          # Build just the CLI package and disable its default features
+          # so that libsql (and libsql-ffi) are not pulled in for the Nix build.
+          cargoExtraArgs = "-p ditox-cli --no-default-features";
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ pkgs.xorg.libX11 pkgs.wayland pkgs.libxkbcommon ];
         };
