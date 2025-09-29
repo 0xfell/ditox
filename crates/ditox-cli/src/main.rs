@@ -121,6 +121,8 @@ enum SyncCmd {
     },
     /// Show sync status
     Status,
+    /// Inspect remote: prints PRAGMA user_version and required tables/columns
+    Doctor,
 }
 
 fn main() -> Result<()> {
@@ -422,7 +424,7 @@ fn main() -> Result<()> {
                 .as_ref()
                 .and_then(|s| s.device_id.clone())
                 .or_else(|| std::env::var("DITOX_DEVICE_ID").ok())
-                .or_else(|| Some(whoami::hostname()))
+                .or_else(|| whoami::fallible::hostname().ok())
                 .unwrap_or_else(|| "local".into());
             let batch = cfg.sync.as_ref().and_then(|s| s.batch_size).unwrap_or(500);
             let engine =
@@ -441,6 +443,78 @@ fn main() -> Result<()> {
                         "last_push_updated_at={:?}\nlast_pull_updated_at={:?}\npending_local={}\nlocal_text={}\nlocal_images={}\nremote_ok={:?}\nlast_error={:?}",
                         st.last_push, st.last_pull, st.pending_local, st.local_text, st.local_images, st.remote_ok, st.last_error
                     );
+                }
+                SyncCmd::Doctor => {
+                    #[cfg(feature = "libsql")]
+                    {
+                        if let (Some(url), Some(token)) = (url, token) {
+                            use libsql::Builder;
+                            let rt = tokio::runtime::Runtime::new()?;
+                            let db = rt.block_on(async {
+                                Builder::new_remote(url.to_string(), token.to_string())
+                                    .build()
+                                    .await
+                            })?;
+                            let conn = db.connect()?;
+                            // PRAGMA user_version
+                            let user_version: i64 = rt.block_on(async {
+                                let mut rows = conn.query("PRAGMA user_version", ()).await?;
+                                let r = rows.next().await?;
+                                Ok::<i64, libsql::Error>(match r {
+                                    Some(row) => row.get::<i64>(0)?,
+                                    None => 0,
+                                })
+                            })?;
+                            // Has clips table?
+                            let has_clips: bool = rt.block_on(async {
+                                let mut rows = conn
+                                    .query(
+                                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='clips'",
+                                        (),
+                                    )
+                                    .await?;
+                                Ok::<bool, libsql::Error>(rows.next().await?.is_some())
+                            })?;
+                            // Columns present?
+                            let mut cols: Vec<String> = Vec::new();
+                            if has_clips {
+                                let mut rows = rt.block_on(async {
+                                    conn.query("PRAGMA table_info('clips')", ()).await
+                                })?;
+                                while let Some(r) = rt.block_on(async { rows.next().await })? {
+                                    let name: String = r.get::<String>(1)?; // cid, name, type, notnull, dflt_value, pk
+                                    cols.push(name);
+                                }
+                            }
+                            // Row count
+                            let count: i64 = if has_clips {
+                                rt.block_on(async {
+                                    let mut rows =
+                                        conn.query("SELECT COUNT(1) FROM clips", ()).await?;
+                                    let r = rows.next().await?;
+                                    Ok::<i64, libsql::Error>(match r {
+                                        Some(row) => row.get::<i64>(0)?,
+                                        None => 0,
+                                    })
+                                })?
+                            } else {
+                                0
+                            };
+                            println!(
+                                "remote_ok=true\nremote_user_version={}\nhas_clips={}\nclips_columns={}\nclips_count={}",
+                                user_version,
+                                has_clips,
+                                if cols.is_empty() { "<none>".into() } else { cols.join(", ") },
+                                count
+                            );
+                        } else {
+                            println!("remote_ok=false (backend not configured as turso)");
+                        }
+                    }
+                    #[cfg(not(feature = "libsql"))]
+                    {
+                        println!("built without 'libsql' feature; remote doctor unavailable");
+                    }
                 }
             }
         }
@@ -513,26 +587,7 @@ enum StoreKind {
 }
 
 fn build_store(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>> {
-    // Prefer Turso/libSQL if requested in settings
-    if let config::Storage::Turso {
-        url: _url,
-        auth_token: _auth_token,
-    } = &settings.storage
-    {
-        #[cfg(feature = "libsql")]
-        {
-            let (url, auth_token) = match &settings.storage {
-                config::Storage::Turso { url, auth_token } => (url, auth_token),
-                _ => unreachable!(),
-            };
-            let s = ditox_core::libsql_backend::LibsqlStore::new(url, auth_token.as_deref())?;
-            return Ok(Box::new(s));
-        }
-        #[cfg(not(feature = "libsql"))]
-        {
-            eprintln!("warning: settings.backend=turso but this binary is built without 'libsql' feature; using local sqlite instead");
-        }
-    }
+    // Always operate on local SQLite (or mem when explicitly requested).
     Ok(match cli.store {
         StoreKind::Mem => Box::new(ditox_core::MemStore::new()),
         StoreKind::Sqlite => {
@@ -541,7 +596,7 @@ fn build_store(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>>
                 .clone()
                 .or_else(|| match &settings.storage {
                     config::Storage::LocalSqlite { db_path } => db_path.clone(),
-                    _ => None,
+                    _ => None, // when backend=turso, still use default local DB path
                 })
                 .unwrap_or_else(default_db_path);
             std::fs::create_dir_all(path.parent().unwrap())?;
@@ -552,25 +607,7 @@ fn build_store(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>>
 }
 
 fn build_store_readonly(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>> {
-    if let config::Storage::Turso {
-        url: _url,
-        auth_token: _auth_token,
-    } = &settings.storage
-    {
-        #[cfg(feature = "libsql")]
-        {
-            let (url, auth_token) = match &settings.storage {
-                config::Storage::Turso { url, auth_token } => (url, auth_token),
-                _ => unreachable!(),
-            };
-            let s = ditox_core::libsql_backend::LibsqlStore::new(url, auth_token.as_deref())?;
-            return Ok(Box::new(s));
-        }
-        #[cfg(not(feature = "libsql"))]
-        {
-            eprintln!("warning: settings.backend=turso but this binary is built without 'libsql' feature; using local sqlite instead");
-        }
-    }
+    // Always return local stores (or mem) for read-only operations as well.
     Ok(match cli.store {
         StoreKind::Mem => Box::new(ditox_core::MemStore::new()),
         StoreKind::Sqlite => {

@@ -6,8 +6,9 @@ description = "Ditox clipboard CLI"
 license = "MIT OR Apache-2.0"
 
 [features]
-default = []
-libsql = ["ditox-core/libsql"]
+# Default build includes libsql so one binary supports both local + remote at runtime
+default = ["libsql"]
+libsql = ["ditox-core/libsql", "dep:libsql", "dep:tokio"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -21,6 +22,8 @@ image = { version = "0.25", default-features = false, features = ["png","jpeg","
 toml = "0.8"
 whoami = "1"
 shellexpand = "3"
+tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+libsql = { version = "0.3", optional = true }
 
 [dev-dependencies]
 assert_cmd = "2"
