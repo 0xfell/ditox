@@ -13,6 +13,12 @@ if [[ -f "$SETTINGS" ]]; then
   if [[ -n "${VAL:-}" ]]; then EVERY="$VAL"; fi
 fi
 
+# Validate EVERY as <int><unit> where unit in s/m/h/d/w
+if [[ ! "$EVERY" =~ ^[0-9]+[smhdw]$ ]]; then
+  echo "[warn] Invalid prune.every '$EVERY' in settings; defaulting to 7d" >&2
+  EVERY="7d"
+fi
+
 # Write service
 install -m 0644 "$(dirname "$0")/../contrib/systemd/ditox-prune.service" "$SYS_DIR/ditox-prune.service"
 
@@ -24,3 +30,6 @@ systemctl --user daemon-reload
 systemctl --user enable --now ditox-prune.timer
 echo "Installed user timer with cadence: $EVERY"
 systemctl --user status ditox-prune.timer --no-pager || true
+
+# Harden settings permissions
+if [[ -f "$SETTINGS" ]]; then chmod 600 "$SETTINGS" || true; fi

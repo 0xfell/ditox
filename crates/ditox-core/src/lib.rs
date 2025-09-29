@@ -824,10 +824,202 @@ pub mod blobstore {
 #[cfg(feature = "libsql")]
 pub mod libsql_backend {
     use super::*;
-    pub struct LibsqlStore;
+    use include_dir::{include_dir, Dir};
+    static MIGRATIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/migrations");
+
+    pub struct LibsqlStore {
+        db: libsql::Database,
+        rt: tokio::runtime::Runtime,
+    }
+
     impl LibsqlStore {
-        pub fn new(_url: &str, _auth_token: Option<&str>) -> anyhow::Result<Self> {
-            anyhow::bail!("libsql backend not implemented yet; build with feature and implement")
+        pub fn new(url: &str, auth_token: Option<&str>) -> anyhow::Result<Self> {
+            let rt = tokio::runtime::Runtime::new()?;
+            let db = if let Some(token) = auth_token {
+                rt.block_on(async { libsql::Builder::new_remote(url.to_string(), token.to_string()).build().await })?
+            } else {
+                rt.block_on(async { libsql::Builder::new_remote(url.to_string(), String::new()).build().await })?
+            };
+            let s = Self { db, rt };
+            s.init()?;
+            Ok(s)
+        }
+
+        fn exec_batch(&self, conn: &libsql::Connection, sql: &str) -> anyhow::Result<()> {
+            self.rt.block_on(async move {
+                for stmt in sql.split(';') {
+                    let stmt = stmt.trim();
+                    if stmt.is_empty() { continue; }
+                    conn.execute(stmt, ()).await.map_err(|e| anyhow::anyhow!(e))?;
+                }
+                Ok(())
+            })
+        }
+
+        fn run_migrations(&self) -> anyhow::Result<()> {
+            let conn = self.db.connect()?;
+            // Get current version
+            let current: i64 = self.rt.block_on(async {
+                let mut rows = conn.query("PRAGMA user_version", ()).await?;
+                let r = rows.next().await?;
+                Ok::<i64, libsql::Error>(match r { Some(row) => row.get::<i64>(0)?, None => 0 })
+            })?;
+            let mut files: Vec<_> = MIGRATIONS
+                .files()
+                .filter(|f| f.path().extension().map(|e| e == "sql").unwrap_or(false))
+                .collect();
+            files.sort_by_key(|f| f.path().to_path_buf());
+            for file in files {
+                let name = file.path().file_stem().unwrap().to_string_lossy().to_string();
+                let ver = super::parse_version_prefix(&name).unwrap_or(0) as i64;
+                if ver <= current { continue; }
+                let sql = file.contents_utf8().ok_or_else(|| anyhow::anyhow!("invalid utf-8 in migration {}", name))?;
+                self.exec_batch(&conn, sql)?;
+                self.exec_batch(&conn, &format!("PRAGMA user_version = {}", ver))?;
+            }
+            // best-effort FTS rebuild
+            let _ = self.exec_batch(&conn, "INSERT INTO clips_fts(clips_fts) VALUES('rebuild')");
+            Ok(())
+        }
+    }
+
+    impl Store for LibsqlStore {
+        fn init(&self) -> anyhow::Result<()> {
+            self.run_migrations()
+        }
+
+        fn add(&self, text: &str) -> anyhow::Result<Clip> {
+            let id = super::gen_id();
+            let created_at = OffsetDateTime::now_utc().unix_timestamp();
+            let conn = self.db.connect()?;
+            let id_clone = id.clone();
+            self.rt.block_on(async {
+                conn.execute(
+                    "INSERT INTO clips(id, kind, text, created_at, is_favorite) VALUES(?1, 'text', ?2, ?3, 0)",
+                    libsql::params!(id_clone, text, created_at),
+                ).await
+            })?;
+            Ok(Clip { id, text: text.into(), created_at: OffsetDateTime::from_unix_timestamp(created_at)?, is_favorite: false, kind: ClipKind::Text })
+        }
+
+        fn list(&self, q: Query) -> anyhow::Result<Vec<Clip>> {
+            let conn = self.db.connect()?;
+            let mut sql = String::from("SELECT id, text, created_at, is_favorite FROM clips WHERE deleted_at IS NULL AND kind = 'text'");
+            if q.favorites_only { sql.push_str(" AND is_favorite = 1"); }
+            let rows = if let Some(term) = &q.contains {
+                let has_fts = self.rt.block_on(async {
+                    let mut rows = conn.query("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='clips_fts'", ()).await?;
+                    let r = rows.next().await?;
+                    let c: i64 = match r { Some(row) => row.get(0)?, None => 0 };
+                    Ok::<bool, libsql::Error>(c > 0)
+                })?;
+                if has_fts {
+                    sql = String::from("SELECT c.id, c.text, c.created_at, c.is_favorite FROM clips c JOIN clips_fts f ON f.rowid = c.rowid WHERE c.deleted_at IS NULL AND c.kind = 'text'");
+                    if q.favorites_only { sql.push_str(" AND c.is_favorite = 1"); }
+                    sql.push_str(" AND f.text MATCH ? ORDER BY c.created_at DESC");
+                    self.rt.block_on(async { conn.query(&sql, libsql::params!(term.clone())).await })?
+                } else {
+                    sql.push_str(" AND text LIKE ? ORDER BY created_at DESC");
+                    self.rt.block_on(async { conn.query(&sql, libsql::params!(format!("%{}%", term))).await })?
+                }
+            } else {
+                sql.push_str(" ORDER BY created_at DESC");
+                self.rt.block_on(async { conn.query(&sql, ()).await })?
+            };
+
+            let mut out = Vec::new();
+            let rows_vec: Vec<(String, String, i64, i64)> = self.rt.block_on(async {
+                let mut rows = rows;
+                let mut tmp = Vec::new();
+                loop {
+                    match rows.next().await {
+                        Ok(Some(r)) => {
+                            let id: String = r.get::<String>(0)?;
+                            let text: String = r.get::<String>(1)?;
+                            let created: i64 = r.get::<i64>(2)?;
+                            let fav: i64 = r.get::<i64>(3)?;
+                            tmp.push((id, text, created, fav));
+                        }
+                        Ok(None) => break,
+                        Err(e) => return Err(e),
+                    }
+                }
+                Ok::<_, libsql::Error>(tmp)
+            })?;
+            for (id, text, created, fav) in rows_vec {
+                let created_at = OffsetDateTime::from_unix_timestamp(created).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                out.push(Clip { id, text, created_at, is_favorite: fav != 0, kind: ClipKind::Text });
+            }
+            if let Some(limit) = q.limit { out.truncate(limit); }
+            Ok(out)
+        }
+
+        fn get(&self, id: &str) -> anyhow::Result<Option<Clip>> {
+            let conn = self.db.connect()?;
+            let mut rows = self.rt.block_on(async { conn.query("SELECT id, kind, text, created_at, is_favorite FROM clips WHERE id = ? AND deleted_at IS NULL", libsql::params!(id)).await })?;
+            let opt = self.rt.block_on(async {
+                match rows.next().await? {
+                    Some(r) => {
+                        let created: i64 = r.get::<i64>(3)?;
+                        let kind: String = r.get::<String>(1)?;
+                        let created_at = OffsetDateTime::from_unix_timestamp(created).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                        let kind = if kind == "image" { ClipKind::Image } else { ClipKind::Text };
+                        Ok::<Option<Clip>, libsql::Error>(Some(Clip { id: r.get::<String>(0)?, text: r.get::<String>(2)?, created_at, is_favorite: { let v: i64 = r.get::<i64>(4)?; v != 0 }, kind }))
+                    }
+                    None => Ok::<Option<Clip>, libsql::Error>(None),
+                }
+            })?;
+            Ok(opt)
+        }
+
+        fn favorite(&self, id: &str, fav: bool) -> anyhow::Result<()> {
+            let conn = self.db.connect()?;
+            self.rt.block_on(async { conn.execute("UPDATE clips SET is_favorite = ? WHERE id = ?", libsql::params!(if fav {1} else {0}, id)).await })?;
+            Ok(())
+        }
+
+        fn delete(&self, id: &str) -> anyhow::Result<()> {
+            let conn = self.db.connect()?;
+            self.rt.block_on(async { conn.execute("DELETE FROM clips WHERE id = ?", libsql::params!(id)).await })?;
+            Ok(())
+        }
+
+        fn clear(&self) -> anyhow::Result<()> {
+            let conn = self.db.connect()?;
+            self.rt.block_on(async { conn.execute("DELETE FROM clips", ()).await })?;
+            Ok(())
+        }
+
+        // Images currently unsupported in remote backend
+        fn add_image_rgba(&self, _width: u32, _height: u32, _rgba: &[u8]) -> anyhow::Result<Clip> {
+            anyhow::bail!("images are not supported in libsql backend yet")
+        }
+        fn get_image_meta(&self, _id: &str) -> anyhow::Result<Option<ImageMeta>> { Ok(None) }
+        fn get_image_rgba(&self, _id: &str) -> anyhow::Result<Option<ImageRgba>> { Ok(None) }
+        fn list_images(&self, _q: Query) -> anyhow::Result<Vec<(Clip, ImageMeta)>> { Ok(vec![]) }
+        fn prune(&self, max_items: Option<usize>, max_age: Option<time::Duration>, keep_favorites: bool) -> anyhow::Result<usize> {
+            // Simplified prune: server-side deletes similar to SQLite version
+            let conn = self.db.connect()?;
+            let mut deleted = 0usize;
+            if let Some(age) = max_age {
+                let cutoff = (OffsetDateTime::now_utc() - age).unix_timestamp();
+                let sql = if keep_favorites {
+                    "DELETE FROM clips WHERE created_at < ? AND deleted_at IS NULL AND is_favorite = 0"
+                } else {
+                    "DELETE FROM clips WHERE created_at < ? AND deleted_at IS NULL"
+                };
+                self.rt.block_on(async { conn.execute(sql, libsql::params!(cutoff)).await })?;
+                // libsql doesn't expose changes(); we skip exact count here
+            }
+            if let Some(n) = max_items {
+                let sql = if keep_favorites {
+                    "DELETE FROM clips WHERE rowid IN (SELECT rowid FROM clips WHERE deleted_at IS NULL AND is_favorite = 0 ORDER BY created_at DESC LIMIT -1 OFFSET ?1)"
+                } else {
+                    "DELETE FROM clips WHERE rowid IN (SELECT rowid FROM clips WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT -1 OFFSET ?1)"
+                };
+                self.rt.block_on(async { conn.execute(sql, libsql::params!(n as i64)).await })?;
+            }
+            Ok(deleted)
         }
     }
 }

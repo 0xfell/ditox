@@ -97,6 +97,11 @@ enum Commands {
         #[arg(long)]
         backup: bool,
     },
+    /// Print effective configuration and paths
+    Config {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -347,6 +352,38 @@ fn main() -> Result<()> {
                 store_impl.migrate_all()?;
                 let s = store_impl.migration_status()?;
                 println!("migrated to version {}", s.current);
+            }
+        }
+        Commands::Config { json } => {
+            let cfg_dir = config::config_dir();
+            let settings_path = cfg_dir.join("settings.toml");
+            let db_path = match &settings.storage {
+                config::Storage::LocalSqlite { db_path } => db_path.clone().unwrap_or_else(default_db_path),
+                _ => default_db_path(),
+            };
+            if json {
+                let v = serde_json::json!({
+                    "config_dir": cfg_dir,
+                    "settings_path": settings_path,
+                    "db_path": db_path,
+                    "storage": match &settings.storage {
+                        config::Storage::LocalSqlite { db_path } => serde_json::json!({"backend":"localsqlite","db_path":db_path}),
+                        config::Storage::Turso { url, .. } => serde_json::json!({"backend":"turso","url":url}),
+                    },
+                    "prune": settings.prune,
+                    "max_storage_mb": settings.max_storage_mb,
+                });
+                println!("{}", serde_json::to_string_pretty(&v)?);
+            } else {
+                println!("config_dir: {}", cfg_dir.display());
+                println!("settings:  {}", settings_path.display());
+                println!("db_path:   {}", db_path.display());
+                match &settings.storage {
+                    config::Storage::LocalSqlite { db_path } => println!("storage:  localsqlite (db_path={})", db_path.as_ref().map(|p| p.display().to_string()).unwrap_or("default".into())),
+                    config::Storage::Turso { url, .. } => println!("storage:  turso (url={})", url),
+                }
+                if let Some(p) = &settings.prune { println!("prune:     every={:?} keep_favorites={:?} max_items={:?} max_age={:?}", p.every, p.keep_favorites, p.max_items, p.max_age); }
+                if let Some(m) = settings.max_storage_mb { println!("max_storage_mb: {}", m); }
             }
         }
     }

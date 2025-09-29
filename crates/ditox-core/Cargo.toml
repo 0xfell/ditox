@@ -10,7 +10,7 @@ default = ["mem-store", "clipboard"]
 mem-store = []
 sqlite = ["dep:rusqlite"]
 clipboard = ["dep:arboard"]
-libsql = []
+libsql = ["dep:libsql", "dep:tokio"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -22,6 +22,8 @@ sha2 = "0.10"
 include_dir = "0.7"
 hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
+libsql = { version = "0.3", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
