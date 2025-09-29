@@ -1,20 +1,20 @@
-# Ditox Clipboard — Product Requirements Document (v0.1.0)
+# Ditox Clipboard — Product Requirements Document (as of 2025‑09‑29)
 
 ## Overview
 - Working title: Ditox (enterprise‑friendly clipboard history for developers and teams).
 - Vision: a secure, fast, cross‑platform clipboard history with powerful search, favorites, and optional sync — designed for Linux first, then macOS and Windows.
-- v0.1.0 scope: Linux (X11 + Wayland) and NixOS only. Core library and CLI; no GUI yet. Text content only; images and rich text are out of scope for this first release.
+- Scope (current): Linux‑first CLI with a reusable core library. Text clips are fully supported; image clips are implemented locally (store, list, copy). Optional remote sync (libSQL/Turso) is available for text and is selected at runtime via settings; images remain local‑only.
 
-## Goals (v0.1.0)
-- Reliable local capture of text clipboard history on Linux (X11 and Wayland) with pragmatic fallbacks.
+## Goals (v0.1.x)
+- Reliable local clipboard history on Linux with pragmatic fallbacks.
 - Durable local storage with efficient search and simple favorites.
-- Clean, scriptable CLI for add/list/search/copy/favorite/export.
-- Enterprise‑minded defaults: explicit opt‑in for sync, privacy controls, clear data model, and testable architecture.
+- Clean, scriptable CLI for add/list/search/copy/favorite/prune/migrate/config.
+- Enterprise‑minded defaults: explicit opt‑in for sync, privacy controls, clear data model, SQL migrations, and tests.
 
-## Non‑Goals (v0.1.0)
+## Non‑Goals (v0.1.x)
 - No GUI, tray, or hotkeys pop‑up UI.
-- No cross‑device sync by default; optional remote integration will be prototyped behind a feature flag.
-- No binary attachments (images, files) or formatting; text only.
+- No cross‑device sync by default; remote is opt‑in (runtime selection).
+- No cross‑device image sync yet; images are local‑only.
 
 ---
 
@@ -39,15 +39,16 @@ References (for deeper reading; see end notes).
 ---
 
 ## Core Experience (CLI‑first)
-- `ditox add [TEXT]` — manually capture current text (or from STDIN).
-- `ditox list` — show recent items (id, age, preview, favorite flag).
-- `ditox search <query>` — substring and optional FTS search; filter by favorites.
-- `ditox copy <id>` — copy an entry back to the system clipboard.
+- `ditox add [TEXT]` — add text (argument or STDIN). Images: `--image-path <file>` or `--image-from-clipboard` (Linux).
+- `ditox list` — list text; `--images` lists image clips; `--json` for scripting; `--favorites` filter.
+- `ditox search <query>` — substring or FTS5 (when available); `--json` optional.
+- `ditox copy <id>` — put text or image back on the system clipboard (Linux adapter).
 - `ditox favorite <id>` / `ditox unfavorite <id>` — toggle pin.
-- `ditox export --format json|ndjson|csv` — dump items for backup or audit.
-- `ditox prune --max-items N --max-age 30d` — retention management.
+- `ditox prune [--max-items N] [--max-age 30d] [--keep-favorites]` — retention.
+- `ditox migrate --status|--backup` — SQL migrations with optional on‑disk backup.
+- `ditox config [--json]` — show effective configuration and paths.
 - `ditox init-db` — initialize local store.
-- `ditox doctor` — self‑check for X11/Wayland helpers and database features.
+- `ditox doctor` — environment/store check (clipboard probe, search capability).
 
 Notes
 - Output can be `--json` for scripting.
@@ -57,128 +58,112 @@ Notes
 
 ## Architecture
 - Workspace with two crates:
-  - `ditox-core` (lib): domain types, storage abstraction, search, clipboard bridges, and (later) sync.
-  - `ditox-cli` (bin): user interface; depends only on the core.
-- OS adapters behind traits and feature flags (`x11`, `wayland`, `macos`, `windows`).
-- Linux capture modes (v0.1.0):
-  - X11 watcher: event‑driven when available.
-  - Wayland: helper‑based (e.g., `wl-clipboard`) or polling fallback; explicit and documented limitations.
-- Isolation: the core must be usable from future GUI/daemon crates without change.
+  - `crates/ditox-core` (lib): domain types, storage abstraction, search, clipboard bridges, migrations, local image blob store, optional sync engine.
+  - `crates/ditox-cli` (bin): thin CLI; depends on the core only.
+- OS clipboard adapters behind features; Linux uses `arboard` today. Non‑Linux builds stub clipboard IO.
+- Isolation: the core is suitable for future GUI/daemon crates.
 
-### Clipboard Access (Linux v0.1.0)
-- X11: use `x11-clipboard` or `copypasta` backends for read/write and event‑based change detection when possible.
-- Wayland: prefer `wl-clipboard`/`wl-clipboard-rs` or the `wlr-data-control` protocol where supported; otherwise provide manual capture (`ditox add` and `ditox copy`) as a consistent fallback.
+### Clipboard Access (Linux)
+- Adapter based on `arboard` for read/write text and images.
+- Manual capture (`ditox add`, `ditox copy`) provides a consistent path even where watchers are restricted.
 
-### Data Model (text‑only)
-- `clip` table (or collection):
-  - `id` (string/UUID ULID)
-  - `text` (TEXT)
-  - `created_at` (timestamp)
-  - `is_favorite` (bool, default false)
-  - `deleted_at` (nullable) — support soft delete and future sync/conflict resolution
-- Indices:
-  - `(created_at DESC)` for recency
-  - Full‑text index on `text` (FTS5) for fast search
+### Data Model
+- `clips` table
+  - `id` TEXT primary key (sortable hex id; ULID planned)
+  - `kind` TEXT ('text'|'image')
+  - `text` TEXT
+  - `created_at` INTEGER (unix seconds)
+  - `is_favorite` INTEGER (0/1)
+  - `deleted_at` INTEGER NULL
+  - Image columns: `is_image` INTEGER (0/1), `image_path` TEXT NULL
+  - Sync columns: `updated_at` INTEGER NULL, `lamport` INTEGER DEFAULT 0, `device_id` TEXT NULL
+- `images` table keyed by `clip_id` with `format`, `width`, `height`, `size_bytes`, `sha256`, `thumb_path`.
+- Indices: `(created_at DESC)`, FTS5 virtual table `clips_fts(text)` when available.
 
 ### Storage Options
-- Baseline: SQLite for reliability, indexing, and future FTS. It scales better than a JSON file and avoids whole‑file rewrites.
-- JSON (ndjson) for export/import only, not primary storage.
-- Remote: libSQL/Turso for optional sync — online/offline friendly replication while keeping SQLite semantics.
+- Baseline: SQLite with WAL; embedded SQL migrations.
+- Search: FTS5 when present; LIKE fallback otherwise.
+- Remote (opt‑in, feature‑gated): libSQL/Turso for text rows.
 
 Trade‑offs
 - SQLite is simple to ship and battle‑tested; FTS5 gives good substring/fuzzy support. A raw JSON file is fragile for concurrent writes and search.
 - For enterprises, SQLite also eases audit/backup, and enables SQL migrations.
 
 ### Search
-- Default: substring/LIKE plus optional FTS5 virtual table for fast searches.
-- Future: add ranking, fuzzy matching, and tag filters.
+- Substring/LIKE and optional FTS5; auto‑rebuild FTS on first migration.
 
-### Sync (behind a feature flag, off by default)
-- libSQL/Turso replicator (opt‑in):
-  - Local first: operate on local SQLite/libSQL; background sync when configured.
-  - Encryption: recommend end‑to‑end via application‑level encryption (AEAD) on `text` column before it hits remote; or SQLCipher locally.
-  - Conflict policy: last‑writer‑wins per item with timestamps; server time drift mitigated by monotonic sequence per device.
-- Enterprise: document how to self‑host libSQL or run Turso; provide migration path from pure SQLite.
+### Sync (runtime‑selectable; off by default)
+- Engine: local‑first with push/pull to libSQL/Turso when configured.
+- Scope today: text only. Image rows are excluded from remote writes.
+- Conflict policy: last‑writer‑wins using tuple `(lamport, updated_at, device_id)`.
+- Status: `sync status` reports last push/pull, pending local rows, local text/image counts, remote reachability, last error.
 
-### Privacy & Security (v0.1.0)
-- Defaults: text only; opt‑in to capture; redact via ignore rules (regex/domain/process name when available).
-- Commands: `prune`, `clear`, `export`; explicit retention caps (by age/count).
-- Telemetry: none by default.
+### Privacy & Security
+- Clipboard contents may include secrets; CLI avoids logging content and supports pruning/export via JSON output from commands.
+- Remote sync is opt‑in and feature‑gated; settings are local TOML; scripts harden perms to 0600 when possible.
+- No telemetry.
 
 ---
 
-## Packaging & Distribution (v0.1.0)
-- Linux:
-  - Static binary or musl build when feasible; otherwise glibc minimal.
-  - Provide `.deb` and `.rpm` in CI; consider AppImage.
-  - Systemd user unit template for a future daemon (`clipd`) but not required in 0.1.
-- NixOS:
-  - Provide a Nix derivation and optional flake for `ditox-cli`.
+## Packaging & Distribution
+- Linux: build via Cargo; CI builds release binaries and uploads artifacts on tags `rust-v*`.
+- NixOS: flake with `packages.ditox`, `apps.ditox`, and a dev shell (Rust + headers). CI also exercises flake builds.
+- Systemd: user timers for prune/sync provided via `scripts/install_*_timer.sh` and `contrib/systemd` templates.
 
 ---
 
 ## Roadmap
-- 0.1.0 (this release)
-  - Core library with storage trait and SQLite backend
-  - CLI: add/list/search/favorite/copy/export/prune/init-db/doctor
-  - Linux support (X11 + Wayland helpers); text only
+- 0.1.x (current)
+  - Core library (SQLite + migrations + FTS5 when available)
+  - CLI: add/list/search/favorite/unfavorite/copy/delete/info/prune/init-db/doctor/migrate/config
+  - Images: local store/list/info/copy; content‑addressed blobs on disk
+  - Sync (feature‑gated): text push/pull; status reporting; systemd timer installers
 - 0.2.x
-  - Daemon (`clipd`) with event listeners and configurable rules
-  - Interactive picker (`--fzf`) and tags
-  - Basic import from common managers (CopyQ JSON, Ditto CSV)
-  - Images: capture/store images, thumbnails, dedupe, and copy-out
+  - Optional background daemon (`clipd`) and interactive picker
+  - Import/export tools; richer search; tags
+  - Image thumbnails and metadata filters
 - 0.3.x
-  - Optional sync (libSQL/Turso) + E2EE
-  - Multi‑device merge/conflict policy and device IDs
+  - Remote image strategy (object storage) and/or E2EE text
+  - Multi‑device merge improvements and conflict tooling
 - 0.4.x
-  - macOS and Windows OS adapters and packages
-  - Images/rich text (depending on demand)
+  - macOS and Windows adapters and packages
 
 ---
 
 ## Open Questions / Risks
-- Wayland clipboard capture parity varies by compositor; we’ll document exact support and ship reliable fallbacks (manual capture + polling).
-- If FTS5 is unavailable (older SQLite), search falls back to LIKE; `doctor` will surface capability.
-- Performance for very large histories: we’ll default to a max history size (e.g., 10k items) and prune strategy.
-- Enterprise encryption policies differ: provide E2EE at the app layer to avoid dependence on platform crypto.
+- Clipboard watcher ergonomics vary on Wayland; manual capture keeps flows reliable.
+- Older SQLite builds may lack FTS5; LIKE fallback remains acceptable for small/medium datasets.
+- Large histories: prune policies and limits (defaults in settings) mitigate growth.
+- Remote: text only today; images remain local‑only until a safe/object‑store strategy is defined.
 
 ---
 
 ## References
-- CopyQ features: https://copyq.readthedocs.io/en/latest/ and https://github.com/hluk/CopyQ
-- Ditto features: https://sourceforge.net/projects/ditto-cp/
-- Maccy (macOS) features: https://maccy.app/ and https://github.com/p0deje/Maccy
-- Wayland data‑control protocol: https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/staging/data-control/data-control-v1.xml
-- wl-clipboard-rs crate: https://crates.io/crates/wl-clipboard-rs
-- arboard and copypasta crates: https://crates.io/crates/arboard, https://crates.io/crates/copypasta
-- SQLite FTS5: https://www.sqlite.org/fts5.html
-- Turso/libSQL: https://turso.tech/ and https://docs.turso.tech/libsql/overview
+- CopyQ, Ditto, Maccy (feature prior art)
+- Wayland data‑control protocol, wl‑clipboard‑rs, arboard/copy‑pasta
+- SQLite FTS5 docs, Turso/libSQL docs
 
 ---
 
-## Images (planned for v0.2)
+## Images (current)
 ### Goals
-- Capture images from the system clipboard and store them efficiently.
-- Support favorites, metadata search (format/size/dimensions), and copy‑out back to clipboard.
-- Keep DB lean by storing image bytes as content‑addressed files with metadata in SQLite.
+- Capture images from file or system clipboard; store locally; copy back to clipboard.
+- Keep DB lean: store image bytes as content‑addressed PNG blobs under the DB directory; metadata in SQLite.
 
 ### Design
-- Clipboard API: use `arboard` for cross‑platform image read/write (RGBA in, PNG/WebP out).
+- Clipboard API: `arboard` on Linux for image read/write (RGBA in, PNG out).
 - Storage layout:
-  - Table `clips` gains `kind` (Text|Image).
-  - Table `images` keyed by `clip_id` with fields: `format`, `width`, `height`, `size_bytes`, `sha256`, `thumb_path`.
-  - Blob store in `objects/aa/bb/<sha256>`; optional per‑file AEAD encryption.
-- Dedupe: exact via SHA‑256; optional perceptual hash (pHash) for near‑dupes.
-- Thumbnails: small PNG/WebP for fast rendering in future UI.
-- Search:
-  - Text clips: FTS5.
-  - Image clips: metadata filters (format/size/dimensions/favorites/date) and optional similarity via pHash.
+  - `clips.kind = 'image'`; flags `is_image` and optional `image_path` (when using file‑path mode).
+  - `images(clip_id, format, width, height, size_bytes, sha256, thumb_path)`.
+  - Blob store path: `objects/aa/bb/<sha256>` adjacent to the DB file.
+- Dedupe: exact via SHA‑256 digest of encoded PNG bytes.
 
-### CLI Additions
-- `ditox list --images` and `ditox info <id>` show image metadata.
-- `ditox export --images` exports metadata + blobs.
-- `ditox prune --images` respects size/age quotas.
+### CLI
+- Add from file: `ditox add --image-path <file>`
+- Add from clipboard (Linux): `ditox add --image-from-clipboard`
+- List images: `ditox list --images [--json]`
+- Inspect: `ditox info <id>`
+- Copy back: `ditox copy <id>`
 
 ### Sync Considerations
-- Sync only metadata and blob refs by default; optionally sync blobs to object storage (S3/MinIO). Small images can be stored as DB BLOBs if configured.
-
+- Images are local‑only and excluded from remote sync by design at this stage.

@@ -19,6 +19,10 @@ DDDDDDDDDDDDD        iiiiiiii         ttttttttttt     ooooooooooo xxxxxxx      x
 
 # Ditox — Clipboard History for Developers (CLI + Core)
 
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](#)
+[![CI](https://github.com/YOUR_ORG/YOUR_REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_ORG/YOUR_REPO/actions/workflows/ci.yml)
+<!-- Update the CI badge URLs with your GitHub org/repo -->
+
 Note: Docs below use the command name `ditox` for readability. If you installed from source without a wrapper, your binary name may be `ditox-cli` — use that instead (e.g., `ditox-cli list`).
 
 Ditox is a fast, scriptable clipboard history with a focus on reliability, privacy, and great CLI ergonomics. It targets Linux first (X11/Wayland via `arboard`) and is designed as a Rust workspace with a reusable core library and a small command‑line tool.
@@ -26,9 +30,9 @@ Ditox is a fast, scriptable clipboard history with a focus on reliability, priva
 - Core features:
     - Add/list/search text clips; JSON output for scripting.
     - Favorites and retention pruning by age or count.
-    - Image groundwork: add/list/info/copy image clips; file‑backed blobs.
+    - Images: add/list/info/copy; content‑addressed blobs on disk.
     - SQLite store with FTS5 when available; LIKE fallback otherwise.
-    - Optional remote backend (libSQL/Turso) behind a feature flag.
+    - Optional remote backend (libSQL/Turso) behind a feature flag (text only).
     - Self‑check (`doctor`) and explicit migrations (`migrate`).
 
 - Status: v0.1.x, Linux‑first. Clipboard adapters for other OSes will land later; the CLI builds but clipboard IO is a no‑op outside Linux.
@@ -54,7 +58,7 @@ The default database lives at `~/.config/ditox/db/ditox.db` (XDG). You can overr
 
 Optional features:
 
-- libSQL/Turso remote store: build CLI with `--features libsql` on `ditox-cli` to enable the remote backend path (`[storage.backend = "turso"]`).
+- libSQL/Turso remote store: runtime‑selectable via `[storage.backend = "turso"]`; one binary supports both local and remote.
 
 ## Usage
 
@@ -107,56 +111,56 @@ Doctor (environment/store check):
 
 - `ditox doctor`
 
-Images (scaffolded, Linux):
+Images (Linux):
 
 - Add from file: `ditox add --image-path ./foo.png`
 - Add from clipboard: `ditox add --image-from-clipboard`
 - List images: `ditox list --images [--json]`
 - Copy image to clipboard: `ditox copy <id>` (for image clips)
 
+Sync (feature‑gated):
+
+- Build with `-p ditox-cli --features libsql`.
+- Configure `[storage.backend = "turso"]` with `url` and optional `auth_token` in settings.
+- Commands: `ditox sync status` and `ditox sync run [--push-only|--pull-only]`.
+
 ## Command Reference
 
-Global options (apply to all subcommands):
+- Global flags
+  - `--store <sqlite|mem>` (default `sqlite`) — choose backend
+  - `--db <path>` — path to SQLite database file (when `sqlite`)
+  - `--auto-migrate[=true|false]` (default `true`) — apply pending migrations on startup
 
-| Option                | Default                           | Purpose                       |
-| --------------------- | --------------------------------- | ----------------------------- | -------------------------------------------------------------------------- |
-| `--store <sqlite      | mem>`                             | `sqlite`                      | Choose backend (SQLite on disk, or in‑memory `mem`).                       |
-| `--db <path>`         | XDG `~/.config/ditox/db/ditox.db` | Path to SQLite database file. |
-| `--auto-migrate[=true | false]`                           | `true`                        | Apply pending DB migrations on startup (set `false` for managed rollouts). |
-
-Subcommands:
-
-| Command      | Synopsis                                                         | Description                                                                                     |
-| ------------ | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `init-db`    | `ditox init-db [--db <path>]`                                    | Initialize the local database (no‑op if already initialized).                                   |
-| `add`        | `ditox add [TEXT] [--image-path <file>                           | --image-from-clipboard]`                                                                        | Add a new entry. Without `TEXT`, reads from STDIN. Use image flags to store an image clip.                       |
-| `list`       | `ditox list [--favorites] [--images] [--limit N] [--json]`       | List recent text clips (default) or images with `--images`. Use `--json` for scripting.         |
-| `search`     | `ditox search <QUERY> [--favorites] [--json]`                    | Search text clips (FTS5 if available, otherwise `LIKE`).                                        |
-| `favorite`   | `ditox favorite <ID>`                                            | Mark an entry as favorite.                                                                      |
-| `unfavorite` | `ditox unfavorite <ID>`                                          | Remove favorite flag.                                                                           |
-| `copy`       | `ditox copy <ID>`                                                | Copy the entry back to the system clipboard (text or image; Linux only).                        |
-| `delete`     | `ditox delete [ID]`                                              | Delete a specific entry; with no `ID`, clear all entries.                                       |
-| `info`       | `ditox info <ID>`                                                | Show details about an entry (for images: format, size, dimensions, sha256).                     |
-| `prune`      | `ditox prune [--max-items N] [--max-age 30d] [--keep-favorites]` | Prune by count and/or age. Favorites are kept by default; `--keep-favorites` makes it explicit. |
-| `migrate`    | `ditox migrate [--status                                         | --backup]`                                                                                      | `--status` prints current/latest/pending; `--backup` makes a `.bak.<timestamp>` then applies pending migrations. |
-| `doctor`     | `ditox doctor`                                                   | Self‑check for clipboard access and search capability.                                          |
-| `config`     | `ditox config [--json]`                                          | Print effective configuration and paths.                                                        |
+- Subcommands
+  - `init-db` — initialize local database
+  - `add [TEXT] [--image-path <file>] [--image-from-clipboard]` — add text or image
+  - `list [--json] [--favorites] [--images] [--limit N]` — list entries
+  - `search <query> [--json] [--favorites]` — search text entries
+  - `favorite <id>` / `unfavorite <id>` — toggle favorite
+  - `copy <id>` — copy entry to clipboard (Linux)
+  - `delete [<id>]` — delete one entry or clear all when omitted
+  - `info <id>` — show entry details
+  - `prune [--max-items N] [--max-age DUR] [--keep-favorites]` — retention
+  - `migrate [--status|--backup]` — show status or backup and apply
+  - `doctor` — environment/store self‑check
+  - `config [--json]` — print effective configuration and paths
+  - `sync status|run|doctor [--push-only|--pull-only]` — remote sync and diagnostics (feature‑gated)
 
 ## Configuration
 
 Settings live at `~/.config/ditox/settings.toml` by default. The CLI reads this file and merges it with flags.
 
-Example:
+Runtime selection (examples):
 
 ```toml
 # ~/.config/ditox/settings.toml
 
-# Storage backend (default: local sqlite)
+# Storage backend (runtime selection)
 [storage]
-backend = "localsqlite"
+backend = "localsqlite"   # or "turso" for remote sync
 # db_path = "/custom/path/ditox.db"   # optional override of the XDG default
 
-# Alternative remote backend (requires building CLI with --features libsql)
+# Alternative remote backend (no special build flags needed)
 # [storage]
 # backend = "turso"
 # url = "libsql://<your-db>.turso.io"
@@ -186,22 +190,26 @@ Effective paths/config can be printed with:
 
 FTS5 is used when available (see `0002_fts.sql`). If not available, search uses a `LIKE` fallback. `ditox doctor` reports capability.
 
-## Systemd Timer (optional prune)
+## Systemd Timers (sync + prune)
 
-A convenience script installs a per‑user systemd timer to run `ditox prune` on a cadence derived from `settings.toml`:
+Per‑user systemd timers can automate pruning and optional remote sync:
 
 - `scripts/install_prune_timer.sh`
-    - Generates `~/.config/systemd/user/ditox-prune.*`, enables and starts the timer.
-    - Uses `[prune].every` (e.g., `7d`) from your settings; defaults to `7d`.
-    - Inspect with `systemctl --user status ditox-prune.timer`.
+  - Installs `ditox-prune.timer` based on `[prune].every` (e.g., `7d`).
+  - Generates `~/.config/systemd/user/ditox-prune.*`, enables and starts the timer.
+  - Inspect with `systemctl --user status ditox-prune.timer`.
+- `scripts/install_sync_timer.sh`
+  - Installs `ditox-sync.timer` to run `ditox sync run` on `[sync].interval` (default `5m`).
+- Combined installer: `scripts/install_maintenance_timers.sh`
+  - Calls both installers using your current `settings.toml`.
 
-See `contrib/systemd/README.md` for details.
+
 
 ## Building From Source
 
 - Workspace build: `cargo build`
 - CLI only: `cargo build -p ditox-cli`
-- With all features for testing: `cargo build --workspace --all-features`
+- Default build already includes remote support: `cargo build`
 - Lint and format: `cargo fmt --all` and `cargo clippy --all-targets -- -D warnings`
 - Tests: `cargo test --all`
     - Clipboard E2E image test runs on Linux only and is guarded by `DITOX_E2E_CLIPBOARD=1`.
@@ -258,5 +266,5 @@ as specified in the crate manifests.
 - Core library: `crates/ditox-core/` (migrations in `migrations/`).
 - CLI: `crates/ditox-cli/`.
 - Tests: `crates/*/tests/`.
-- Nix: `flake.nix`, `flake.lock` (see `nix.md`).
+- Nix: `flake.nix`, `flake.lock`.
 - Systemd integration: `contrib/systemd/` and `scripts/install_prune_timer.sh`.
