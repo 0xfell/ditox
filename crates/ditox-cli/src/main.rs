@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use directories::ProjectDirs;
 use std::path::PathBuf;
-use ditox_core::{Store, Query, StoreImpl};
+use ditox_core::{Store, Query, StoreImpl, ClipKind};
 #[cfg(all(target_os = "linux"))]
 use ditox_core::clipboard::{ArboardClipboard as SystemClipboard, Clipboard as _};
 #[cfg(not(target_os = "linux"))]
@@ -28,12 +28,25 @@ struct Cli {
 enum Commands {
     /// Initialize local database (placeholder)
     InitDb,
-    /// Add a new text entry (or read from STDIN if omitted)
-    Add { text: Option<String> },
+    /// Add a new entry. If --image-* is used, stores an image.
+    Add {
+        /// Plain text; if omitted, read from STDIN (conflicts with image flags)
+        #[arg(conflicts_with_all=["image_path","image_from_clipboard"])]
+        text: Option<String>,
+        /// Read image from file path
+        #[arg(long, conflicts_with="text")]
+        image_path: Option<PathBuf>,
+        /// Read image from system clipboard
+        #[arg(long, conflicts_with="text")]
+        image_from_clipboard: bool,
+    },
     /// List recent entries
     List {
         #[arg(long)]
         favorites: bool,
+        /// List images instead of text entries
+        #[arg(long)]
+        images: bool,
         #[arg(long)]
         limit: Option<usize>,
         #[arg(long)]
@@ -48,6 +61,8 @@ enum Commands {
     Copy { id: String },
     /// Remove an entry or clear all
     Delete { id: Option<String> },
+    /// Show details about an entry
+    Info { id: String },
     /// Self-check for environment capabilities (placeholder)
     Doctor,
     /// Database migrations
@@ -63,25 +78,56 @@ fn main() -> Result<()> {
             store.init()?;
             println!("database initialized (placeholder)");
         }
-        Commands::Add { text } => {
-            let text = match text {
-                Some(t) => t,
-                None => {
-                    use std::io::{self, Read};
-                    let mut buf = String::new();
-                    io::stdin().read_to_string(&mut buf)?;
-                    buf
+        Commands::Add { text, image_path, image_from_clipboard } => {
+            if let Some(path) = image_path {
+                let bytes = std::fs::read(&path)?;
+                let img = image::load_from_memory(&bytes)?;
+                let rgba = img.to_rgba8();
+                let (w,h) = rgba.dimensions();
+                let clip = store.add_image_rgba(w, h, &rgba.into_raw())?;
+                println!("added image {} ({}x{})", clip.id, w, h);
+            } else if image_from_clipboard {
+                let cb = SystemClipboard::new();
+                if let Some(img) = cb.get_image()? {
+                    let clip = store.add_image_rgba(img.width, img.height, &img.bytes)?;
+                    println!("added image {} ({}x{})", clip.id, img.width, img.height);
+                } else {
+                    eprintln!("no image in clipboard");
                 }
-            };
-            let clip = store.add(&text)?;
-            println!("added {}", clip.id);
-        }
-        Commands::List { favorites, limit, json } => {
-            let items = store.list(Query { contains: None, favorites_only: favorites, limit })?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&items)?);
             } else {
-                for c in items { println!("{}\t{}\t{}", c.id, if c.is_favorite {"*"} else {" "}, preview(&c.text)); }
+                let text = match text {
+                    Some(t) => t,
+                    None => {
+                        use std::io::{self, Read};
+                        let mut buf = String::new();
+                        io::stdin().read_to_string(&mut buf)?;
+                        buf
+                    }
+                };
+                let clip = store.add(&text)?;
+                println!("added {}", clip.id);
+            }
+        }
+        Commands::List { favorites, images, limit, json } => {
+            if images {
+                let items = store.list_images(Query { contains: None, favorites_only: favorites, limit })?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&items.iter().map(|(c,m)| serde_json::json!({
+                        "id": c.id,
+                        "favorite": c.is_favorite,
+                        "created_at": c.created_at,
+                        "meta": {"format": m.format, "width": m.width, "height": m.height, "size_bytes": m.size_bytes}
+                    })).collect::<Vec<_>>())?);
+                } else {
+                    for (c,m) in items { println!("{}\t{}\t{}x{} {}", c.id, if c.is_favorite {"*"} else {" "}, m.width, m.height, m.format); }
+                }
+            } else {
+                let items = store.list(Query { contains: None, favorites_only: favorites, limit })?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&items)?);
+                } else {
+                    for c in items { println!("{}\t{}\t{}", c.id, if c.is_favorite {"*"} else {" "}, preview(&c.text)); }
+                }
             }
         }
         Commands::Search { query, favorites, json } => {
@@ -97,15 +143,36 @@ fn main() -> Result<()> {
         Commands::Copy { id } => {
             if let Some(c) = store.get(&id)? {
                 let cb = SystemClipboard::new();
-                cb.set_text(&c.text)?;
-                println!("copied {}", id);
-            } else {
-                eprintln!("not found: {}", id);
-            }
+                match c.kind {
+                    ClipKind::Text => { cb.set_text(&c.text)?; println!("copied {}", id); }
+                    ClipKind::Image => {
+                        if let Some(img) = store.get_image_rgba(&id)? { cb.set_image(&img)?; println!("copied image {} ({}x{})", id, img.width, img.height); }
+                        else { eprintln!("image data not found: {}", id); }
+                    }
+                }
+            } else { eprintln!("not found: {}", id); }
         }
         Commands::Delete { id } => {
             if let Some(id) = id { store.delete(&id)?; println!("deleted {}", id); }
             else { store.clear()?; println!("cleared"); }
+        }
+        Commands::Info { id } => {
+            if let Some(c) = store.get(&id)? {
+                match c.kind {
+                    ClipKind::Text => {
+                        println!("id:\t{}\nkind:\ttext\ncreated:\t{}\nfavorite:\t{}\nlen:\t{}\npreview:\t{}",
+                            c.id, c.created_at, c.is_favorite, c.text.len(), preview(&c.text));
+                    }
+                    ClipKind::Image => {
+                        if let Some(m) = store.get_image_meta(&id)? {
+                            println!("id:\t{}\nkind:\timage\ncreated:\t{}\nfavorite:\t{}\nformat:\t{}\nsize:\t{} bytes\ndims:\t{}x{}\nsha256:\t{}",
+                                c.id, c.created_at, c.is_favorite, m.format, m.size_bytes, m.width, m.height, m.sha256);
+                        } else {
+                            println!("id:\t{}\nkind:\timage (metadata missing)", id);
+                        }
+                    }
+                }
+            } else { eprintln!("not found: {}", id); }
         }
         Commands::Doctor => {
             // Clipboard check

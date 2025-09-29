@@ -41,6 +41,13 @@ pub struct ImageMeta {
     pub thumb_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageRgba {
+    pub width: u32,
+    pub height: u32,
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Query {
     pub contains: Option<String>,
@@ -56,16 +63,22 @@ pub trait Store: Send + Sync {
     fn favorite(&self, id: &str, fav: bool) -> anyhow::Result<()>;
     fn delete(&self, id: &str) -> anyhow::Result<()>;
     fn clear(&self) -> anyhow::Result<()>;
+    // Images
+    fn add_image_rgba(&self, width: u32, height: u32, rgba: &[u8]) -> anyhow::Result<Clip>;
+    fn get_image_meta(&self, id: &str) -> anyhow::Result<Option<ImageMeta>>;
+    fn get_image_rgba(&self, id: &str) -> anyhow::Result<Option<ImageRgba>>;
+    fn list_images(&self, q: Query) -> anyhow::Result<Vec<(Clip, ImageMeta)>>;
 }
 
 /// Minimal in-memory store used until SQLite backend lands.
 #[derive(Default)]
 pub struct MemStore {
     inner: RwLock<Vec<Clip>>,
+    images: RwLock<std::collections::HashMap<ClipId, ImageRgba>>, // simple scaffold
 }
 
 impl MemStore {
-    pub fn new() -> Self { Self { inner: RwLock::new(Vec::new()) } }
+    pub fn new() -> Self { Self { inner: RwLock::new(Vec::new()), images: RwLock::new(std::collections::HashMap::new()) } }
 }
 
 fn gen_id() -> String {
@@ -118,17 +131,53 @@ impl Store for MemStore {
     fn clear(&self) -> anyhow::Result<()> {
         let mut v = self.inner.write().expect("poisoned");
         v.clear();
+        self.images.write().unwrap().clear();
         Ok(())
+    }
+
+    fn add_image_rgba(&self, width: u32, height: u32, rgba: &[u8]) -> anyhow::Result<Clip> {
+        let id = gen_id();
+        let clip = Clip { id: id.clone(), text: String::new(), created_at: OffsetDateTime::now_utc(), is_favorite: false, kind: ClipKind::Image };
+        self.images.write().unwrap().insert(id.clone(), ImageRgba { width, height, bytes: rgba.to_vec() });
+        self.inner.write().unwrap().insert(0, clip.clone());
+        Ok(clip)
+    }
+
+    fn get_image_meta(&self, id: &str) -> anyhow::Result<Option<ImageMeta>> {
+        let im = self.images.read().unwrap();
+        Ok(im.get(id).map(|img| ImageMeta { format: "rgba".into(), width: img.width, height: img.height, size_bytes: img.bytes.len() as u64, sha256: String::new(), thumb_path: None }))
+    }
+
+    fn get_image_rgba(&self, id: &str) -> anyhow::Result<Option<ImageRgba>> {
+        let im = self.images.read().unwrap();
+        Ok(im.get(id).cloned())
+    }
+
+    fn list_images(&self, q: Query) -> anyhow::Result<Vec<(Clip, ImageMeta)>> {
+        let v = self.inner.read().unwrap();
+        let im = self.images.read().unwrap();
+        let mut out = Vec::new();
+        for c in v.iter().filter(|c| matches!(c.kind, ClipKind::Image)) {
+            if q.favorites_only && !c.is_favorite { continue; }
+            if let Some(img) = im.get(&c.id) {
+                out.push((c.clone(), ImageMeta { format: "rgba".into(), width: img.width, height: img.height, size_bytes: img.bytes.len() as u64, sha256: String::new(), thumb_path: None }));
+            }
+        }
+        if let Some(limit) = q.limit { out.truncate(limit); }
+        Ok(out)
     }
 }
 
 /// Placeholder types for future OS clipboard integrations.
 pub mod clipboard {
     use anyhow::Result;
+    use super::ImageRgba;
 
     pub trait Clipboard: Send + Sync {
         fn get_text(&self) -> Result<Option<String>>;
         fn set_text(&self, text: &str) -> Result<()>;
+        fn get_image(&self) -> Result<Option<ImageRgba>> { Ok(None) }
+        fn set_image(&self, _img: &ImageRgba) -> Result<()> { Ok(()) }
     }
 
     #[derive(Default)]
@@ -160,6 +209,19 @@ pub mod clipboard {
             cb.set_text(text.to_string())?;
             Ok(())
         }
+        fn get_image(&self) -> Result<Option<ImageRgba>> {
+            let mut cb = arboard::Clipboard::new()?;
+            match cb.get_image() {
+                Ok(img) => Ok(Some(ImageRgba { width: img.width as u32, height: img.height as u32, bytes: img.bytes.into_owned() })),
+                Err(_) => Ok(None),
+            }
+        }
+        fn set_image(&self, img: &ImageRgba) -> Result<()> {
+            let mut cb = arboard::Clipboard::new()?;
+            let data = arboard::ImageData { width: img.width as usize, height: img.height as usize, bytes: std::borrow::Cow::Borrowed(&img.bytes) };
+            cb.set_image(data)?;
+            Ok(())
+        }
     }
 }
 
@@ -169,6 +231,11 @@ mod sqlite_store {
     use rusqlite::{Connection, params, OptionalExtension};
     use std::path::{Path, PathBuf};
     use include_dir::{include_dir, Dir};
+    use crate::blobstore::BlobStore;
+    use image::{ImageFormat, ImageReader, ImageBuffer, Rgba};
+    use image::codecs::png::PngEncoder;
+    use image::ImageEncoder;
+    use std::io::Cursor;
 
     static MIGRATIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/migrations");
 
@@ -321,10 +388,18 @@ mod sqlite_store {
 
         fn get(&self, id: &str) -> anyhow::Result<Option<Clip>> {
             let conn = self.conn.lock().unwrap();
-            let mut stmt = conn.prepare("SELECT id, text, created_at, is_favorite FROM clips WHERE id = ? AND deleted_at IS NULL AND kind = 'text'")?;
+            let mut stmt = conn.prepare("SELECT id, kind, text, created_at, is_favorite FROM clips WHERE id = ? AND deleted_at IS NULL")?;
             let opt = stmt.query_row([id], |row| {
-                let created: i64 = row.get(2)?;
-                Ok(Clip { id: row.get(0)?, text: row.get(1)?, created_at: OffsetDateTime::from_unix_timestamp(created).unwrap_or(OffsetDateTime::now_utc()), is_favorite: row.get::<_, i64>(3)? != 0, kind: ClipKind::Text })
+                let created: i64 = row.get(3)?;
+                let kind_str: String = row.get(1)?;
+                let kind = if kind_str == "image" { ClipKind::Image } else { ClipKind::Text };
+                Ok(Clip {
+                    id: row.get(0)?,
+                    text: row.get(2)?,
+                    created_at: OffsetDateTime::from_unix_timestamp(created).unwrap_or(OffsetDateTime::now_utc()),
+                    is_favorite: row.get::<_, i64>(4)? != 0,
+                    kind,
+                })
             }).optional()?;
             Ok(opt)
         }
@@ -345,6 +420,73 @@ mod sqlite_store {
             let conn = self.conn.lock().unwrap();
             conn.execute("DELETE FROM clips", [])?;
             Ok(())
+        }
+
+        fn add_image_rgba(&self, width: u32, height: u32, rgba: &[u8]) -> anyhow::Result<Clip> {
+            // Encode to PNG
+            let mut buf = Vec::new();
+            {
+                let mut enc = PngEncoder::new(&mut buf);
+                enc.write_image(rgba, width, height, image::ColorType::Rgba8.into())?;
+            }
+            let blob_root = self.path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+            let bs = BlobStore::new(&blob_root);
+            let sha = bs.put(&buf)?;
+            let size = buf.len() as u64;
+            let id = super::gen_id();
+            let created_at = OffsetDateTime::now_utc().unix_timestamp();
+            let conn = self.conn.lock().unwrap();
+            let tx = conn.unchecked_transaction()?;
+            tx.execute("INSERT INTO clips(id, kind, text, created_at, is_favorite) VALUES(?, 'image', '', ?, 0)", params![id, created_at])?;
+            tx.execute("INSERT INTO images(clip_id, format, width, height, size_bytes, sha256, thumb_path) VALUES(?, 'png', ?, ?, ?, ?, NULL)", params![id, width as i64, height as i64, size as i64, sha])?;
+            tx.commit()?;
+            Ok(Clip { id, text: String::new(), created_at: OffsetDateTime::from_unix_timestamp(created_at)?, is_favorite: false, kind: ClipKind::Image })
+        }
+
+        fn get_image_meta(&self, id: &str) -> anyhow::Result<Option<ImageMeta>> {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare("SELECT format, width, height, size_bytes, sha256, thumb_path FROM images WHERE clip_id = ?")?;
+            let opt = stmt.query_row([id], |row| {
+                Ok(ImageMeta {
+                    format: row.get::<_, String>(0)?,
+                    width: row.get::<_, i64>(1)? as u32,
+                    height: row.get::<_, i64>(2)? as u32,
+                    size_bytes: row.get::<_, i64>(3)? as u64,
+                    sha256: row.get::<_, String>(4)?,
+                    thumb_path: row.get::<_, Option<String>>(5)?,
+                })
+            }).optional()?;
+            Ok(opt)
+        }
+
+        fn get_image_rgba(&self, id: &str) -> anyhow::Result<Option<ImageRgba>> {
+            let meta = match self.get_image_meta(id)? { Some(m) => m, None => return Ok(None) };
+            let blob_root = self.path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+            let bs = BlobStore::new(&blob_root);
+            let bytes = bs.get(&meta.sha256)?;
+            // Decode PNG to RGBA
+            let img = ImageReader::with_format(Cursor::new(bytes), ImageFormat::Png).decode()?;
+            let rgba8 = img.to_rgba8();
+            let (w,h) = rgba8.dimensions();
+            Ok(Some(ImageRgba { width: w, height: h, bytes: rgba8.into_raw() }))
+        }
+
+        fn list_images(&self, q: Query) -> anyhow::Result<Vec<(Clip, ImageMeta)>> {
+            let conn = self.conn.lock().unwrap();
+            let mut sql = String::from("SELECT c.id, c.created_at, c.is_favorite, i.format, i.width, i.height, i.size_bytes, i.sha256, i.thumb_path FROM clips c JOIN images i ON i.clip_id = c.id WHERE c.deleted_at IS NULL AND c.kind = 'image'");
+            if q.favorites_only { sql.push_str(" AND c.is_favorite = 1"); }
+            sql.push_str(" ORDER BY c.created_at DESC");
+            if let Some(limit) = q.limit { sql.push_str(&format!(" LIMIT {}", limit)); }
+            let mut stmt = conn.prepare(&sql)?;
+            let mut rows = stmt.query([])?;
+            let mut out = Vec::new();
+            while let Some(row) = rows.next()? {
+                let created: i64 = row.get(1)?;
+                let clip = Clip { id: row.get(0)?, text: String::new(), created_at: OffsetDateTime::from_unix_timestamp(created)?, is_favorite: row.get::<_, i64>(2)? != 0, kind: ClipKind::Image };
+                let meta = ImageMeta { format: row.get(3)?, width: row.get::<_, i64>(4)? as u32, height: row.get::<_, i64>(5)? as u32, size_bytes: row.get::<_, i64>(6)? as u64, sha256: row.get(7)?, thumb_path: row.get(8)? };
+                out.push((clip, meta));
+            }
+            Ok(out)
         }
     }
 

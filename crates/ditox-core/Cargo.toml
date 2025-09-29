@@ -20,6 +20,7 @@ time = { version = "0.3", features = ["serde"] }
 sha2 = "0.10"
 include_dir = "0.7"
 hex = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Optional SQLite backend
 rusqlite = { version = "0.31", optional = true, features = ["bundled"] }
