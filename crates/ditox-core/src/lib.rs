@@ -929,6 +929,10 @@ pub mod sync {
         pub last_push: Option<i64>,
         pub last_pull: Option<i64>,
         pub pending_local: usize,
+        pub local_text: usize,
+        pub local_images: usize,
+        pub remote_ok: Option<bool>,
+        pub last_error: Option<String>,
     }
 
     pub struct SyncEngine {
@@ -1017,11 +1021,19 @@ pub mod sync {
                     )
                     .ok();
                 let pending: i64 = self.local.query_row("SELECT COUNT(1) FROM clips WHERE kind='text' AND COALESCE(updated_at, created_at) > COALESCE((SELECT val FROM sync_state WHERE key='last_push_updated_at'),0)", [], |r| r.get(0)).unwrap_or(0);
-                return Ok(SyncStatus {
-                    last_push,
-                    last_pull,
-                    pending_local: pending as usize,
-                });
+                let local_text: i64 = self.local.query_row("SELECT COUNT(1) FROM clips WHERE kind='text'", [], |r| r.get(0)).unwrap_or(0);
+                let local_images: i64 = self.local.query_row("SELECT COUNT(1) FROM clips WHERE kind='image'", [], |r| r.get(0)).unwrap_or(0);
+                let last_error: Option<String> = self.local.query_row("SELECT val FROM sync_state WHERE key='last_error'", [], |r| r.get(0)).ok();
+                #[cfg(feature = "libsql")]
+                let remote_ok = if let (Some(remote), Some(rt)) = (&self.remote, &self.rt) {
+                    match remote.connect() {
+                        Ok(c) => rt.block_on(async { c.query("SELECT 1", ()).await.is_ok() }).into(),
+                        Err(_) => Some(false),
+                    }
+                } else { None };
+                #[cfg(not(feature = "libsql"))]
+                let remote_ok = None;
+                return Ok(SyncStatus { last_push, last_pull, pending_local: pending as usize, local_text: local_text as usize, local_images: local_images as usize, remote_ok, last_error });
             }
             #[allow(unreachable_code)]
             Ok(SyncStatus::default())

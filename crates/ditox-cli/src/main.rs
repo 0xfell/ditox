@@ -438,8 +438,8 @@ fn main() -> Result<()> {
                 SyncCmd::Status => {
                     let st = engine.status()?;
                     println!(
-                        "last_push_updated_at={:?}\nlast_pull_updated_at={:?}\npending_local={}",
-                        st.last_push, st.last_pull, st.pending_local
+                        "last_push_updated_at={:?}\nlast_pull_updated_at={:?}\npending_local={}\nlocal_text={}\nlocal_images={}\nremote_ok={:?}\nlast_error={:?}",
+                        st.last_push, st.last_pull, st.pending_local, st.local_text, st.local_images, st.remote_ok, st.last_error
                     );
                 }
             }
