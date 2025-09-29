@@ -1,13 +1,15 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 use ditox_core::clipboard::NoopClipboard as SystemClipboard;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use ditox_core::clipboard::{ArboardClipboard as SystemClipboard, Clipboard as _};
 use ditox_core::{ClipKind, Query, Store, StoreImpl};
 use image::ImageEncoder;
 use std::path::PathBuf;
 // config module is declared at the top; avoid duplicate re-declaration here
+mod picker;
+mod xfer;
 
 #[derive(Parser)]
 #[command(name = "ditox", version, about = "Ditox clipboard CLI (scaffold)")]
@@ -40,6 +42,20 @@ enum Commands {
         /// Read image from system clipboard
         #[arg(long, conflicts_with = "text")]
         image_from_clipboard: bool,
+    },
+    /// Interactive picker (built-in TUI)
+    Pick {
+        #[arg(long)]
+        favorites: bool,
+        /// Pick images instead of text entries
+        #[arg(long)]
+        images: bool,
+        /// Optional tag filter
+        #[arg(long)]
+        tag: Option<String>,
+        /// Bypass daemon IPC and read DB directly
+        #[arg(long)]
+        no_daemon: bool,
     },
     /// Sync commands
     Sync {
@@ -85,6 +101,28 @@ enum Commands {
     Info {
         id: String,
     },
+    /// Export clips to a directory (JSONL + images)
+    Export {
+        dir: PathBuf,
+        #[arg(long)]
+        favorites: bool,
+        #[arg(long)]
+        images: bool,
+        #[arg(long)]
+        tag: Option<String>,
+    },
+    /// Import clips from a directory or file
+    Import {
+        path: PathBuf,
+        /// Keep original IDs when present in input
+        #[arg(long)]
+        keep_ids: bool,
+    },
+    /// Manage tags for a clip
+    Tag {
+        #[command(subcommand)]
+        cmd: TagCmd,
+    },
     /// Prune history by max items and/or age in days
     Prune {
         #[arg(long)]
@@ -96,6 +134,8 @@ enum Commands {
     },
     /// Self-check for environment capabilities (placeholder)
     Doctor,
+    /// Generate thumbnails for images (PNG 256px long side)
+    Thumbs,
     /// Database migrations
     Migrate {
         #[arg(long)]
@@ -123,6 +163,16 @@ enum SyncCmd {
     Status,
     /// Inspect remote: prints PRAGMA user_version and required tables/columns
     Doctor,
+}
+
+#[derive(Subcommand)]
+enum TagCmd {
+    /// List tags for a clip
+    Ls { id: String },
+    /// Add one or more tags to a clip
+    Add { id: String, tags: Vec<String> },
+    /// Remove one or more tags from a clip
+    Rm { id: String, tags: Vec<String> },
 }
 
 fn main() -> Result<()> {
@@ -208,6 +258,8 @@ fn main() -> Result<()> {
                     contains: None,
                     favorites_only: favorites,
                     limit,
+                    tag: None,
+                    rank: false,
                 })?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&items.iter().map(|(c,m)| serde_json::json!({
@@ -241,6 +293,8 @@ fn main() -> Result<()> {
                     contains: None,
                     favorites_only: favorites,
                     limit,
+                    tag: None,
+                    rank: false,
                 })?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&items)?);
@@ -256,6 +310,14 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Commands::Pick {
+            favorites,
+            images,
+            tag,
+            no_daemon,
+        } => {
+            picker::run_picker_default(&*store, favorites, images, tag, no_daemon)?;
+        }
         Commands::Search {
             query,
             favorites,
@@ -265,6 +327,8 @@ fn main() -> Result<()> {
                 contains: Some(query),
                 favorites_only: favorites,
                 limit: None,
+                tag: None,
+                rank: false,
             })?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&items)?);
@@ -341,6 +405,37 @@ fn main() -> Result<()> {
                 eprintln!("not found: {}", id);
             }
         }
+        Commands::Export {
+            dir,
+            favorites,
+            images,
+            tag,
+        } => {
+            xfer::export_all(&*store, &dir, favorites, images, tag.as_deref())?;
+            println!("exported to {}", dir.display());
+        }
+        Commands::Import { path, keep_ids } => {
+            let n = xfer::import_all(&*store, &path, keep_ids)?;
+            println!("imported {} items", n);
+        }
+        Commands::Tag { cmd } => match cmd {
+            TagCmd::Ls { id } => {
+                let tags = store.list_tags(&id)?;
+                if tags.is_empty() {
+                    println!("<none>");
+                } else {
+                    println!("{}", tags.join(" "));
+                }
+            }
+            TagCmd::Add { id, tags } => {
+                store.add_tags(&id, &tags)?;
+                println!("tags added to {}", id);
+            }
+            TagCmd::Rm { id, tags } => {
+                store.remove_tags(&id, &tags)?;
+                println!("tags removed from {}", id);
+            }
+        },
         Commands::Prune {
             max_items,
             max_age,
@@ -366,8 +461,14 @@ fn main() -> Result<()> {
         Commands::Doctor => {
             // Clipboard check
             let cb = SystemClipboard::new();
-            let cb_ok = cb.get_text().is_ok();
+            let cb_res = cb.get_text();
+            let cb_ok = cb_res.is_ok();
             println!("clipboard: {}", if cb_ok { "ok" } else { "unavailable" });
+            if let Err(e) = cb_res {
+                println!("clipboard_detail: {}", e);
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                println!("clipboard_hint: other apps may lock the clipboard; try retrying or closing clipboard managers.");
+            }
             // Store check: run a quick FTS probe via list(search)
             let _ = store.add("_doctor_probe_");
             let has_fts = store
@@ -375,6 +476,8 @@ fn main() -> Result<()> {
                     contains: Some("_doctor_probe_".into()),
                     favorites_only: false,
                     limit: Some(1),
+                    tag: None,
+                    rank: false,
                 })
                 .map(|v| !v.is_empty())
                 .unwrap_or(false);
@@ -382,6 +485,55 @@ fn main() -> Result<()> {
                 "search (fts or like): {}",
                 if has_fts { "ok" } else { "failed" }
             );
+            // Daemon check
+            let clipd_info = config::config_dir().join("clipd.json");
+            if let Ok(s) = std::fs::read_to_string(&clipd_info) {
+                let v: serde_json::Value = serde_json::from_str(&s).unwrap_or_default();
+                println!(
+                    "clipd: present (port={})",
+                    v.get("port").and_then(|p| p.as_u64()).unwrap_or(0)
+                );
+            } else {
+                println!("clipd: not running");
+            }
+        }
+        Commands::Thumbs => {
+            // best-effort: iterate images and create thumbs under config dir
+            let imgs = store.list_images(Query {
+                contains: None,
+                favorites_only: false,
+                limit: None,
+                tag: None,
+                rank: false,
+            })?;
+            let root = config::config_dir();
+            let thumbs = root.join("thumbs");
+            std::fs::create_dir_all(&thumbs)?;
+            let mut made = 0usize;
+            for (c, _m) in imgs {
+                if let Some(img) = store.get_image_rgba(&c.id)? {
+                    let mut buf = Vec::new();
+                    image::codecs::png::PngEncoder::new(&mut buf).write_image(
+                        &img.bytes,
+                        img.width,
+                        img.height,
+                        image::ExtendedColorType::Rgba8,
+                    )?;
+                    use sha2::{Digest, Sha256};
+                    let mut hasher = Sha256::new();
+                    hasher.update(&buf);
+                    let sha = hex::encode(hasher.finalize());
+                    let (a, b) = (&sha[0..2], &sha[2..4]);
+                    let dir = thumbs.join(a).join(b);
+                    std::fs::create_dir_all(&dir)?;
+                    let path = dir.join(format!("{}_256.png", sha));
+                    if !path.exists() {
+                        std::fs::write(&path, &buf)?;
+                        made += 1;
+                    }
+                }
+            }
+            println!("thumbnails generated: {}", made);
         }
         Commands::Migrate { status, backup } => {
             // Only meaningful for SQLite
@@ -570,7 +722,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn preview(s: &str) -> String {
+pub fn preview(s: &str) -> String {
     let s = s.replace('\n', " ");
     const MAX: usize = 60;
     if s.len() > MAX {
