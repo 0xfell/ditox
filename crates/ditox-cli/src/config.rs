@@ -11,12 +11,19 @@ pub struct Settings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "backend", rename_all = "lowercase")]
 pub enum Storage {
-    LocalSqlite { db_path: Option<PathBuf> },
-    Turso { url: String, auth_token: Option<String> },
+    LocalSqlite {
+        db_path: Option<PathBuf>,
+    },
+    Turso {
+        url: String,
+        auth_token: Option<String>,
+    },
 }
 
 impl Default for Storage {
-    fn default() -> Self { Storage::LocalSqlite { db_path: None } }
+    fn default() -> Self {
+        Storage::LocalSqlite { db_path: None }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -28,18 +35,22 @@ pub struct Prune {
 }
 
 pub fn config_dir() -> PathBuf {
-    if let Some(pd) = directories::ProjectDirs::from("tech", "Ditox", "ditox") {
-        pd.config_dir().to_path_buf()
+    if let Some(bd) = directories::BaseDirs::new() {
+        bd.config_dir().join("ditox")
     } else {
         PathBuf::from("./.config/ditox")
     }
 }
 
-pub fn settings_path() -> PathBuf { config_dir().join("settings.toml") }
+pub fn settings_path() -> PathBuf {
+    config_dir().join("settings.toml")
+}
 
 pub fn load_settings() -> Settings {
     let path = settings_path();
     if let Ok(s) = std::fs::read_to_string(&path) {
         toml::from_str(&s).unwrap_or_default()
-    } else { Settings::default() }
+    } else {
+        Settings::default()
+    }
 }

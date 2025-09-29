@@ -1,12 +1,12 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use directories::ProjectDirs;
-use std::path::PathBuf;
-use ditox_core::{Store, Query, StoreImpl, ClipKind};
-#[cfg(all(target_os = "linux"))]
-use ditox_core::clipboard::{ArboardClipboard as SystemClipboard, Clipboard as _};
 #[cfg(not(target_os = "linux"))]
 use ditox_core::clipboard::NoopClipboard as SystemClipboard;
+#[cfg(all(target_os = "linux"))]
+use ditox_core::clipboard::{ArboardClipboard as SystemClipboard, Clipboard as _};
+use ditox_core::{ClipKind, Query, Store, StoreImpl};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "ditox", version, about = "Ditox clipboard CLI (scaffold)")]
@@ -34,10 +34,10 @@ enum Commands {
         #[arg(conflicts_with_all=["image_path","image_from_clipboard"])]
         text: Option<String>,
         /// Read image from file path
-        #[arg(long, conflicts_with="text")]
+        #[arg(long, conflicts_with = "text")]
         image_path: Option<PathBuf>,
         /// Read image from system clipboard
-        #[arg(long, conflicts_with="text")]
+        #[arg(long, conflicts_with = "text")]
         image_from_clipboard: bool,
     },
     /// List recent entries
@@ -53,40 +53,75 @@ enum Commands {
         json: bool,
     },
     /// Search entries by substring
-    Search { query: String, #[arg(long)] favorites: bool, #[arg(long)] json: bool },
+    Search {
+        query: String,
+        #[arg(long)]
+        favorites: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Mark/unmark an entry as favorite
-    Favorite { id: String },
-    Unfavorite { id: String },
+    Favorite {
+        id: String,
+    },
+    Unfavorite {
+        id: String,
+    },
     /// Copy entry back to clipboard (placeholder)
-    Copy { id: String },
+    Copy {
+        id: String,
+    },
     /// Remove an entry or clear all
-    Delete { id: Option<String> },
+    Delete {
+        id: Option<String>,
+    },
     /// Show details about an entry
-    Info { id: String },
+    Info {
+        id: String,
+    },
     /// Prune history by max items and/or age in days
-    Prune { #[arg(long)] max_items: Option<usize>, #[arg(long)] max_age: Option<String>, #[arg(long, default_value_t=true)] keep_favorites: bool },
+    Prune {
+        #[arg(long)]
+        max_items: Option<usize>,
+        #[arg(long)]
+        max_age: Option<String>,
+        #[arg(long, default_value_t = true)]
+        keep_favorites: bool,
+    },
     /// Self-check for environment capabilities (placeholder)
     Doctor,
     /// Database migrations
-    Migrate { #[arg(long)] status: bool, #[arg(long)] backup: bool },
+    Migrate {
+        #[arg(long)]
+        status: bool,
+        #[arg(long)]
+        backup: bool,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let settings = load_settings();
-    let store = match cli.command { Commands::Migrate { .. } => build_store_readonly(&cli, &settings)?, _ => build_store(&cli, &settings)? };
+    let store = match cli.command {
+        Commands::Migrate { .. } => build_store_readonly(&cli, &settings)?,
+        _ => build_store(&cli, &settings)?,
+    };
 
     match cli.command {
         Commands::InitDb => {
             store.init()?;
             println!("database initialized (placeholder)");
         }
-        Commands::Add { text, image_path, image_from_clipboard } => {
+        Commands::Add {
+            text,
+            image_path,
+            image_from_clipboard,
+        } => {
             if let Some(path) = image_path {
                 let bytes = std::fs::read(&path)?;
                 let img = image::load_from_memory(&bytes)?;
                 let rgba = img.to_rgba8();
-                let (w,h) = rgba.dimensions();
+                let (w, h) = rgba.dimensions();
                 let clip = store.add_image_rgba(w, h, &rgba.into_raw())?;
                 println!("added image {} ({}x{})", clip.id, w, h);
             } else if image_from_clipboard {
@@ -111,9 +146,18 @@ fn main() -> Result<()> {
                 println!("added {}", clip.id);
             }
         }
-        Commands::List { favorites, images, limit, json } => {
+        Commands::List {
+            favorites,
+            images,
+            limit,
+            json,
+        } => {
             if images {
-                let items = store.list_images(Query { contains: None, favorites_only: favorites, limit })?;
+                let items = store.list_images(Query {
+                    contains: None,
+                    favorites_only: favorites,
+                    limit,
+                })?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&items.iter().map(|(c,m)| serde_json::json!({
                         "id": c.id,
@@ -122,42 +166,97 @@ fn main() -> Result<()> {
                         "meta": {"format": m.format, "width": m.width, "height": m.height, "size_bytes": m.size_bytes}
                     })).collect::<Vec<_>>())?);
                 } else {
-                    for (c,m) in items { println!("{}\t{}\t{}x{} {}", c.id, if c.is_favorite {"*"} else {" "}, m.width, m.height, m.format); }
+                    for (c, m) in items {
+                        println!(
+                            "{}\t{}\t{}x{} {}",
+                            c.id,
+                            if c.is_favorite { "*" } else { " " },
+                            m.width,
+                            m.height,
+                            m.format
+                        );
+                    }
                 }
             } else {
-                let items = store.list(Query { contains: None, favorites_only: favorites, limit })?;
+                let items = store.list(Query {
+                    contains: None,
+                    favorites_only: favorites,
+                    limit,
+                })?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&items)?);
                 } else {
-                    for c in items { println!("{}\t{}\t{}", c.id, if c.is_favorite {"*"} else {" "}, preview(&c.text)); }
+                    for c in items {
+                        println!(
+                            "{}\t{}\t{}",
+                            c.id,
+                            if c.is_favorite { "*" } else { " " },
+                            preview(&c.text)
+                        );
+                    }
                 }
             }
         }
-        Commands::Search { query, favorites, json } => {
-            let items = store.list(Query { contains: Some(query), favorites_only: favorites, limit: None })?;
+        Commands::Search {
+            query,
+            favorites,
+            json,
+        } => {
+            let items = store.list(Query {
+                contains: Some(query),
+                favorites_only: favorites,
+                limit: None,
+            })?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&items)?);
             } else {
-                for c in items { println!("{}\t{}\t{}", c.id, if c.is_favorite {"*"} else {" "}, preview(&c.text)); }
+                for c in items {
+                    println!(
+                        "{}\t{}\t{}",
+                        c.id,
+                        if c.is_favorite { "*" } else { " " },
+                        preview(&c.text)
+                    );
+                }
             }
         }
-        Commands::Favorite { id } => { store.favorite(&id, true)?; println!("favorited {}", id); }
-        Commands::Unfavorite { id } => { store.favorite(&id, false)?; println!("unfavorited {}", id); }
+        Commands::Favorite { id } => {
+            store.favorite(&id, true)?;
+            println!("favorited {}", id);
+        }
+        Commands::Unfavorite { id } => {
+            store.favorite(&id, false)?;
+            println!("unfavorited {}", id);
+        }
         Commands::Copy { id } => {
             if let Some(c) = store.get(&id)? {
                 let cb = SystemClipboard::new();
                 match c.kind {
-                    ClipKind::Text => { cb.set_text(&c.text)?; println!("copied {}", id); }
+                    ClipKind::Text => {
+                        cb.set_text(&c.text)?;
+                        println!("copied {}", id);
+                    }
                     ClipKind::Image => {
-                        if let Some(img) = store.get_image_rgba(&id)? { cb.set_image(&img)?; println!("copied image {} ({}x{})", id, img.width, img.height); }
-                        else { eprintln!("image data not found: {}", id); }
+                        if let Some(img) = store.get_image_rgba(&id)? {
+                            cb.set_image(&img)?;
+                            println!("copied image {} ({}x{})", id, img.width, img.height);
+                        } else {
+                            eprintln!("image data not found: {}", id);
+                        }
                     }
                 }
-            } else { eprintln!("not found: {}", id); }
+            } else {
+                eprintln!("not found: {}", id);
+            }
         }
         Commands::Delete { id } => {
-            if let Some(id) = id { store.delete(&id)?; println!("deleted {}", id); }
-            else { store.clear()?; println!("cleared"); }
+            if let Some(id) = id {
+                store.delete(&id)?;
+                println!("deleted {}", id);
+            } else {
+                store.clear()?;
+                println!("cleared");
+            }
         }
         Commands::Info { id } => {
             if let Some(c) = store.get(&id)? {
@@ -175,34 +274,76 @@ fn main() -> Result<()> {
                         }
                     }
                 }
-            } else { eprintln!("not found: {}", id); }
+            } else {
+                eprintln!("not found: {}", id);
+            }
         }
-        Commands::Prune { max_items, max_age, keep_favorites } => {
-            let age = match max_age.or_else(|| settings.prune.as_ref().and_then(|p| p.max_age.clone())) { Some(s) => Some(parse_human_duration(&s)?), None => None };
-            let n = store.prune(max_items.or_else(|| settings.prune.as_ref().and_then(|p| p.max_items)), age, keep_favorites || settings.prune.as_ref().and_then(|p| p.keep_favorites).unwrap_or(true))?;
+        Commands::Prune {
+            max_items,
+            max_age,
+            keep_favorites,
+        } => {
+            let age =
+                match max_age.or_else(|| settings.prune.as_ref().and_then(|p| p.max_age.clone())) {
+                    Some(s) => Some(parse_human_duration(&s)?),
+                    None => None,
+                };
+            let n = store.prune(
+                max_items.or_else(|| settings.prune.as_ref().and_then(|p| p.max_items)),
+                age,
+                keep_favorites
+                    || settings
+                        .prune
+                        .as_ref()
+                        .and_then(|p| p.keep_favorites)
+                        .unwrap_or(true),
+            )?;
             println!("pruned {} entries", n);
         }
         Commands::Doctor => {
             // Clipboard check
             let cb_ok = {
                 let cb = SystemClipboard::new();
-                match cb.get_text() { Ok(_) => true, Err(_) => false }
+                match cb.get_text() {
+                    Ok(_) => true,
+                    Err(_) => false,
+                }
             };
-            println!("clipboard: {}", if cb_ok {"ok"} else {"unavailable"});
+            println!("clipboard: {}", if cb_ok { "ok" } else { "unavailable" });
             // Store check: run a quick FTS probe via list(search)
             let _ = store.add("_doctor_probe_");
-            let has_fts = store.list(Query { contains: Some("_doctor_probe_".into()), favorites_only: false, limit: Some(1) }).map(|v| !v.is_empty()).unwrap_or(false);
-            println!("search (fts or like): {}", if has_fts {"ok"} else {"failed"});
+            let has_fts = store
+                .list(Query {
+                    contains: Some("_doctor_probe_".into()),
+                    favorites_only: false,
+                    limit: Some(1),
+                })
+                .map(|v| !v.is_empty())
+                .unwrap_or(false);
+            println!(
+                "search (fts or like): {}",
+                if has_fts { "ok" } else { "failed" }
+            );
         }
         Commands::Migrate { status, backup } => {
             // Only meaningful for SQLite
-            let path = match &cli.db { Some(p) => p.clone(), None => default_db_path() };
+            let path = match &cli.db {
+                Some(p) => p.clone(),
+                None => default_db_path(),
+            };
             let store_impl = StoreImpl::new_with(&path, false)?;
             if status {
                 let s = store_impl.migration_status()?;
-                println!("current: {}\nlatest: {}\npending: {}", s.current, s.latest, s.pending.join(", "));
+                println!(
+                    "current: {}\nlatest: {}\npending: {}",
+                    s.current,
+                    s.latest,
+                    s.pending.join(", ")
+                );
             } else {
-                if backup { backup_db(&path)?; }
+                if backup {
+                    backup_db(&path)?;
+                }
                 store_impl.migrate_all()?;
                 let s = store_impl.migration_status()?;
                 println!("migrated to version {}", s.current);
@@ -216,18 +357,42 @@ fn main() -> Result<()> {
 fn preview(s: &str) -> String {
     let s = s.replace('\n', " ");
     const MAX: usize = 60;
-    if s.len() > MAX { format!("{}…", &s[..MAX]) } else { s }
+    if s.len() > MAX {
+        format!("{}…", &s[..MAX])
+    } else {
+        s
+    }
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
-enum StoreKind { Sqlite, Mem }
+enum StoreKind {
+    Sqlite,
+    Mem,
+}
 
 fn build_store(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>> {
+    // Prefer Turso/libSQL if requested in settings
+    if let config::Storage::Turso { url, auth_token } = &settings.storage {
+        #[cfg(feature = "libsql")]
+        {
+            let s = ditox_core::libsql_backend::LibsqlStore::new(url, auth_token.as_deref())?;
+            return Ok(Box::new(s));
+        }
+        #[cfg(not(feature = "libsql"))]
+        {
+            eprintln!("warning: settings.backend=turso but this binary is built without 'libsql' feature; using local sqlite instead");
+        }
+    }
     Ok(match cli.store {
         StoreKind::Mem => Box::new(ditox_core::MemStore::new()),
         StoreKind::Sqlite => {
-            let path = cli.db.clone()
-                .or_else(|| match &settings.storage { config::Storage::LocalSqlite { db_path } => db_path.clone(), _ => None })
+            let path = cli
+                .db
+                .clone()
+                .or_else(|| match &settings.storage {
+                    config::Storage::LocalSqlite { db_path } => db_path.clone(),
+                    _ => None,
+                })
                 .unwrap_or_else(default_db_path);
             std::fs::create_dir_all(path.parent().unwrap())?;
             let s = ditox_core::StoreImpl::new_with(path, cli.auto_migrate)?;
@@ -237,11 +402,27 @@ fn build_store(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>>
 }
 
 fn build_store_readonly(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>> {
+    if let config::Storage::Turso { url, auth_token } = &settings.storage {
+        #[cfg(feature = "libsql")]
+        {
+            let s = ditox_core::libsql_backend::LibsqlStore::new(url, auth_token.as_deref())?;
+            return Ok(Box::new(s));
+        }
+        #[cfg(not(feature = "libsql"))]
+        {
+            eprintln!("warning: settings.backend=turso but this binary is built without 'libsql' feature; using local sqlite instead");
+        }
+    }
     Ok(match cli.store {
         StoreKind::Mem => Box::new(ditox_core::MemStore::new()),
         StoreKind::Sqlite => {
-            let path = cli.db.clone()
-                .or_else(|| match &settings.storage { config::Storage::LocalSqlite { db_path } => db_path.clone(), _ => None })
+            let path = cli
+                .db
+                .clone()
+                .or_else(|| match &settings.storage {
+                    config::Storage::LocalSqlite { db_path } => db_path.clone(),
+                    _ => None,
+                })
                 .unwrap_or_else(default_db_path);
             std::fs::create_dir_all(path.parent().unwrap())?;
             let s = ditox_core::StoreImpl::new_with(path, false)?;
@@ -251,14 +432,10 @@ fn build_store_readonly(cli: &Cli, settings: &config::Settings) -> Result<Box<dy
 }
 
 fn default_db_path() -> PathBuf {
-    if let Some(pd) = ProjectDirs::from("tech", "Ditox", "ditox") {
-        let cfg = pd.config_dir().to_path_buf();
-        let p = cfg.join("db").join("ditox.db");
-        std::fs::create_dir_all(p.parent().unwrap()).ok();
-        p
-    } else {
-        PathBuf::from("./.config/ditox/db/ditox.db")
-    }
+    let cfg = config::config_dir();
+    let p = cfg.join("db").join("ditox.db");
+    std::fs::create_dir_all(p.parent().unwrap()).ok();
+    p
 }
 
 fn backup_db(path: &PathBuf) -> Result<PathBuf> {
@@ -273,15 +450,20 @@ fn backup_db(path: &PathBuf) -> Result<PathBuf> {
 fn chrono_like_timestamp() -> String {
     let now = std::time::SystemTime::now();
     let dt: time::OffsetDateTime = now.into();
-    dt.format(&time::format_description::parse("yyyyMMddHHmmss").unwrap()).unwrap()
+    dt.format(&time::format_description::parse("yyyyMMddHHmmss").unwrap())
+        .unwrap()
 }
 
 fn parse_human_duration(s: &str) -> Result<time::Duration> {
     use anyhow::bail;
     let s = s.trim();
-    if s.is_empty() { bail!("empty duration") }
+    if s.is_empty() {
+        bail!("empty duration")
+    }
     let (num, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
-    let n: i64 = num.parse().map_err(|_| anyhow::anyhow!("invalid number in duration: {}", s))?;
+    let n: i64 = num
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid number in duration: {}", s))?;
     let dur = match unit.trim().to_ascii_lowercase().as_str() {
         "s" => time::Duration::seconds(n),
         "m" => time::Duration::minutes(n),

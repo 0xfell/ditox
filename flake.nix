@@ -2,7 +2,8 @@
   description = "Ditox clipboard (Rust) - Nix flake";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
+    # Use a recent nixpkgs to get a modern Cargo (lockfile v4)
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
     crane.url = "github:ipetkov/crane";
   };
@@ -11,8 +12,11 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        craneLib = crane.lib.${system};
-        src = craneLib.cleanCargoSource ./.;
+        # Use crane's mkLib to support all crane versions
+        craneLib = crane.mkLib pkgs;
+        # Keep test fixtures like `crates/ditox-cli/tests/fixtures/*.b64`
+        # by avoiding overly-aggressive source filtering.
+        src = craneLib.path ./.;
         commonArgs = rec {
           inherit src;
           pname = "ditox";
@@ -39,4 +43,3 @@
       }
     );
 }
-

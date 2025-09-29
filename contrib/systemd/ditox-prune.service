@@ -1,0 +1,8 @@
+[Unit]
+Description=Ditox prune
+
+[Service]
+Type=oneshot
+ExecStart=%h/.cargo/bin/ditox-cli prune
+WorkingDirectory=%h
+Environment=RUST_LOG=warn

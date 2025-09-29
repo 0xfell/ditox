@@ -10,6 +10,7 @@ default = ["mem-store", "clipboard"]
 mem-store = []
 sqlite = ["dep:rusqlite"]
 clipboard = ["dep:arboard"]
+libsql = []
 
 [dependencies]
 anyhow = { workspace = true }
