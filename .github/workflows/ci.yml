@@ -30,6 +30,9 @@ jobs:
               run: cargo clippy --workspace --all-targets -- -D warnings
             - name: Tests
               run: cargo test --workspace --all-features --no-fail-fast
+            # Default features for ditox-cli include `libsql`, so this single build
+            # produces a binary that supports both local sqlite and remote (turso)
+            # at runtime without extra flags.
             - name: Build release (CLI)
               run: cargo build --release -p ditox-cli
             - name: Package artifact
