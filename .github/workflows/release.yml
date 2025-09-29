@@ -33,15 +33,21 @@ jobs:
           RANGE="${PREV_TAG}..${CURRENT_TAG}"
           if [ -z "${PREV_TAG}" ]; then RANGE="${CURRENT_TAG}"; fi
 
-          # Collect commits
-          git log --pretty='%H%x09%s' ${RANGE} > dist/commits.tsv || true
+          # Collect commits (hash \t subject \t author)
+          git log --pretty='%H%x09%s%x09%an' ${RANGE} > dist/commits.tsv || true
 
-          # Build sections
-          FEATURES=$(awk -F '\t' '/^.+\tfeat(\(|:)/ {print "- " $2}' dist/commits.tsv)
-          FIXES=$(awk -F '\t' '/^.+\tfix(\(|:)/ {print "- " $2}' dist/commits.tsv)
-          OTHER=$(awk -F '\t' '!/\t(feat|fix)(\(|:)/ {print "- " $2}' dist/commits.tsv)
+          # Build sections (conventional commits)
+          FEATURES=$(awk -F '\t' '/\tfeat(\(|:)/ {print "- " $2}' dist/commits.tsv)
+          FIXES=$(awk -F '\t' '/\tfix(\(|:)/ {print "- " $2}' dist/commits.tsv)
+          PERF=$(awk -F '\t' '/\tperf(\(|:)/ {print "- " $2}' dist/commits.tsv)
+          REFACTOR=$(awk -F '\t' '/\trefactor(\(|:)/ {print "- " $2}' dist/commits.tsv)
+          DOCS=$(awk -F '\t' '/\tdocs(\(|:)/ {print "- " $2}' dist/commits.tsv)
+          CI=$(awk -F '\t' '/\tci(\(|:)/ {print "- " $2}' dist/commits.tsv)
+          OTHER=$(awk -F '\t' '!/\t(feat|fix|perf|refactor|docs|ci)(\(|:)/ {print "- " $2}' dist/commits.tsv)
 
           echo "# ${CURRENT_TAG}" > dist/RELEASE_NOTES.md
+          echo >> dist/RELEASE_NOTES.md
+          echo "[Compare changes]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/${PREV_TAG}...${CURRENT_TAG})" >> dist/RELEASE_NOTES.md
           echo >> dist/RELEASE_NOTES.md
           echo "## Notable Changes" >> dist/RELEASE_NOTES.md
           if [ -n "${FEATURES:-}" ]; then
@@ -54,15 +60,42 @@ jobs:
             echo "$FIXES" >> dist/RELEASE_NOTES.md
             echo >> dist/RELEASE_NOTES.md
           fi
+          if [ -n "${PERF:-}" ]; then
+            echo "### Performance" >> dist/RELEASE_NOTES.md
+            echo "$PERF" >> dist/RELEASE_NOTES.md
+            echo >> dist/RELEASE_NOTES.md
+          fi
+          if [ -n "${REFACTOR:-}" ]; then
+            echo "### Refactor" >> dist/RELEASE_NOTES.md
+            echo "$REFACTOR" >> dist/RELEASE_NOTES.md
+            echo >> dist/RELEASE_NOTES.md
+          fi
+          if [ -n "${DOCS:-}" ]; then
+            echo "### Docs" >> dist/RELEASE_NOTES.md
+            echo "$DOCS" >> dist/RELEASE_NOTES.md
+            echo >> dist/RELEASE_NOTES.md
+          fi
+          if [ -n "${CI:-}" ]; then
+            echo "### CI" >> dist/RELEASE_NOTES.md
+            echo "$CI" >> dist/RELEASE_NOTES.md
+            echo >> dist/RELEASE_NOTES.md
+          fi
           if [ -n "${OTHER:-}" ]; then
             echo "### Other" >> dist/RELEASE_NOTES.md
             echo "$OTHER" >> dist/RELEASE_NOTES.md
             echo >> dist/RELEASE_NOTES.md
           fi
 
-          echo "## Merged Commits" >> dist/RELEASE_NOTES.md
-          git log --merges --oneline ${RANGE} | sed 's/^/- /' >> dist/RELEASE_NOTES.md || true
+          echo "## Merged Pull Requests" >> dist/RELEASE_NOTES.md
+          git log --merges --pretty='%s' ${RANGE} | sed -n -E 's/Merge pull request #([0-9]+) .*/- PR #\1/p' >> dist/RELEASE_NOTES.md || true
           echo >> dist/RELEASE_NOTES.md
+
+          CONTRIBUTORS=$(cut -f3 dist/commits.tsv | sort -u | sed 's/^/- /')
+          if [ -n "${CONTRIBUTORS:-}" ]; then
+            echo "## Contributors" >> dist/RELEASE_NOTES.md
+            echo "$CONTRIBUTORS" >> dist/RELEASE_NOTES.md
+            echo >> dist/RELEASE_NOTES.md
+          fi
 
           echo "## Assets" >> dist/RELEASE_NOTES.md
           cat >> dist/RELEASE_NOTES.md << 'EOS'
@@ -73,7 +106,7 @@ The following artifacts are attached to this release once all jobs finish:
 - ditox-Windows-AMD64.zip
 - ditox-cli-nix-linux-x86_64.tar.gz
 
-Checksums are printed in each workflow log; we can add a checksum file in a future iteration if preferred.
+Each asset includes a matching SHA256 file (.sha256).
 EOS
 
       - name: Create/Update GitHub Release with notes
@@ -114,6 +147,12 @@ EOS
           ZIP="ditox-${{ runner.os }}-${ARCH}.zip"
           (cd dist && zip -9 "../${ZIP}" ditox clipd)
           echo "asset=${ZIP}" >> "$GITHUB_OUTPUT"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$ZIP" | tee "$ZIP.sha256" >/dev/null
+          else
+            shasum -a 256 "$ZIP" | tee "$ZIP.sha256" >/dev/null
+          fi
+          echo "checksum=$ZIP.sha256" >> "$GITHUB_OUTPUT"
       - name: Package (Windows)
         if: runner.os == 'Windows'
         id: pack_win
@@ -126,16 +165,29 @@ EOS
           $zip = "ditox-Windows-$arch.zip"
           Compress-Archive -Path dist/* -DestinationPath $zip -Force
           "asset=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $hash = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zip" | Out-File -FilePath "$zip.sha256" -Encoding ascii
+          "checksum=$zip.sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - name: Upload to Release (Unix)
         if: runner.os != 'Windows'
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.pack_unix.outputs.asset }}
+      - name: Upload checksum (Unix)
+        if: runner.os != 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.pack_unix.outputs.checksum }}
       - name: Upload to Release (Windows)
         if: runner.os == 'Windows'
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.pack_win.outputs.asset }}
+      - name: Upload checksum (Windows)
+        if: runner.os == 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.pack_win.outputs.checksum }}
 
   nix_upload:
     needs: create_release
@@ -158,3 +210,11 @@ EOS
         uses: softprops/action-gh-release@v2
         with:
           files: dist/ditox-cli-nix-linux-x86_64.tar.gz
+      - name: Upload Nix checksum
+        run: |
+          sha256sum dist/ditox-cli-nix-linux-x86_64.tar.gz > dist/ditox-cli-nix-linux-x86_64.tar.gz.sha256
+        shell: bash
+      - name: Attach Nix checksum
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ditox-cli-nix-linux-x86_64.tar.gz.sha256
