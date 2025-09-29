@@ -63,6 +63,8 @@ enum Commands {
     Delete { id: Option<String> },
     /// Show details about an entry
     Info { id: String },
+    /// Prune history by max items and/or age in days
+    Prune { #[arg(long)] max_items: Option<usize>, #[arg(long)] max_age_days: Option<i64> },
     /// Self-check for environment capabilities (placeholder)
     Doctor,
     /// Database migrations
@@ -173,6 +175,10 @@ fn main() -> Result<()> {
                     }
                 }
             } else { eprintln!("not found: {}", id); }
+        }
+        Commands::Prune { max_items, max_age_days } => {
+            let n = store.prune(max_items, max_age_days)?;
+            println!("pruned {} entries", n);
         }
         Commands::Doctor => {
             // Clipboard check

@@ -68,6 +68,8 @@ pub trait Store: Send + Sync {
     fn get_image_meta(&self, id: &str) -> anyhow::Result<Option<ImageMeta>>;
     fn get_image_rgba(&self, id: &str) -> anyhow::Result<Option<ImageRgba>>;
     fn list_images(&self, q: Query) -> anyhow::Result<Vec<(Clip, ImageMeta)>>;
+    // Retention
+    fn prune(&self, max_items: Option<usize>, max_age_days: Option<i64>) -> anyhow::Result<usize>;
 }
 
 /// Minimal in-memory store used until SQLite backend lands.
@@ -166,6 +168,21 @@ impl Store for MemStore {
         if let Some(limit) = q.limit { out.truncate(limit); }
         Ok(out)
     }
+
+    fn prune(&self, max_items: Option<usize>, max_age_days: Option<i64>) -> anyhow::Result<usize> {
+        use std::cmp::max;
+        let mut v = self.inner.write().unwrap();
+        let before = v.len();
+        // age-based
+        if let Some(days) = max_age_days { 
+            let cutoff = OffsetDateTime::now_utc() - time::Duration::days(days);
+            v.retain(|c| c.created_at >= cutoff);
+        }
+        // max-items (keep newest first)
+        if let Some(n) = max_items { if v.len() > n { v.truncate(n); } }
+        let after = v.len();
+        Ok(before - after)
+    }
 }
 
 /// Placeholder types for future OS clipboard integrations.
@@ -232,7 +249,7 @@ mod sqlite_store {
     use std::path::{Path, PathBuf};
     use include_dir::{include_dir, Dir};
     use crate::blobstore::BlobStore;
-    use image::{ImageFormat, ImageReader, ImageBuffer, Rgba};
+    use image::{ImageFormat, ImageReader};
     use image::codecs::png::PngEncoder;
     use image::ImageEncoder;
     use std::io::Cursor;
@@ -487,6 +504,31 @@ mod sqlite_store {
                 out.push((clip, meta));
             }
             Ok(out)
+        }
+
+        fn prune(&self, max_items: Option<usize>, max_age_days: Option<i64>) -> anyhow::Result<usize> {
+            let conn = self.conn.lock().unwrap();
+            let tx = conn.unchecked_transaction()?;
+            let mut deleted = 0usize;
+            if let Some(days) = max_age_days {
+                let cutoff = OffsetDateTime::now_utc() - time::Duration::days(days);
+                let cutoff_ts = cutoff.unix_timestamp();
+                tx.execute("DELETE FROM clips WHERE created_at < ? AND deleted_at IS NULL", rusqlite::params![cutoff_ts])?;
+                deleted += tx.changes() as usize;
+            }
+            if let Some(n) = max_items {
+                tx.execute(
+                    "DELETE FROM clips WHERE rowid IN (
+                        SELECT rowid FROM clips WHERE deleted_at IS NULL
+                        ORDER BY created_at DESC
+                        LIMIT -1 OFFSET ?1
+                    )",
+                    rusqlite::params![n as i64],
+                )?;
+                deleted += tx.changes() as usize;
+            }
+            tx.commit()?;
+            Ok(deleted)
         }
     }
 
