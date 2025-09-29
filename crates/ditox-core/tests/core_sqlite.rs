@@ -17,6 +17,8 @@ fn text_crud_and_search() {
             contains: None,
             favorites_only: false,
             limit: None,
+            tag: None,
+            rank: false,
         })
         .unwrap();
     assert!(list.iter().any(|c| c.id == a.id));
@@ -26,6 +28,8 @@ fn text_crud_and_search() {
             contains: Some("alpha".into()),
             favorites_only: false,
             limit: None,
+            tag: None,
+            rank: false,
         })
         .unwrap();
     assert!(res.iter().any(|c| c.id == a.id));
@@ -36,6 +40,8 @@ fn text_crud_and_search() {
             contains: None,
             favorites_only: true,
             limit: None,
+            tag: None,
+            rank: false,
         })
         .unwrap();
     assert!(only_fav.iter().any(|c| c.id == b.id));
@@ -63,6 +69,8 @@ fn image_roundtrip() {
             contains: None,
             favorites_only: false,
             limit: None,
+            tag: None,
+            rank: false,
         })
         .unwrap();
     assert!(imgs.iter().any(|(c, _)| c.id == clip.id));

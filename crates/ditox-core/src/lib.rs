@@ -60,6 +60,10 @@ pub struct Query {
     pub contains: Option<String>,
     pub favorites_only: bool,
     pub limit: Option<usize>,
+    /// Optional single-tag filter (exact match)
+    pub tag: Option<String>,
+    /// When true and FTS is available, order by bm25 rank
+    pub rank: bool,
 }
 
 pub trait Store: Send + Sync {
@@ -72,6 +76,10 @@ pub trait Store: Send + Sync {
     fn favorite(&self, id: &str, fav: bool) -> anyhow::Result<()>;
     fn delete(&self, id: &str) -> anyhow::Result<()>;
     fn clear(&self) -> anyhow::Result<()>;
+    // Tags
+    fn add_tags(&self, id: &str, tags: &[String]) -> anyhow::Result<()>;
+    fn remove_tags(&self, id: &str, tags: &[String]) -> anyhow::Result<()>;
+    fn list_tags(&self, id: &str) -> anyhow::Result<Vec<String>>;
     // Images
     fn add_image_rgba(&self, width: u32, height: u32, rgba: &[u8]) -> anyhow::Result<Clip>;
     fn get_image_meta(&self, id: &str) -> anyhow::Result<Option<ImageMeta>>;
@@ -94,6 +102,7 @@ pub trait Store: Send + Sync {
 pub struct MemStore {
     inner: RwLock<Vec<Clip>>,
     images: RwLock<std::collections::HashMap<ClipId, ImageRgba>>, // simple scaffold
+    tags: RwLock<std::collections::HashMap<ClipId, std::collections::BTreeSet<String>>>,
 }
 
 impl MemStore {
@@ -101,6 +110,7 @@ impl MemStore {
         Self {
             inner: RwLock::new(Vec::new()),
             images: RwLock::new(std::collections::HashMap::new()),
+            tags: RwLock::new(std::collections::HashMap::new()),
         }
     }
 }
@@ -129,10 +139,15 @@ impl Store for MemStore {
 
     fn list(&self, q: Query) -> anyhow::Result<Vec<Clip>> {
         let v = self.inner.read().expect("poisoned");
+        let tags = self.tags.read().unwrap();
         let mut items: Vec<Clip> = v
             .iter()
             .filter(|c| !q.favorites_only || c.is_favorite)
             .filter(|c| matches!(c.kind, ClipKind::Text))
+            .filter(|c| match &q.tag {
+                Some(tag) => tags.get(&c.id).map(|s| s.contains(tag)).unwrap_or(false),
+                None => true,
+            })
             .filter(|c| match &q.contains {
                 Some(s) => c.text.to_lowercase().contains(&s.to_lowercase()),
                 None => true,
@@ -168,6 +183,7 @@ impl Store for MemStore {
         let mut v = self.inner.write().expect("poisoned");
         v.clear();
         self.images.write().unwrap().clear();
+        self.tags.write().unwrap().clear();
         Ok(())
     }
 
@@ -214,10 +230,16 @@ impl Store for MemStore {
     fn list_images(&self, q: Query) -> anyhow::Result<Vec<(Clip, ImageMeta)>> {
         let v = self.inner.read().unwrap();
         let im = self.images.read().unwrap();
+        let tags = self.tags.read().unwrap();
         let mut out = Vec::new();
         for c in v.iter().filter(|c| matches!(c.kind, ClipKind::Image)) {
             if q.favorites_only && !c.is_favorite {
                 continue;
+            }
+            if let Some(tag) = &q.tag {
+                if !tags.get(&c.id).map(|s| s.contains(tag)).unwrap_or(false) {
+                    continue;
+                }
             }
             if let Some(img) = im.get(&c.id) {
                 out.push((
@@ -265,6 +287,33 @@ impl Store for MemStore {
         let after = v.len();
         Ok(before - after)
     }
+
+    fn add_tags(&self, id: &str, tags: &[String]) -> anyhow::Result<()> {
+        let mut all = self.tags.write().unwrap();
+        let set = all.entry(id.to_string()).or_default();
+        for t in tags {
+            set.insert(t.to_string());
+        }
+        Ok(())
+    }
+
+    fn remove_tags(&self, id: &str, tags: &[String]) -> anyhow::Result<()> {
+        let mut all = self.tags.write().unwrap();
+        if let Some(set) = all.get_mut(id) {
+            for t in tags {
+                set.remove(t);
+            }
+        }
+        Ok(())
+    }
+
+    fn list_tags(&self, id: &str) -> anyhow::Result<Vec<String>> {
+        let all = self.tags.read().unwrap();
+        Ok(all
+            .get(id)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default())
+    }
 }
 
 /// Placeholder types for future OS clipboard integrations.
@@ -294,24 +343,24 @@ pub mod clipboard {
         }
     }
 
-    #[cfg(all(feature = "clipboard", target_os = "linux"))]
+    #[cfg(feature = "clipboard")]
     pub struct ArboardClipboard;
 
-    #[cfg(all(feature = "clipboard", target_os = "linux"))]
+    #[cfg(feature = "clipboard")]
     impl Default for ArboardClipboard {
         fn default() -> Self {
             Self
         }
     }
 
-    #[cfg(all(feature = "clipboard", target_os = "linux"))]
+    #[cfg(feature = "clipboard")]
     impl ArboardClipboard {
         pub fn new() -> Self {
             Self
         }
     }
 
-    #[cfg(all(feature = "clipboard", target_os = "linux"))]
+    #[cfg(feature = "clipboard")]
     impl Clipboard for ArboardClipboard {
         fn get_text(&self) -> Result<Option<String>> {
             let mut cb = arboard::Clipboard::new()?;
@@ -548,9 +597,14 @@ mod sqlite_store {
 
         fn list(&self, q: Query) -> anyhow::Result<Vec<Clip>> {
             let conn = self.conn.lock().unwrap();
-            let mut sql = String::from("SELECT id, text, created_at, is_favorite FROM clips WHERE deleted_at IS NULL AND kind = 'text'");
+            let mut sql = String::from("SELECT c.id, c.text, c.created_at, c.is_favorite FROM clips c WHERE c.deleted_at IS NULL AND c.kind = 'text'");
             if q.favorites_only {
-                sql.push_str(" AND is_favorite = 1");
+                sql.push_str(" AND c.is_favorite = 1");
+            }
+            let mut params: Vec<rusqlite::types::Value> = Vec::new();
+            if let Some(tag) = &q.tag {
+                sql.push_str(" AND EXISTS (SELECT 1 FROM clip_tags ct WHERE ct.clip_id = c.id AND ct.name = ?)");
+                params.push(rusqlite::types::Value::Text(tag.clone()));
             }
             if let Some(term) = &q.contains {
                 // Try FTS path first
@@ -562,9 +616,20 @@ mod sqlite_store {
                     if q.favorites_only {
                         sql.push_str(" AND c.is_favorite = 1");
                     }
-                    sql.push_str(" AND f.text MATCH ?1 ORDER BY c.created_at DESC");
+                    if let Some(tag) = &q.tag {
+                        sql.push_str(" AND EXISTS (SELECT 1 FROM clip_tags ct WHERE ct.clip_id = c.id AND ct.name = ?)");
+                        params.push(rusqlite::types::Value::Text(tag.clone()));
+                    }
+                    if q.rank {
+                        sql.push_str(
+                            " AND f.text MATCH ? ORDER BY bm25(clips_fts) ASC, c.created_at DESC",
+                        );
+                    } else {
+                        sql.push_str(" AND f.text MATCH ? ORDER BY c.created_at DESC");
+                    }
+                    params.push(rusqlite::types::Value::Text(term.clone()));
                     let mut stmt = conn.prepare(&sql)?;
-                    let mut rows = stmt.query([term])?;
+                    let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
                     let mut out = Vec::new();
                     while let Some(row) = rows.next()? {
                         let created: i64 = row.get(2)?;
@@ -583,14 +648,15 @@ mod sqlite_store {
                     }
                     return Ok(out);
                 } else {
-                    sql.push_str(" AND text LIKE ?1");
+                    sql.push_str(" AND c.text LIKE ?");
                     let like = format!("%{}%", term);
                     sql.push_str(" ORDER BY created_at DESC");
                     if let Some(limit) = q.limit {
                         sql.push_str(&format!(" LIMIT {}", limit));
                     }
+                    params.push(rusqlite::types::Value::Text(like));
                     let mut stmt = conn.prepare(&sql)?;
-                    let mut rows = stmt.query([like])?;
+                    let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
                     let mut out = Vec::new();
                     while let Some(row) = rows.next()? {
                         let created: i64 = row.get(2)?;
@@ -612,7 +678,7 @@ mod sqlite_store {
                 sql.push_str(&format!(" LIMIT {}", limit));
             }
             let mut stmt = conn.prepare(&sql)?;
-            let mut rows = stmt.query([])?;
+            let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
             let mut out = Vec::new();
             while let Some(row) = rows.next()? {
                 let created: i64 = row.get(2)?;
@@ -799,15 +865,20 @@ mod sqlite_store {
         fn list_images(&self, q: Query) -> anyhow::Result<Vec<(Clip, ImageMeta)>> {
             let conn = self.conn.lock().unwrap();
             let mut sql = String::from("SELECT c.id, c.created_at, c.is_favorite, c.image_path, i.format, i.width, i.height, i.size_bytes, i.sha256, i.thumb_path FROM clips c JOIN images i ON i.clip_id = c.id WHERE c.deleted_at IS NULL AND c.kind = 'image'");
+            let mut params: Vec<rusqlite::types::Value> = Vec::new();
             if q.favorites_only {
                 sql.push_str(" AND c.is_favorite = 1");
+            }
+            if let Some(tag) = &q.tag {
+                sql.push_str(" AND EXISTS (SELECT 1 FROM clip_tags ct WHERE ct.clip_id = c.id AND ct.name = ?)");
+                params.push(rusqlite::types::Value::Text(tag.clone()));
             }
             sql.push_str(" ORDER BY c.created_at DESC");
             if let Some(limit) = q.limit {
                 sql.push_str(&format!(" LIMIT {}", limit));
             }
             let mut stmt = conn.prepare(&sql)?;
-            let mut rows = stmt.query([])?;
+            let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
             let mut out = Vec::new();
             while let Some(row) = rows.next()? {
                 let created: i64 = row.get(1)?;
@@ -872,6 +943,48 @@ mod sqlite_store {
             }
             tx.commit()?;
             Ok(deleted)
+        }
+
+        fn add_tags(&self, id: &str, tags: &[String]) -> anyhow::Result<()> {
+            let conn = self.conn.lock().unwrap();
+            let tx = conn.unchecked_transaction()?;
+            for t in tags {
+                tx.execute(
+                    "INSERT OR IGNORE INTO tags(name) VALUES(?)",
+                    rusqlite::params![t],
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO clip_tags(clip_id, name) VALUES(?,?)",
+                    rusqlite::params![id, t],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        }
+
+        fn remove_tags(&self, id: &str, tags: &[String]) -> anyhow::Result<()> {
+            let conn = self.conn.lock().unwrap();
+            let tx = conn.unchecked_transaction()?;
+            for t in tags {
+                tx.execute(
+                    "DELETE FROM clip_tags WHERE clip_id = ? AND name = ?",
+                    rusqlite::params![id, t],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        }
+
+        fn list_tags(&self, id: &str) -> anyhow::Result<Vec<String>> {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt =
+                conn.prepare("SELECT name FROM clip_tags WHERE clip_id = ? ORDER BY name ASC")?;
+            let mut rows = stmt.query([id])?;
+            let mut out = Vec::new();
+            while let Some(row) = rows.next()? {
+                out.push(row.get::<_, String>(0)?);
+            }
+            Ok(out)
         }
     }
 
@@ -1491,6 +1604,19 @@ pub mod libsql_backend {
             self.rt
                 .block_on(async { conn.execute("DELETE FROM clips", ()).await })?;
             Ok(())
+        }
+
+        fn add_tags(&self, _id: &str, _tags: &[String]) -> anyhow::Result<()> {
+            // Tags not supported in remote backend in this scaffold
+            Ok(())
+        }
+
+        fn remove_tags(&self, _id: &str, _tags: &[String]) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn list_tags(&self, _id: &str) -> anyhow::Result<Vec<String>> {
+            Ok(Vec::new())
         }
 
         // Images currently unsupported in remote backend
