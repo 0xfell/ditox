@@ -18,7 +18,7 @@ fn sync_run_smoke_if_env() {
     let conn = rusqlite::Connection::open(&db).unwrap();
     conn.execute("INSERT INTO clips(id, kind, text, created_at, is_favorite, updated_at, lamport, device_id) VALUES('e2e1','text','hello',strftime('%s','now'),0,strftime('%s','now'),1,'test-device')", []).unwrap();
     // Push
-    let rep = engine.run(false, true /*pull_only*/).unwrap_or_default();
+    let _rep = engine.run(false, true /*pull_only*/).unwrap_or_default();
     // Push only if needed
     let _ = engine.run(false, false);
     // Status should be available

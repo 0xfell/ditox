@@ -5,11 +5,9 @@ use tempfile::tempdir;
 fn migration_adds_image_columns() {
     let dir = tempdir().unwrap();
     let db = dir.path().join("mig.db");
-    let store = StoreImpl::new_with(&db, true).expect("store");
+    let _store = StoreImpl::new_with(&db, true).expect("store");
     // ensure migrations ran
-    let conn = match store {
-        _ => rusqlite::Connection::open(&db).unwrap(),
-    };
+    let conn = rusqlite::Connection::open(&db).unwrap();
     let has_is_image: i64 = conn
         .query_row(
             "SELECT COUNT(1) FROM pragma_table_info('clips') WHERE name='is_image'",
