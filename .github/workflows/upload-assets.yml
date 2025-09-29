@@ -64,3 +64,24 @@ jobs:
           tag_name: ${{ inputs.tag }}
           files: ${{ steps.pack_win.outputs.asset }}
 
+  nix_upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Build flake
+        run: nix build -L .#ditox
+      - name: Archive Nix binary
+        run: |
+          mkdir -p dist
+          cp result/bin/ditox-cli dist/
+          tar -czf dist/ditox-cli-nix-linux-x86_64.tar.gz -C dist ditox-cli
+      - name: Upload Nix asset to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: dist/ditox-cli-nix-linux-x86_64.tar.gz
