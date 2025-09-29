@@ -3,123 +3,70 @@ name: Release
 on:
   push:
     tags:
-      - rust-v*
+      - 'v*'
 
 permissions:
   contents: write
 
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  build-linux:
-    name: Build (Linux x86_64)
+  create_release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy,rustfmt
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
-
-      - name: Format check
-        run: cargo fmt --all -- --check
-
-      - name: Clippy (deny warnings)
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Test
-        run: cargo test --workspace --all-features --no-fail-fast
-
-      # Default features for ditox-cli include `libsql`, so this single build
-      # produces a binary that supports both local sqlite and remote (turso)
-      # at runtime without extra flags.
-      - name: Build release (CLI)
-        run: cargo build --release -p ditox-cli
-
-      - name: Package artifact + checksums
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#rust-v}"
-          mkdir -p dist
-          cp target/release/ditox-cli dist/
-          TAR=dist/ditox-cli-${VERSION}-linux-x86_64.tar.gz
-          tar -czf "$TAR" -C dist ditox-cli
-          (cd dist && sha256sum "$(basename "$TAR")" > SHA256SUMS)
-
-      - name: Upload build outputs
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-x86_64
-          path: |
-            dist/ditox-cli-*-linux-x86_64.tar.gz
-            dist/SHA256SUMS
-
-  build-nix:
-    name: Build (Nix flake)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@v27
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-
-      - name: nix build
-        run: nix build -L .#ditox
-
-      - name: Archive binary
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#rust-v}"
-          mkdir -p dist
-          cp result/bin/ditox-cli dist/
-          tar -czf dist/ditox-cli-${VERSION}-nix-linux-x86_64.tar.gz -C dist ditox-cli
-
-      - name: Upload nix output
-        uses: actions/upload-artifact@v4
-        with:
-          name: nix-linux-x86_64
-          path: dist/ditox-cli-*-nix-linux-x86_64.tar.gz
-
-  publish:
-    name: Create GitHub Release
-    runs-on: ubuntu-latest
-    needs: [build-linux, build-nix]
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: "*"
-          merge-multiple: true
-          path: dist
-
-      - name: List payload
-        run: ls -lah dist
-
-      - name: Create/Update release and upload assets
-        uses: softprops/action-gh-release@v1
+      - name: Create GitHub Release
+        id: create
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          generate_release_notes: true
+          release_name: ${{ github.ref_name }}
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
-          files: |
-            dist/ditox-cli-*-linux-x86_64.tar.gz
-            dist/ditox-cli-*-nix-linux-x86_64.tar.gz
-            dist/SHA256SUMS
+          prerelease: ${{ contains(github.ref_name, 'rc') }}
+          generate_release_notes: true
+
+  build_upload:
+    needs: create_release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release
+        run: |
+          cargo build --release -p ditox-cli -p ditox-clipd
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/release/ditox-cli dist/ditox
+          cp target/release/ditox-clipd dist/clipd
+          echo "ARCH=$(uname -m)" >> $GITHUB_ENV
+          cd dist && zip -9 ../ditox-${{ runner.os }}-${{ env.ARCH }}.zip ditox clipd
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/release/ditox-cli.exe dist/ditox.exe
+          Copy-Item target/release/ditox-clipd.exe dist/clipd.exe
+          $env:ARCH = $env:PROCESSOR_ARCHITECTURE
+          Compress-Archive -Path dist/* -DestinationPath ("ditox-Windows-" + $env:ARCH + ".zip") -Force
+      - name: Upload to Release (Unix)
+        if: runner.os != 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ditox-${{ runner.os }}-${{ env.ARCH }}.zip
+      - name: Upload to Release (Windows)
+        if: runner.os == 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ditox-Windows-${{ env.PROCESSOR_ARCHITECTURE }}.zip
+
