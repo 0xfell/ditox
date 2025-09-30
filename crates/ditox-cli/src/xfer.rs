@@ -76,10 +76,15 @@ pub fn export_all(
                     img.height,
                     image::ExtendedColorType::Rgba8,
                 )?;
-                let (a, b) = (&exp_sha(&exp)[0..2], &exp_sha(&exp)[2..4]);
+                // Use the real content hash (sha256) for path layout to match import
+                let sha = match &exp {
+                    ClipExport::Image { image, .. } => image.sha256.clone(),
+                    _ => unreachable!(),
+                };
+                let (a, b) = (&sha[0..2], &sha[2..4]);
                 let obj = dir.join("objects").join(a).join(b);
                 fs::create_dir_all(&obj)?;
-                let path = obj.join(exp_sha(&exp));
+                let path = obj.join(sha);
                 if !path.exists() {
                     fs::write(path, &buf)?;
                 }
@@ -133,10 +138,15 @@ pub fn export_all(
                     img.height,
                     image::ExtendedColorType::Rgba8,
                 )?;
-                let (a, b) = (&exp_sha(&exp)[0..2], &exp_sha(&exp)[2..4]);
+                // Use the real content hash (sha256) for path layout to match import
+                let sha = match &exp {
+                    ClipExport::Image { image, .. } => image.sha256.clone(),
+                    _ => unreachable!(),
+                };
+                let (a, b) = (&sha[0..2], &sha[2..4]);
                 let obj = dir.join("objects").join(a).join(b);
                 fs::create_dir_all(&obj)?;
-                let path = obj.join(exp_sha(&exp));
+                let path = obj.join(sha);
                 if !path.exists() {
                     fs::write(path, &buf)?;
                 }
@@ -195,9 +205,4 @@ fn import_one(store: &dyn Store, base: &Path, line: &str, keep_ids: bool) -> Res
     }
 }
 
-fn exp_sha(exp: &ClipExport) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(serde_json::to_vec(exp).unwrap());
-    hex::encode(hasher.finalize())
-}
+// exp_sha removed: image export now uses the real content hash (sha256) from metadata.

@@ -56,7 +56,9 @@ References (for deeper reading; see end notes).
 - `ditox migrate --status|--backup` — SQL migrations with optional on‑disk backup.
 - `ditox config [--json]` — show effective configuration and paths.
 - `ditox init-db` — initialize local store.
-- `ditox doctor` — environment/store check (clipboard probe, search capability).
+- `ditox doctor` — environment/store check (clipboard probes, FTS capability). Wayland‑specific tests (e.g., `wl-clipboard`) only run when Wayland is detected to avoid blocking headless CI.
+- `ditox export <dir> [--favorites] [--images] [--tag <t>]` — write JSONL + image blobs to directory.
+- `ditox import <dir|clips.jsonl> [--keep-ids]` — import previously exported data.
 
 Notes
 
@@ -98,6 +100,29 @@ Notes
 - Baseline: SQLite with WAL; embedded SQL migrations.
 - Search: FTS5 when present; LIKE fallback otherwise.
 - Remote (opt‑in, feature‑gated): libSQL/Turso for text rows.
+
+### Export/Import Layout
+
+- Export writes `clips.jsonl` and, for images, content‑addressed blobs at `objects/aa/bb/<sha256>` under the chosen export directory.
+- Import accepts either the export directory or `clips.jsonl` (with `objects/` next to it). Image round‑trip relies on the blob files being present under `objects/` using the real sha256.
+
+---
+
+## Quality & Testing Strategy (v0.1.x)
+
+- Scope
+  - Black‑box CLI tests (primary), focused core tests (SQLite store, migrations, image blob path), and migration status/backup.
+- Harness
+  - Each test uses a temp SQLite DB and isolated `XDG_CONFIG_HOME`; no shared state. Clipboard is never required; Linux E2E image copy is gated by `DITOX_E2E_CLIPBOARD=1`.
+  - Tests force the local SQLite backend (`--store sqlite`) to avoid accidental remote/libsql interference.
+- Budgets
+  - Suite runtime ≤ 15s on a dev laptop; practical runs ~5s.
+  - No flaky tests; `doctor` probes clipboard tools only when appropriate (e.g., Wayland session).
+- Coverage highlights
+  - CLI: add/list/search/copy/favorite/unfavorite/delete/info/prune/migrate/doctor/config/export/import.
+  - Core: insert/list/search, favorites, last_used_at recency, image meta + blob round‑trip, migration versioning.
+  - Migrations: `--status`, `--backup` creates `ditox.bak.<yyyyMMddHHmmss>` next to the DB; idempotent apply.
+  - Export/Import: images export using real sha256; import resolves `objects/aa/bb/<sha256>`.
 
 Trade‑offs
 

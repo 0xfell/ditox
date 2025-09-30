@@ -41,7 +41,8 @@ fn linux_roundtrip() {
             "missing"
         }
     );
-    if has_wl_copy && has_wl_paste {
+    // Only attempt wl roundtrip when actually running under Wayland.
+    if wayland && has_wl_copy && has_wl_paste {
         let ok = Command::new("sh")
             .arg("-lc")
             .arg("printf test | wl-copy && sleep 0.05 && wl-paste")

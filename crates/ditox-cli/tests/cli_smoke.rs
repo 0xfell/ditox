@@ -6,12 +6,17 @@ use std::fs;
 use tempfile::tempdir;
 
 fn bin() -> Command {
-    Command::cargo_bin("ditox-cli").unwrap()
+    let mut c = Command::cargo_bin("ditox-cli").unwrap();
+    c.arg("--store").arg("sqlite");
+    c
 }
 
 #[test]
 fn text_flow() {
     let dir = tempdir().unwrap();
+    let cfg = dir.path().join("cfg");
+    std::fs::create_dir_all(&cfg).unwrap();
+    env::set_var("XDG_CONFIG_HOME", &cfg);
     let db = dir.path().join("ditox.db");
 
     // init
@@ -57,6 +62,9 @@ fn text_flow() {
 #[test]
 fn image_from_file() {
     let dir = tempdir().unwrap();
+    let cfg = dir.path().join("cfg");
+    std::fs::create_dir_all(&cfg).unwrap();
+    env::set_var("XDG_CONFIG_HOME", &cfg);
     let db = dir.path().join("ditox.db");
     bin().arg("--db").arg(&db).arg("init-db").assert().success();
 
@@ -118,162 +126,10 @@ fn image_from_file() {
     assert!(info.contains("kind:\timage"));
 }
 
-#[test]
-fn favorites_and_prune() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join("ditox.db");
-    bin().arg("--db").arg(&db).arg("init-db").assert().success();
-    // add 5 entries
-    for i in 0..5 {
-        bin()
-            .arg("--db")
-            .arg(&db)
-            .args(["add"])
-            .write_stdin(format!("item{}", i))
-            .assert()
-            .success();
-    }
-    // list json schema check
-    let output = bin()
-        .arg("--db")
-        .arg(&db)
-        .args(["list", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let items: serde_json::Value = serde_json::from_slice(&output).unwrap();
-    let a0 = items.as_array().unwrap();
-    let first = &a0[0];
-    assert!(first.get("id").and_then(|v| v.as_str()).is_some());
-    assert!(first.get("text").and_then(|v| v.as_str()).is_some());
-    assert!(first.get("kind").and_then(|v| v.as_str()).is_some());
-    // favorite first id
-    let first_id = first.get("id").unwrap().as_str().unwrap();
-    bin()
-        .arg("--db")
-        .arg(&db)
-        .args(["favorite", first_id])
-        .assert()
-        .success();
-    // list favorites only
-    let favs = bin()
-        .arg("--db")
-        .arg(&db)
-        .args(["list", "--json", "--favorites"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let fav_items: serde_json::Value = serde_json::from_slice(&favs).unwrap();
-    assert!(fav_items
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|v| v.get("id").unwrap().as_str().unwrap() == first_id));
-    // prune to 2 non-favorite items (favorites are preserved by default)
-    bin()
-        .arg("--db")
-        .arg(&db)
-        .args(["prune", "--max-items", "2"])
-        .assert()
-        .success();
-    let after = bin()
-        .arg("--db")
-        .arg(&db)
-        .args(["list", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let after_v: serde_json::Value = serde_json::from_slice(&after).unwrap();
-    assert!(after_v.as_array().unwrap().len() >= 2);
+// Removed: replaced by more robust tests in favorite_toggle.rs and prune_age.rs
 
-    // Ensure favorites survive; prune non-favorites to 0 so only favorite remains
-    bin()
-        .arg("--db")
-        .arg(&db)
-        .args(["prune", "--max-items", "0", "--keep-favorites"])
-        .assert()
-        .success();
-    let after2 = bin()
-        .arg("--db")
-        .arg(&db)
-        .args(["list", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let after2_v: serde_json::Value = serde_json::from_slice(&after2).unwrap();
-    assert_eq!(after2_v.as_array().unwrap().len(), 1);
-    assert_eq!(
-        after2_v.as_array().unwrap()[0]
-            .get("id")
-            .unwrap()
-            .as_str()
-            .unwrap(),
-        first_id
-    );
-}
-
-#[test]
-fn doctor_missing_image_reports() {
-    // Isolate config dir
-    let dir = tempdir().unwrap();
-    let cfg = dir.path().join("config");
-    let _ = std::fs::create_dir_all(&cfg);
-    env::set_var("XDG_CONFIG_HOME", &cfg);
-    // settings with path-mode images to a temp imgs dir
-    let imgs = dir.path().join("imgs");
-    std::fs::create_dir_all(&imgs).unwrap();
-    let cfg_ditox = cfg.join("ditox");
-    std::fs::create_dir_all(&cfg_ditox).unwrap();
-    std::fs::write(
-        cfg_ditox.join("settings.toml"),
-        format!(
-            "[images]\nlocal_file_path_mode=true\ndir=\"{}\"\n",
-            imgs.display()
-        ),
-    )
-    .unwrap();
-
-    // Init DB
-    let db = dir.path().join("ditox.db");
-    bin().arg("--db").arg(&db).arg("init-db").assert().success();
-    // Add image via file
-    let img_path = dir.path().join("tiny.png");
-    use base64::{engine::general_purpose, Engine as _};
-    let b64 = include_str!("fixtures/tiny.png.b64");
-    let bytes = general_purpose::STANDARD.decode(b64.trim()).unwrap();
-    fs::write(&img_path, &bytes).unwrap();
-    bin()
-        .arg("--db")
-        .arg(&db)
-        .args(["add", "--image-path"])
-        .arg(&img_path)
-        .assert()
-        .success();
-    // Remove original file to simulate missing path (since add used --image-path)
-    std::fs::remove_file(&img_path).unwrap();
-    // Doctor should warn
-    let out = String::from_utf8(
-        bin()
-            .arg("--db")
-            .arg(&db)
-            .arg("doctor")
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone(),
-    )
-    .unwrap();
-    assert!(out.contains("clipboard:"));
-}
+// Removed: legacy doctor behavior test that assumed image-path checks.
+// Current `doctor` focuses on clipboard tools and FTS capability; see doctor.rs.
 
 #[test]
 #[cfg(target_os = "linux")]

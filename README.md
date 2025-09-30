@@ -17,11 +17,10 @@ D::::::::::::DDD     i::::::i       tt:::::::::::tt oo:::::::::::oox:::::x    x:
 DDDDDDDDDDDDD        iiiiiiii         ttttttttttt     ooooooooooo xxxxxxx      xxxxxxx
 ```
 
-# Ditox — Clipboard History for Developers (CLI + Core)
+# Ditox — Clipboard TUI and CLI for Developers
 
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](#)
 [![CI](https://github.com/0xfell/ditox/actions/workflows/ci.yml/badge.svg)](https://github.com/0xfell/ditox/actions/workflows/ci.yml)
-<!-- CI badge points to https://github.com/0xfell/ditox/actions/workflows/ci.yml -->
 
 Note: Docs below use the command name `ditox` for readability. If you installed from source without a wrapper, your binary name may be `ditox-cli` — use that instead (e.g., `ditox-cli list`).
 
@@ -127,24 +126,26 @@ Sync (feature‑gated):
 ## Command Reference
 
 - Global flags
-  - `--store <sqlite|mem>` (default `sqlite`) — choose backend
-  - `--db <path>` — path to SQLite database file (when `sqlite`)
-  - `--auto-migrate[=true|false]` (default `true`) — apply pending migrations on startup
+    - `--store <sqlite|mem>` (default `sqlite`) — choose backend
+    - `--db <path>` — path to SQLite database file (when `sqlite`)
+    - `--auto-migrate[=true|false]` (default `true`) — apply pending migrations on startup
 
 - Subcommands
-  - `init-db` — initialize local database
-  - `add [TEXT] [--image-path <file>] [--image-from-clipboard]` — add text or image
-  - `list [--json] [--favorites] [--images] [--limit N]` — list entries
-  - `search <query> [--json] [--favorites]` — search text entries
-  - `favorite <id>` / `unfavorite <id>` — toggle favorite
-  - `copy <id>` — copy entry to clipboard (Linux)
-  - `delete [<id>]` — delete one entry or clear all when omitted
-  - `info <id>` — show entry details
-  - `prune [--max-items N] [--max-age DUR] [--keep-favorites]` — retention
-  - `migrate [--status|--backup]` — show status or backup and apply
-  - `doctor` — environment/store self‑check
-  - `config [--json]` — print effective configuration and paths
-  - `sync status|run|doctor [--push-only|--pull-only]` — remote sync and diagnostics (feature‑gated)
+    - `init-db` — initialize local database
+    - `add [TEXT] [--image-path <file>] [--image-from-clipboard]` — add text or image
+    - `list [--json] [--favorites] [--images] [--limit N]` — list entries
+    - `search <query> [--json] [--favorites]` — search text entries
+    - `favorite <id>` / `unfavorite <id>` — toggle favorite
+    - `copy <id>` — copy entry to clipboard (Linux)
+    - `delete [<id>]` — delete one entry or clear all when omitted
+    - `info <id>` — show entry details
+    - `prune [--max-items N] [--max-age DUR] [--keep-favorites]` — retention
+    - `migrate [--status|--backup]` — show status or backup and apply (backup file is `ditox.bak.<yyyyMMddHHmmss>` next to your DB)
+    - `doctor` — environment/store self‑check (Wayland/X11 clipboard probes, FTS capability)
+    - `export <dir> [--favorites] [--images] [--tag <t>]` — write JSONL + image blobs to a directory
+    - `import <dir|clips.jsonl> [--keep-ids]` — import previously exported data
+    - `config [--json]` — print effective configuration and paths
+    - `sync status|run|doctor [--push-only|--pull-only]` — remote sync and diagnostics (feature‑gated)
 
 ## Configuration
 
@@ -186,6 +187,7 @@ Effective paths/config can be printed with:
 
 - Database: `~/.config/ditox/db/ditox.db` by default.
 - Image blobs: content‑addressed files under the database directory: `~/.config/ditox/db/objects/aa/bb/<sha256>`.
+    - `ditox export <dir>` writes `clips.jsonl` and stores image blobs under `<dir>/objects/aa/bb/<sha256>` using the real sha256. `ditox import` accepts either `<dir>` or `<dir>/clips.jsonl` (with `objects/` alongside) for a full round‑trip.
 - Migrations: embedded SQL files in `crates/ditox-core/migrations/` (`NNNN_description.sql`).
 
 FTS5 is used when available (see `0002_fts.sql`). If not available, search uses a `LIKE` fallback. `ditox doctor` reports capability.
@@ -195,15 +197,13 @@ FTS5 is used when available (see `0002_fts.sql`). If not available, search uses 
 Per‑user systemd timers can automate pruning and optional remote sync:
 
 - `scripts/install_prune_timer.sh`
-  - Installs `ditox-prune.timer` based on `[prune].every` (e.g., `7d`).
-  - Generates `~/.config/systemd/user/ditox-prune.*`, enables and starts the timer.
-  - Inspect with `systemctl --user status ditox-prune.timer`.
+    - Installs `ditox-prune.timer` based on `[prune].every` (e.g., `7d`).
+    - Generates `~/.config/systemd/user/ditox-prune.*`, enables and starts the timer.
+    - Inspect with `systemctl --user status ditox-prune.timer`.
 - `scripts/install_sync_timer.sh`
-  - Installs `ditox-sync.timer` to run `ditox sync run` on `[sync].interval` (default `5m`).
+    - Installs `ditox-sync.timer` to run `ditox sync run` on `[sync].interval` (default `5m`).
 - Combined installer: `scripts/install_maintenance_timers.sh`
-  - Calls both installers using your current `settings.toml`.
-
-
+    - Calls both installers using your current `settings.toml`.
 
 ## Building From Source
 
@@ -214,13 +214,13 @@ Per‑user systemd timers can automate pruning and optional remote sync:
 
 - Launch: `cargo run -p ditox-cli -- pick --no-daemon`
 - Keys: `/: search`, `f: toggle favorites`, `i: toggle images`, `t: apply current query as tag`, `r: refresh`, `Enter: copy`, `Esc/Ctrl+C: cancel`, `↑/↓/PgUp/PgDn: move`.
-  - Each list item now shows two lines: preview, and a dim metadata line with "Created <relative> • Last used <relative|never>". IDs are hidden in the TUI for readability; printed IDs in headless mode remain unchanged.
+    - Each list item now shows two lines: preview, and a dim metadata line with "Created <relative> • Last used <relative|never>". IDs are hidden in the TUI for readability; printed IDs in headless mode remain unchanged.
 - Copy behavior:
-  - Linux/Wayland: uses `wl-copy` when available (for persistence), otherwise falls back to arboard → xclip/xsel.
-  - macOS: uses system clipboard; falls back to `pbcopy`.
-  - Windows: uses system clipboard; falls back to `clip`.
+    - Linux/Wayland: uses `wl-copy` when available (for persistence), otherwise falls back to arboard → xclip/xsel.
+    - macOS: uses system clipboard; falls back to `pbcopy`.
+    - Windows: uses system clipboard; falls back to `clip`.
 - Options:
-  - `--force-wl-copy` (Linux): prefer `wl-copy` even if Wayland isn’t detected.
+    - `--force-wl-copy` (Linux): prefer `wl-copy` even if Wayland isn’t detected.
 
 Theme (experimental): create `~/.config/ditox/tui_theme.toml` to customize colors.
 
@@ -233,7 +233,9 @@ border_fg    = "gray"
 
 - Lint and format: `cargo fmt --all` and `cargo clippy --all-targets -- -D warnings`
 - Tests: `cargo test --all`
+    - Integration tests isolate `XDG_CONFIG_HOME` and always pass `--db` to avoid touching user state.
     - Clipboard E2E image test runs on Linux only and is guarded by `DITOX_E2E_CLIPBOARD=1`.
+    - `doctor` probes system clipboard helpers only when appropriate (e.g., Wayland → `wl-clipboard`), so tests are stable in headless CI.
 
 Nix dev shell (with Rust, clippy, rustfmt, X11/Wayland headers):
 
