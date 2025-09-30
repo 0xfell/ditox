@@ -7,13 +7,13 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Terminal;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
-use std::io::Write;
-use std::net::TcpStream;
+use std::io::{BufRead, BufReader, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 // no process or encoder imports needed here
 use crate::copy_helpers;
@@ -25,6 +25,90 @@ use crate::config;
 use crate::preview;
 use crate::{Query, Store};
 // clipboard helpers are in copy_helpers module
+
+fn fmt_abs_ns(ts_ns: i64) -> String {
+    let dt = match time::OffsetDateTime::from_unix_timestamp_nanos(ts_ns as i128) {
+        Ok(d) => d,
+        Err(_) => return "<invalid>".into(),
+    };
+    static FMT: once_cell::sync::Lazy<Vec<time::format_description::FormatItem>> =
+        once_cell::sync::Lazy::new(|| {
+            time::format_description::parse(
+                "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:9]",
+            )
+            .unwrap()
+        });
+    dt.format(&FMT).unwrap_or_else(|_| dt.to_string())
+}
+
+fn trace(label: &str, t0: Instant) {
+    if std::env::var_os("DITOX_TRACE_STARTUP").is_some() {
+        eprintln!("[trace] {} +{:?}", label, t0.elapsed());
+    }
+}
+
+#[allow(dead_code)]
+struct DaemonClient {
+    port: u16,
+    reader: BufReader<TcpStream>,
+    writer: TcpStream,
+}
+
+impl DaemonClient {
+    fn connect_with_timeout(port: u16, timeout: std::time::Duration) -> anyhow::Result<Self> {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        let stream = TcpStream::connect_timeout(&addr, timeout)?;
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
+        let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(150)));
+        let writer = stream.try_clone()?;
+        Ok(Self {
+            port,
+            reader: BufReader::new(stream),
+            writer,
+        })
+    }
+
+    fn request_page(
+        &mut self,
+        images: bool,
+        favorites: bool,
+        limit: Option<usize>,
+        offset: Option<usize>,
+        query: Option<String>,
+        tag: Option<String>,
+    ) -> anyhow::Result<Page<Item>> {
+        let req = Request::List {
+            images,
+            favorites,
+            limit,
+            offset,
+            query,
+            tag,
+        };
+        let s = serde_json::to_string(&req)?;
+        writeln!(&mut self.writer, "{}", s)?;
+        self.writer.flush()?;
+        let mut line = String::new();
+        self.reader.read_line(&mut line)?;
+        let resp: Response<Page<Item>> = serde_json::from_str(&line)?;
+        if resp.ok {
+            Ok(resp.data.unwrap_or(Page {
+                items: Vec::new(),
+                more: false,
+                total: None,
+            }))
+        } else {
+            anyhow::bail!(resp.error.unwrap_or_else(|| "daemon error".into()))
+        }
+    }
+}
+
+fn read_daemon_port_from_file() -> Option<u16> {
+    let info_path = config::config_dir().join("clipd.json");
+    let v = std::fs::read(&info_path).ok()?;
+    let info: DaemonInfo = serde_json::from_slice(&v).ok()?;
+    Some(info.port)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DaemonInfo {
@@ -56,6 +140,7 @@ struct Response<T> {
 struct Page<T> {
     items: Vec<T>,
     more: bool,
+    total: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +172,7 @@ pub fn run_picker_default(
     tag: Option<String>,
     no_daemon: bool,
     force_wl_copy: bool,
+    remote_badge: bool,
 ) -> Result<()> {
     let mut es = RealEventSource;
     let _ = run_picker_with(
@@ -98,6 +184,7 @@ pub fn run_picker_default(
         &mut es,
         true,
         force_wl_copy,
+        remote_badge,
     )?;
     Ok(())
 }
@@ -126,8 +213,9 @@ pub fn run_picker_with(
     es: &mut dyn EventSource,
     draw: bool,
     force_wl_copy: bool,
+    remote_badge: bool,
 ) -> Result<Option<String>> {
-    const DAEMON_PAGE_FETCH: usize = 200;
+    let t0 = Instant::now();
     let use_daemon = !no_daemon;
     // Filters are mutable during the session
     let mut fav_filter = favorites;
@@ -143,52 +231,52 @@ pub fn run_picker_with(
     // delete confirmation state
     let mut pending_delete_id: Option<String> = None;
     let mut pending_delete_until: Option<Instant> = None;
-    // Load initial dataset (paged via daemon; full via store fallback)
-    let (mut items, mut has_more) = if use_daemon {
-        match fetch_page_from_daemon(
-            images_mode,
-            fav_filter,
-            Some(DAEMON_PAGE_FETCH),
-            Some(0),
-            None,
-            tag_filter.clone(),
-        ) {
-            Ok(p) => (p.items, p.more),
-            Err(_) => (
-                fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?,
-                false,
-            ),
-        }
-    } else {
-        (
-            fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?,
-            false,
-        )
-    };
+    // Defer loading dataset until after first frame for faster perceived start
+    #[allow(unused_assignments)]
+    let mut items: Vec<Item> = Vec::new();
+    let mut has_more: bool;
 
     let mut terminal = if draw {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
-        Some(Terminal::new(backend)?)
+        let term = Terminal::new(backend)?;
+        trace("tui: terminal", t0);
+        Some(term)
     } else {
         None
     };
 
     let mut query = String::new();
     let matcher = SkimMatcherV2::default();
-    let mut filtered: Vec<usize> = (0..items.len()).collect();
+    let tui_theme = theme::load_tui_theme();
+    #[allow(unused_assignments)]
+    let mut filtered: Vec<usize> = Vec::new();
     let mut last_query = String::new();
+    // Load settings and derive paging + tag auto-apply
+    let settings = crate::config::load_settings();
+    // Tag auto-apply support
+    let tag_auto_ms: Option<u64> = settings
+        .tui
+        .as_ref()
+        .and_then(|t| t.auto_apply_tag_ms)
+        .filter(|&ms| ms > 0);
+    let mut last_tag_typed: Option<Instant> = None;
+    let mut last_applied_tag: Option<String> = tag.clone();
     let mut selected = 0usize; // selected row within current page
                                // pagination & UI state
-    let settings = crate::config::load_settings();
     let page_size: usize = settings
         .tui
         .as_ref()
         .and_then(|t| t.page_size)
         .filter(|&n| n > 0)
         .unwrap_or(10);
+    let absolute_times: bool = settings
+        .tui
+        .as_ref()
+        .and_then(|t| t.absolute_times)
+        .unwrap_or(true);
     let mut page_index: usize = 0; // 0-based page
     let mut selected_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut show_help: bool = false;
@@ -203,37 +291,128 @@ pub fn run_picker_with(
     // when external filter changes (f/i/tag), we need to recompute filtered
     let mut needs_refilter = true;
 
+    // Draw immediate loading frame
+    if let Some(ref mut term) = terminal {
+        term.draw(|f| {
+            let size = f.size();
+            let block = Block::default().borders(Borders::ALL).title("Loading…");
+            f.render_widget(block, size);
+        })?;
+        trace("tui: first frame", t0);
+    }
+
+    // Load initial dataset now
+    let mut daemon: Option<DaemonClient> = None;
+    let mut last_known_total: Option<usize> = None;
+    #[allow(unused_assignments)]
+    let mut daemon_port: Option<u16> = None;
+    if use_daemon {
+        daemon_port = read_daemon_port_from_file();
+        if let Some(port) = daemon_port {
+            if let Ok(dc) = DaemonClient::connect_with_timeout(port, Duration::from_millis(400)) {
+                trace("daemon: connected", t0);
+                daemon = Some(dc);
+            }
+        }
+        if let Some(dc) = daemon.as_mut() {
+            match dc.request_page(
+                images_mode,
+                fav_filter,
+                Some(page_size),
+                Some(0),
+                None,
+                tag_filter.clone(),
+            ) {
+                Ok(p) => {
+                    items = p.items;
+                    has_more = p.more;
+                    last_known_total = p.total;
+                }
+                Err(_) => {
+                    items = fetch_from_store(
+                        store,
+                        images_mode,
+                        fav_filter,
+                        Some(page_size),
+                        tag_filter.clone(),
+                    )?;
+                    has_more = false;
+                    daemon = None;
+                }
+            }
+        } else if let Ok(p) = fetch_page_from_daemon(
+            images_mode,
+            fav_filter,
+            Some(page_size),
+            Some(0),
+            None,
+            tag_filter.clone(),
+        ) {
+            items = p.items;
+            has_more = p.more;
+            last_known_total = p.total;
+        } else {
+            items = fetch_from_store(
+                store,
+                images_mode,
+                fav_filter,
+                Some(page_size),
+                tag_filter.clone(),
+            )?;
+            has_more = false;
+        }
+    } else {
+        items = fetch_from_store(
+            store,
+            images_mode,
+            fav_filter,
+            Some(page_size),
+            tag_filter.clone(),
+        )?;
+        has_more = false;
+    }
+    trace("data: initial page", t0);
+    filtered = (0..items.len()).collect();
+
     loop {
         // recompute filtered when query changes or filter toggles
         if needs_refilter || (mode == Mode::Query && query != last_query) {
             needs_refilter = false;
             if use_daemon && !images_mode {
-                match fetch_page_from_daemon(
-                    images_mode,
-                    fav_filter,
-                    Some(DAEMON_PAGE_FETCH),
-                    Some(0),
-                    if mode == Mode::Query && !query.is_empty() {
-                        Some(query.clone())
-                    } else {
-                        None
-                    },
-                    tag_filter.clone(),
-                ) {
-                    Ok(p) => {
-                        items = p.items;
-                        has_more = p.more;
+                // Try persistent daemon connection first; fallback to store
+                if let Some(dc) = daemon.as_mut() {
+                    match dc.request_page(
+                        images_mode,
+                        fav_filter,
+                        Some(page_size),
+                        Some(0),
+                        if mode == Mode::Query && !query.is_empty() {
+                            Some(query.clone())
+                        } else {
+                            None
+                        },
+                        tag_filter.clone(),
+                    ) {
+                        Ok(p) => {
+                            items = p.items;
+                            has_more = p.more;
+                        }
+                        Err(_) => {
+                            items = fetch_from_store(
+                                store,
+                                images_mode,
+                                fav_filter,
+                                None,
+                                tag_filter.clone(),
+                            )?;
+                            has_more = false;
+                            daemon = None;
+                        }
                     }
-                    Err(_) => {
-                        items = fetch_from_store(
-                            store,
-                            images_mode,
-                            fav_filter,
-                            None,
-                            tag_filter.clone(),
-                        )?;
-                        has_more = false;
-                    }
+                } else {
+                    items =
+                        fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?;
+                    has_more = false;
                 }
                 filtered = (0..items.len()).collect();
             } else {
@@ -255,6 +434,10 @@ pub fn run_picker_with(
                 };
             }
             last_query = query.clone();
+            // Track tag typing timestamp when in tag mode
+            if mode == Mode::Query && query.starts_with('#') {
+                last_tag_typed = Some(Instant::now());
+            }
             // Reset selection to top when filter/search changes
             page_index = 0;
             selected = 0;
@@ -291,7 +474,7 @@ pub fn run_picker_with(
                         Block::default()
                             .borders(Borders::ALL)
                             .title(q_title)
-                            .border_style(Style::default().fg(theme::load_tui_theme().border_fg)),
+                            .border_style(Style::default().fg(tui_theme.border_fg)),
                     );
                     f.render_widget(q, chunks[0]);
                 }
@@ -311,15 +494,15 @@ pub fn run_picker_with(
                         Item::Text {
                             id, favorite, text, created_at, last_used_at, ..
                         } => {
-                            let sel = if selected_ids.contains(id) { "[x]" } else { "[ ]" };
                             let fav = if *favorite { "*" } else { " " };
-                            let line1 = format!("{}{} {}", fav, sel, preview(text));
+                            let sel_mark = if selected_ids.contains(id) { "•" } else { " " };
+                            let line1 = format!("{}{} {}", fav, sel_mark, preview(text));
+                            let created_str = if absolute_times { fmt_abs_ns(*created_at) } else { rel_time_ns(*created_at) };
+                            let last_str = if let Some(lu) = last_used_at { if absolute_times { fmt_abs_ns(*lu) } else { rel_time_ns(*lu) } } else { "never".into() };
                             let meta = Line::from(format!(
-                                "Created {} • Last used {}",
-                                rel_time(*created_at),
-                                last_used_at
-                                    .map(rel_time)
-                                    .unwrap_or_else(|| "never".into())
+                                "Created at {} • Last used {}",
+                                created_str,
+                                last_str
                             ))
                             .style(Style::default().add_modifier(Modifier::DIM));
                             ListItem::new(vec![Line::from(line1), meta])
@@ -341,17 +524,19 @@ pub fn run_picker_with(
                                     std::path::Path::new(p).file_name().and_then(|n| n.to_str())
                                 })
                                 .unwrap_or("");
-                            let sel = if selected_ids.contains(id) { "[x]" } else { "[ ]" };
                             let fav = if *favorite { "*" } else { " " };
+                            let sel_mark = if selected_ids.contains(id) { "•" } else { " " };
                             let line1 = if name.is_empty() {
-                                format!("{}{} {}x{} {}", fav, sel, width, height, format)
+                                format!("{}{} {}x{} {}", fav, sel_mark, width, height, format)
                             } else {
-                                format!("{}{} {}x{} {} {}", fav, sel, width, height, format, name)
+                                format!("{}{} {}x{} {} {}", fav, sel_mark, width, height, format, name)
                             };
+                            let created_str = if absolute_times { fmt_abs_ns(*created_at) } else { rel_time_ns(*created_at) };
+                            let last_str = if let Some(lu) = last_used_at { if absolute_times { fmt_abs_ns(*lu) } else { rel_time_ns(*lu) } } else { "never".into() };
                             let meta = format!(
-                                "Created {} • Last used {}",
-                                rel_time(*created_at),
-                                last_used_at.map(rel_time).unwrap_or_else(|| "never".into())
+                                "Created at {} • Last used {}",
+                                created_str,
+                                last_str
                             );
                             ListItem::new(vec![
                                 Line::from(line1),
@@ -360,15 +545,27 @@ pub fn run_picker_with(
                         }
                     })
                     .collect();
-                let thm = theme::load_tui_theme();
+                let thm = &tui_theme;
                 let mut title = if images_mode { String::from("Images") } else { String::from("Text") };
                 if fav_filter { title.push_str(" — Favorites"); }
                 if let Some(ref t) = tag_filter { if !t.is_empty() { title.push_str(&format!(" — Tag: {}", t)); } }
                 // Counts + page
-                let count_label = if fav_filter { format!(" — Total favorites {}", total) } else { format!(" — Total entries {}", total) };
-                let page_label = format!(" — Page {}/{} (page size {})", page_index + 1, total_pages.max(1), page_size);
+                let loaded = items.len();
+                let total_known = last_known_total.or(if use_daemon { None } else { Some(total) });
+                let total_to_show = total_known.unwrap_or(loaded);
+                let count_label = if fav_filter {
+                    format!(" — Total favorites {}", total_to_show)
+                } else {
+                    format!(" — Total entries {}", total_to_show)
+                };
+                let total_pages_known = total_known.map(|tt| if tt == 0 { 1 } else { (tt - 1) / page_size + 1 });
+                let page_label = match total_pages_known {
+                    Some(tp) => format!(" — Page {}/{} (page size {})", page_index + 1, tp, page_size),
+                    None => format!(" — Page {} (page size {})", page_index + 1, page_size),
+                };
                 title.push_str(&count_label);
                 title.push_str(&page_label);
+                if remote_badge { title.push_str(" — Remote"); }
                 let list = List::new(list_items)
                     .block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(thm.border_fg)))
                     .highlight_style(Style::default().fg(thm.highlight_fg).bg(thm.highlight_bg).add_modifier(Modifier::REVERSED));
@@ -385,10 +582,11 @@ pub fn run_picker_with(
                     ),
                 );
                 // Footer — simple hint
-                let thm2 = theme::load_tui_theme();
+                let thm2 = &tui_theme;
                 let footer_block = Block::default().borders(Borders::ALL).title("Shortcuts").border_style(Style::default().fg(thm.border_fg));
                 let footer_area_idx = if mode == Mode::Query { 2 } else { 1 };
                 let mut simple = String::from("⏎ copy | x delete | p fav/unfav | Tab favorites | ? more");
+                if !selected_ids.is_empty() { simple.push_str(&format!(" | {} selected", selected_ids.len())); }
                 if has_more { simple.push_str(" | More available…"); }
                 if let Some((msg, until)) = &toast { if Instant::now() <= *until { simple.push_str(&format!("  — {}", msg)); } }
                 let footer = Paragraph::new(simple)
@@ -400,6 +598,8 @@ pub fn run_picker_with(
                 // Expanded help as centered modal overlay
                 if show_help {
                     let overlay = centered_rect(70, 70, size);
+                    // Clear underlying area so content doesn't bleed through
+                    f.render_widget(Clear, overlay);
                     let block = Block::default()
                         .borders(Borders::ALL)
                         .title("Shortcuts — Help (? to close)")
@@ -450,7 +650,7 @@ pub fn run_picker_with(
                     {
                         break
                     }
-                    KeyCode::Char('?') => {
+                    KeyCode::Char('?') if mode == Mode::Normal => {
                         show_help = !show_help;
                     }
                     KeyCode::Char('/') => {
@@ -464,7 +664,7 @@ pub fn run_picker_with(
                         last_query.clear();
                         needs_refilter = true;
                     }
-                    KeyCode::Tab | KeyCode::Char('f') => {
+                    KeyCode::Tab => {
                         fav_filter = !fav_filter;
                         last_query.clear();
                         needs_refilter = true;
@@ -473,28 +673,40 @@ pub fn run_picker_with(
                         pending_delete_id = None;
                         pending_delete_until = None;
                         if use_daemon {
-                            match fetch_page_from_daemon(
-                                images_mode,
-                                fav_filter,
-                                Some(DAEMON_PAGE_FETCH),
-                                Some(0),
-                                None,
-                                tag_filter.clone(),
-                            ) {
-                                Ok(p) => {
-                                    items = p.items;
-                                    has_more = p.more;
+                            if let Some(dc) = daemon.as_mut() {
+                                match dc.request_page(
+                                    images_mode,
+                                    fav_filter,
+                                    Some(page_size),
+                                    Some(0),
+                                    None,
+                                    tag_filter.clone(),
+                                ) {
+                                    Ok(p) => {
+                                        items = p.items;
+                                        has_more = p.more;
+                                    }
+                                    Err(_) => {
+                                        items = fetch_from_store(
+                                            store,
+                                            images_mode,
+                                            fav_filter,
+                                            None,
+                                            tag_filter.clone(),
+                                        )?;
+                                        has_more = false;
+                                        daemon = None;
+                                    }
                                 }
-                                Err(_) => {
-                                    items = fetch_from_store(
-                                        store,
-                                        images_mode,
-                                        fav_filter,
-                                        None,
-                                        tag_filter.clone(),
-                                    )?;
-                                    has_more = false;
-                                }
+                            } else {
+                                items = fetch_from_store(
+                                    store,
+                                    images_mode,
+                                    fav_filter,
+                                    None,
+                                    tag_filter.clone(),
+                                )?;
+                                has_more = false;
                             }
                         } else {
                             items = fetch_from_store(
@@ -507,7 +719,62 @@ pub fn run_picker_with(
                         }
                         filtered = (0..items.len()).collect();
                     }
-                    KeyCode::Char('i') => {
+                    KeyCode::Char('f') if mode == Mode::Normal => {
+                        fav_filter = !fav_filter;
+                        last_query.clear();
+                        needs_refilter = true;
+                        selected = 0;
+                        page_index = 0;
+                        pending_delete_id = None;
+                        pending_delete_until = None;
+                        if use_daemon {
+                            if let Some(dc) = daemon.as_mut() {
+                                match dc.request_page(
+                                    images_mode,
+                                    fav_filter,
+                                    Some(page_size),
+                                    Some(0),
+                                    None,
+                                    tag_filter.clone(),
+                                ) {
+                                    Ok(p) => {
+                                        items = p.items;
+                                        has_more = p.more;
+                                    }
+                                    Err(_) => {
+                                        items = fetch_from_store(
+                                            store,
+                                            images_mode,
+                                            fav_filter,
+                                            None,
+                                            tag_filter.clone(),
+                                        )?;
+                                        has_more = false;
+                                        daemon = None;
+                                    }
+                                }
+                            } else {
+                                items = fetch_from_store(
+                                    store,
+                                    images_mode,
+                                    fav_filter,
+                                    None,
+                                    tag_filter.clone(),
+                                )?;
+                                has_more = false;
+                            }
+                        } else {
+                            items = fetch_from_store(
+                                store,
+                                images_mode,
+                                fav_filter,
+                                None,
+                                tag_filter.clone(),
+                            )?;
+                        }
+                        filtered = (0..items.len()).collect();
+                    }
+                    KeyCode::Char('i') if mode == Mode::Normal => {
                         images_mode = !images_mode;
                         selected = 0;
                         page_index = 0;
@@ -517,17 +784,29 @@ pub fn run_picker_with(
                         pending_delete_until = None;
                         let load_res: anyhow::Result<()> = (|| {
                             if use_daemon {
-                                let p = fetch_page_from_daemon(
-                                    images_mode,
-                                    fav_filter,
-                                    Some(DAEMON_PAGE_FETCH),
-                                    Some(0),
-                                    None,
-                                    tag_filter.clone(),
-                                )?;
-                                items = p.items;
-                                has_more = p.more;
-                                Ok(())
+                                if let Some(dc) = daemon.as_mut() {
+                                    let p = dc.request_page(
+                                        images_mode,
+                                        fav_filter,
+                                        Some(page_size),
+                                        Some(0),
+                                        None,
+                                        tag_filter.clone(),
+                                    )?;
+                                    items = p.items;
+                                    has_more = p.more;
+                                    Ok(())
+                                } else {
+                                    items = fetch_from_store(
+                                        store,
+                                        images_mode,
+                                        fav_filter,
+                                        None,
+                                        tag_filter.clone(),
+                                    )?;
+                                    has_more = false;
+                                    Ok(())
+                                }
                             } else {
                                 items = fetch_from_store(
                                     store,
@@ -566,7 +845,7 @@ pub fn run_picker_with(
                         }
                     }
                     // Toggle favorite on current item or selection
-                    KeyCode::Char('p') | KeyCode::Char('P') => {
+                    KeyCode::Char('p') | KeyCode::Char('P') if mode == Mode::Normal => {
                         let mut ids: Vec<String> = Vec::new();
                         if !selected_ids.is_empty() {
                             ids.extend(selected_ids.iter().cloned());
@@ -611,7 +890,7 @@ pub fn run_picker_with(
                                 match fetch_page_from_daemon(
                                     images_mode,
                                     fav_filter,
-                                    Some(DAEMON_PAGE_FETCH),
+                                    Some(page_size),
                                     Some(0),
                                     None,
                                     tag_filter.clone(),
@@ -647,7 +926,66 @@ pub fn run_picker_with(
                         }
                     }
                     // Delete current item with quick confirm; or bulk delete selected
-                    KeyCode::Delete | KeyCode::Char('x') | KeyCode::Char('X') => {
+                    KeyCode::Delete => {
+                        // Immediate delete without confirm
+                        let ids: Vec<String> = if !selected_ids.is_empty() {
+                            selected_ids.iter().cloned().collect()
+                        } else {
+                            let mut v = Vec::new();
+                            let total = filtered.len();
+                            let start = page_index * page_size;
+                            if start + selected < total {
+                                if let Some(it) = items.get(filtered[start + selected]) {
+                                    let id = match it {
+                                        Item::Text { id, .. } | Item::Image { id, .. } => {
+                                            id.clone()
+                                        }
+                                    };
+                                    v.push(id);
+                                }
+                            }
+                            v
+                        };
+                        if !ids.is_empty() {
+                            let mut ok = 0usize;
+                            for id in ids {
+                                if store.delete(&id).is_ok() {
+                                    ok += 1;
+                                }
+                            }
+                            selected_ids.clear();
+                            toast = Some((
+                                format!("Deleted {}", ok),
+                                Instant::now() + Duration::from_millis(900),
+                            ));
+                            if use_daemon {
+                                if let Ok(p) = fetch_page_from_daemon(
+                                    images_mode,
+                                    fav_filter,
+                                    Some(page_size),
+                                    Some(0),
+                                    None,
+                                    tag_filter.clone(),
+                                ) {
+                                    items = p.items;
+                                    has_more = p.more;
+                                }
+                            } else {
+                                items = fetch_from_store(
+                                    store,
+                                    images_mode,
+                                    fav_filter,
+                                    None,
+                                    tag_filter.clone(),
+                                )?;
+                            }
+                            filtered = (0..items.len()).collect();
+                            if selected >= page_size {
+                                selected = page_size.saturating_sub(1);
+                            }
+                        }
+                    }
+                    KeyCode::Char('x') | KeyCode::Char('X') if mode == Mode::Normal => {
                         let now = Instant::now();
                         // Determine targets: selected set or current item
                         let mut ids: Vec<String> = if !selected_ids.is_empty() {
@@ -683,7 +1021,7 @@ pub fn run_picker_with(
                                         if let Ok(p) = fetch_page_from_daemon(
                                             images_mode,
                                             fav_filter,
-                                            Some(DAEMON_PAGE_FETCH),
+                                            Some(page_size),
                                             Some(0),
                                             None,
                                             tag_filter.clone(),
@@ -729,16 +1067,18 @@ pub fn run_picker_with(
                                 Instant::now() + Duration::from_millis(1200),
                             ));
                             if use_daemon {
-                                if let Ok(p) = fetch_page_from_daemon(
-                                    images_mode,
-                                    fav_filter,
-                                    Some(DAEMON_PAGE_FETCH),
-                                    Some(0),
-                                    None,
-                                    tag_filter.clone(),
-                                ) {
-                                    items = p.items;
-                                    has_more = p.more;
+                                if let Some(dc) = daemon.as_mut() {
+                                    if let Ok(p) = dc.request_page(
+                                        images_mode,
+                                        fav_filter,
+                                        Some(page_size),
+                                        Some(0),
+                                        None,
+                                        tag_filter.clone(),
+                                    ) {
+                                        items = p.items;
+                                        has_more = p.more;
+                                    }
                                 }
                             } else {
                                 items = fetch_from_store(
@@ -755,79 +1095,54 @@ pub fn run_picker_with(
                             }
                         }
                     }
-                    KeyCode::Char('t') => {
-                        // Apply current query as tag when pressing 't'
-                        tag_filter = if query.trim().is_empty() {
-                            None
-                        } else {
-                            Some(query.clone())
-                        };
-                        last_query.clear();
-                        needs_refilter = true;
-                        selected = 0;
-                        page_index = 0;
-                        if use_daemon {
-                            match fetch_page_from_daemon(
-                                images_mode,
-                                fav_filter,
-                                Some(DAEMON_PAGE_FETCH),
-                                Some(0),
-                                None,
-                                tag_filter.clone(),
-                            ) {
-                                Ok(p) => {
-                                    items = p.items;
-                                    has_more = p.more;
-                                }
-                                Err(_) => {
-                                    items = fetch_from_store(
-                                        store,
-                                        images_mode,
-                                        fav_filter,
-                                        None,
-                                        tag_filter.clone(),
-                                    )?;
-                                    has_more = false;
-                                }
-                            }
-                        } else {
-                            items = fetch_from_store(
-                                store,
-                                images_mode,
-                                fav_filter,
-                                None,
-                                tag_filter.clone(),
-                            )?;
+                    KeyCode::Char('t') if mode == Mode::Normal => {
+                        // Enter tag filter mode by priming the query with '#'
+                        mode = Mode::Query;
+                        if !query.starts_with('#') {
+                            query.clear();
+                            query.push('#');
                         }
-                        filtered = (0..items.len()).collect();
+                        last_query.clear();
                     }
-                    KeyCode::Char('r') => {
+                    KeyCode::Char('r') if mode == Mode::Normal => {
                         last_query.clear();
                         needs_refilter = true;
                         page_index = 0;
                         if use_daemon {
-                            match fetch_page_from_daemon(
-                                images_mode,
-                                fav_filter,
-                                Some(DAEMON_PAGE_FETCH),
-                                Some(0),
-                                None,
-                                tag_filter.clone(),
-                            ) {
-                                Ok(p) => {
-                                    items = p.items;
-                                    has_more = p.more;
+                            if let Some(dc) = daemon.as_mut() {
+                                match dc.request_page(
+                                    images_mode,
+                                    fav_filter,
+                                    Some(page_size),
+                                    Some(0),
+                                    None,
+                                    tag_filter.clone(),
+                                ) {
+                                    Ok(p) => {
+                                        items = p.items;
+                                        has_more = p.more;
+                                    }
+                                    Err(_) => {
+                                        items = fetch_from_store(
+                                            store,
+                                            images_mode,
+                                            fav_filter,
+                                            None,
+                                            tag_filter.clone(),
+                                        )?;
+                                        has_more = false;
+                                        daemon = None;
+                                    }
                                 }
-                                Err(_) => {
-                                    items = fetch_from_store(
-                                        store,
-                                        images_mode,
-                                        fav_filter,
-                                        None,
-                                        tag_filter.clone(),
-                                    )?;
-                                    has_more = false;
-                                }
+                            } else {
+                                items = fetch_from_store(
+                                    store,
+                                    images_mode,
+                                    fav_filter,
+                                    None,
+                                    tag_filter.clone(),
+                                )?;
+                                has_more = false;
                             }
                         } else {
                             items = fetch_from_store(
@@ -851,16 +1166,18 @@ pub fn run_picker_with(
                                 ));
                                 // reload items with current filters
                                 if use_daemon {
-                                    if let Ok(p) = fetch_page_from_daemon(
-                                        images_mode,
-                                        fav_filter,
-                                        Some(DAEMON_PAGE_FETCH),
-                                        Some(0),
-                                        None,
-                                        tag_filter.clone(),
-                                    ) {
-                                        items = p.items;
-                                        has_more = p.more;
+                                    if let Some(dc) = daemon.as_mut() {
+                                        if let Ok(p) = dc.request_page(
+                                            images_mode,
+                                            fav_filter,
+                                            Some(page_size),
+                                            Some(0),
+                                            None,
+                                            tag_filter.clone(),
+                                        ) {
+                                            items = p.items;
+                                            has_more = p.more;
+                                        }
                                     }
                                 } else if let Ok(v) = fetch_from_store(
                                     store,
@@ -891,7 +1208,7 @@ pub fn run_picker_with(
                             query.pop();
                         }
                     }
-                    KeyCode::Up | KeyCode::Char('k') => {
+                    KeyCode::Up => {
                         if selected > 0 {
                             selected -= 1;
                         } else if page_index > 0 {
@@ -899,7 +1216,15 @@ pub fn run_picker_with(
                             selected = page_size.saturating_sub(1);
                         }
                     }
-                    KeyCode::Down | KeyCode::Char('j') => {
+                    KeyCode::Char('k') if mode == Mode::Normal => {
+                        if selected > 0 {
+                            selected -= 1;
+                        } else if page_index > 0 {
+                            page_index -= 1;
+                            selected = page_size.saturating_sub(1);
+                        }
+                    }
+                    KeyCode::Down => {
                         let total = filtered.len();
                         let start = page_index.saturating_mul(page_size);
                         let end = (start + page_size).min(total);
@@ -909,42 +1234,107 @@ pub fn run_picker_with(
                         } else if end < total {
                             page_index += 1;
                             selected = 0;
-                        } else if use_daemon && has_more && query.is_empty() {
+                        } else if use_daemon && has_more {
                             // Optionally prefetch more from daemon when at end
-                            if let Ok(p) = fetch_page_from_daemon(
-                                images_mode,
-                                fav_filter,
-                                Some(DAEMON_PAGE_FETCH),
-                                Some(items.len()),
-                                None,
-                                tag_filter.clone(),
-                            ) {
-                                has_more = p.more;
-                                items.extend(p.items);
-                                last_query.clear();
-                                filtered = (0..items.len()).collect();
+                            if let Some(dc) = daemon.as_mut() {
+                                if let Ok(p) = dc.request_page(
+                                    images_mode,
+                                    fav_filter,
+                                    Some(page_size),
+                                    Some(items.len()),
+                                    None,
+                                    tag_filter.clone(),
+                                ) {
+                                    has_more = p.more;
+                                    items.extend(p.items);
+                                    last_query.clear();
+                                    filtered = (0..items.len()).collect();
+                                }
                             }
                         }
                     }
-                    KeyCode::Right | KeyCode::Char('l') | KeyCode::PageDown => {
+                    KeyCode::Char('j') if mode == Mode::Normal => {
+                        let total = filtered.len();
+                        let start = page_index.saturating_mul(page_size);
+                        let end = (start + page_size).min(total);
+                        let page_len = end.saturating_sub(start);
+                        if selected + 1 < page_len {
+                            selected += 1;
+                        } else if end < total {
+                            page_index += 1;
+                            selected = 0;
+                        } else if use_daemon && has_more {
+                            // Optionally prefetch more from daemon when at end
+                            if let Some(dc) = daemon.as_mut() {
+                                if let Ok(p) = dc.request_page(
+                                    images_mode,
+                                    fav_filter,
+                                    Some(page_size),
+                                    Some(items.len()),
+                                    None,
+                                    tag_filter.clone(),
+                                ) {
+                                    has_more = p.more;
+                                    items.extend(p.items);
+                                    last_query.clear();
+                                    filtered = (0..items.len()).collect();
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Right | KeyCode::PageDown => {
                         let total = filtered.len();
                         let start = (page_index + 1).saturating_mul(page_size);
-                        if start < total {
+                        if start >= total && use_daemon && has_more {
+                            // Fetch enough pages to cover the next page window
+                            if let Some(dc) = daemon.as_mut() {
+                                while start >= items.len() && has_more {
+                                    if let Ok(p) = dc.request_page(
+                                        images_mode,
+                                        fav_filter,
+                                        Some(page_size),
+                                        Some(items.len()),
+                                        None,
+                                        tag_filter.clone(),
+                                    ) {
+                                        has_more = p.more;
+                                        items.extend(p.items);
+                                        last_query.clear();
+                                        filtered = (0..items.len()).collect();
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        let total = filtered.len();
+                        let start2 = (page_index + 1).saturating_mul(page_size);
+                        if start2 < total {
                             page_index += 1;
                             selected = 0;
                         }
                     }
-                    KeyCode::Left | KeyCode::Char('h') | KeyCode::PageUp => {
+                    KeyCode::PageUp | KeyCode::Left => {
                         if page_index > 0 {
                             page_index -= 1;
                             selected = 0;
                         }
                     }
-                    KeyCode::Home | KeyCode::Char('g') => {
+                    KeyCode::Char('h') if mode == Mode::Normal => {
+                        if page_index > 0 {
+                            page_index -= 1;
+                            selected = 0;
+                        }
+                    }
+                    KeyCode::Home => {
                         page_index = 0;
                         selected = 0;
                     }
-                    KeyCode::End | KeyCode::Char('G') => {
+                    KeyCode::Char('g') if mode == Mode::Normal => {
+                        page_index = 0;
+                        selected = 0;
+                    }
+                    KeyCode::End => {
                         let total = filtered.len();
                         if total > 0 {
                             page_index = (total - 1) / page_size;
@@ -952,7 +1342,15 @@ pub fn run_picker_with(
                             selected = (total - start).saturating_sub(1);
                         }
                     }
-                    KeyCode::Char('s') => {
+                    KeyCode::Char('G') if mode == Mode::Normal => {
+                        let total = filtered.len();
+                        if total > 0 {
+                            page_index = (total - 1) / page_size;
+                            let start = page_index * page_size;
+                            selected = (total - start).saturating_sub(1);
+                        }
+                    }
+                    KeyCode::Char('s') if mode == Mode::Normal => {
                         // Toggle selection of current visible item
                         let total = filtered.len();
                         if total > 0 {
@@ -973,10 +1371,11 @@ pub fn run_picker_with(
                             }
                         }
                     }
-                    KeyCode::Char('S') => {
+                    KeyCode::Char('S') if mode == Mode::Normal => {
                         selected_ids.clear();
                     }
                     KeyCode::Enter => {
+                        // (debug dump removed after fixing hjkl handling in Query mode)
                         if !query.is_empty() && query.starts_with('#') {
                             // Apply tag from #tag then clear query
                             tag_filter = if query.len() == 1 {
@@ -989,7 +1388,7 @@ pub fn run_picker_with(
                                 match fetch_page_from_daemon(
                                     images_mode,
                                     fav_filter,
-                                    Some(DAEMON_PAGE_FETCH),
+                                    Some(page_size),
                                     Some(0),
                                     None,
                                     tag_filter.clone(),
@@ -1029,12 +1428,9 @@ pub fn run_picker_with(
                                     if let Err(e) = copy_helpers::copy_text(text, force_wl_copy) {
                                         copy_error = Some(format!("copy failed: {}", e));
                                     } else {
-                                        toast = Some((
-                                            String::from("Copied!"),
-                                            Instant::now() + Duration::from_millis(500),
-                                        ));
-                                        exit_after =
-                                            Some(Instant::now() + Duration::from_millis(500));
+                                        // Make it instantaneous: skip long toasts and exit now
+                                        toast = None;
+                                        exit_after = Some(Instant::now());
                                     }
                                     let _ = store.touch_last_used(id);
                                     pending_print_id = Some(id.clone());
@@ -1049,12 +1445,8 @@ pub fn run_picker_with(
                                         {
                                             copy_error = Some(format!("image copy failed: {}", e));
                                         } else {
-                                            toast = Some((
-                                                String::from("Copied!"),
-                                                Instant::now() + Duration::from_millis(500),
-                                            ));
-                                            exit_after =
-                                                Some(Instant::now() + Duration::from_millis(500));
+                                            toast = None;
+                                            exit_after = Some(Instant::now());
                                         }
                                     }
                                     let _ = store.touch_last_used(id);
@@ -1070,6 +1462,9 @@ pub fn run_picker_with(
                     KeyCode::Char(ch) => {
                         if mode == Mode::Query {
                             query.push(ch);
+                            if query.starts_with('#') {
+                                last_tag_typed = Some(Instant::now());
+                            }
                         }
                     }
                     _ => {}
@@ -1078,22 +1473,117 @@ pub fn run_picker_with(
             }
         }
 
-        // refresh from daemon periodically (e.g., new clips) when idle
-        if use_daemon && last_fetch.elapsed() > Duration::from_millis(1500) && query.is_empty() {
-            match fetch_page_from_daemon(
+        // Auto-apply tag after idle if enabled
+        if mode == Mode::Query {
+            if let Some(ms) = tag_auto_ms {
+                if query.starts_with('#') && query.len() > 1 {
+                    if let Some(ts) = last_tag_typed {
+                        if ts.elapsed() >= Duration::from_millis(ms) {
+                            let new_tag = query[1..].to_string();
+                            if last_applied_tag.as_deref() != Some(&new_tag) {
+                                tag_filter = Some(new_tag.clone());
+                                last_applied_tag = Some(new_tag);
+                                // reload items
+                                if use_daemon {
+                                    if let Some(dc) = daemon.as_mut() {
+                                        if let Ok(p) = dc.request_page(
+                                            images_mode,
+                                            fav_filter,
+                                            Some(page_size),
+                                            Some(0),
+                                            None,
+                                            tag_filter.clone(),
+                                        ) {
+                                            items = p.items;
+                                            has_more = p.more;
+                                            last_query.clear();
+                                            filtered = (0..items.len()).collect();
+                                        }
+                                    }
+                                } else if let Ok(v) = fetch_from_store(
+                                    store,
+                                    images_mode,
+                                    fav_filter,
+                                    Some(page_size),
+                                    tag_filter.clone(),
+                                ) {
+                                    items = v;
+                                    has_more = false;
+                                    last_query.clear();
+                                    filtered = (0..items.len()).collect();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Periodic auto-reload when idle (no active query)
+        if last_fetch.elapsed() > Duration::from_millis(1500) && query.is_empty() {
+            if use_daemon {
+                let target_len = (page_index + 1) * page_size;
+                if let Some(dc) = daemon.as_mut() {
+                    // Always refresh total from head page to keep counts up to date
+                    if let Ok(p0) = dc.request_page(
+                        images_mode,
+                        fav_filter,
+                        Some(page_size),
+                        Some(0),
+                        None,
+                        tag_filter.clone(),
+                    ) {
+                        last_known_total = p0.total;
+                        has_more = p0.more; // best-effort update
+                    }
+                    let mut fetched = items.clone();
+                    let mut more = has_more;
+                    while fetched.len() < target_len && more {
+                        if let Ok(p) = dc.request_page(
+                            images_mode,
+                            fav_filter,
+                            Some(page_size),
+                            Some(fetched.len()),
+                            None,
+                            tag_filter.clone(),
+                        ) {
+                            more = p.more;
+                            last_known_total = p.total;
+                            fetched.extend(p.items);
+                        } else {
+                            break;
+                        }
+                    }
+                    if fetched.len() >= items.len() {
+                        items = fetched;
+                        has_more = more;
+                        last_query.clear();
+                        filtered = (0..items.len()).collect();
+                    }
+                }
+            } else if let Ok(v) = fetch_from_store(
+                store,
                 images_mode,
                 fav_filter,
-                Some(DAEMON_PAGE_FETCH),
-                Some(0),
-                None,
+                Some(page_size),
                 tag_filter.clone(),
             ) {
-                Ok(p) => {
-                    items = p.items;
-                    has_more = p.more;
-                    last_query.clear();
-                }
-                Err(_) => { /* ignore periodic refresh when daemon missing */ }
+                items = v;
+                has_more = false;
+                last_query.clear();
+                filtered = (0..items.len()).collect();
+                // Update total via store count
+                let _ = (|| -> anyhow::Result<()> {
+                    let total = store.count(Query {
+                        contains: None,
+                        favorites_only: fav_filter,
+                        limit: None,
+                        tag: tag_filter.clone(),
+                        rank: false,
+                    })?;
+                    last_known_total = Some(total);
+                    Ok(())
+                })();
             }
             last_fetch = Instant::now();
         }
@@ -1148,6 +1638,7 @@ fn fetch_page_from_daemon(
         Ok(resp.data.unwrap_or(Page {
             items: Vec::new(),
             more: false,
+            total: None,
         }))
     } else {
         anyhow::bail!(resp.error.unwrap_or_else(|| "daemon error".into()))
@@ -1174,8 +1665,8 @@ fn fetch_from_store(
             .map(|(c, m)| Item::Image {
                 id: c.id,
                 favorite: c.is_favorite,
-                created_at: c.created_at.unix_timestamp(),
-                last_used_at: c.last_used_at.map(|t| t.unix_timestamp()),
+                created_at: c.created_at.unix_timestamp_nanos() as i64,
+                last_used_at: c.last_used_at.map(|t| t.unix_timestamp_nanos() as i64),
                 width: m.width,
                 height: m.height,
                 format: m.format,
@@ -1195,8 +1686,8 @@ fn fetch_from_store(
             .map(|c| Item::Text {
                 id: c.id,
                 favorite: c.is_favorite,
-                created_at: c.created_at.unix_timestamp(),
-                last_used_at: c.last_used_at.map(|t| t.unix_timestamp()),
+                created_at: c.created_at.unix_timestamp_nanos() as i64,
+                last_used_at: c.last_used_at.map(|t| t.unix_timestamp_nanos() as i64),
                 text: c.text,
             })
             .collect())
@@ -1222,7 +1713,11 @@ fn inner(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     }
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: ratatui::layout::Rect) -> ratatui::layout::Rect {
+fn centered_rect(
+    percent_x: u16,
+    percent_y: u16,
+    r: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
     let vert = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1261,9 +1756,14 @@ fn migrate_current_db() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn rel_time(ts: i64) -> String {
-    let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    let delta = now.saturating_sub(ts);
+fn rel_time_ns(ts_ns: i64) -> String {
+    let now_ns = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
+    let delta_ns = now_ns.saturating_sub(ts_ns as i128);
+    if delta_ns <= 0 {
+        return "just now".into();
+    }
+    let sec = (delta_ns / 1_000_000_000) as i64;
+    let delta = sec;
     if delta <= 0 {
         return "just now".into();
     }
@@ -1288,8 +1788,8 @@ fn rel_time(ts: i64) -> String {
         return format!("{}w ago", weeks);
     }
     // Fallback to date for older items
-    let dt =
-        time::OffsetDateTime::from_unix_timestamp(ts).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+    let dt = time::OffsetDateTime::from_unix_timestamp_nanos(ts_ns as i128)
+        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
     let date = dt.date();
     format!(
         "{}-{:02}-{:02}",
@@ -1345,8 +1845,10 @@ mod tests {
             state: KeyEventState::NONE,
         }));
         let mut es = FakeEvents { events: q };
-        let selected =
-            run_picker_with(&store, false, false, None, true, &mut es, false, false).unwrap();
+        let selected = run_picker_with(
+            &store, false, false, None, true, &mut es, false, false, false,
+        )
+        .unwrap();
         assert_eq!(selected.as_deref(), Some(c1.id.as_str()));
     }
 
@@ -1370,8 +1872,10 @@ mod tests {
         }));
         let mut es = FakeEvents { events: q };
 
-        let picked =
-            run_picker_with(&store, true, false, None, true, &mut es, false, false).unwrap();
+        let picked = run_picker_with(
+            &store, true, false, None, true, &mut es, false, false, false,
+        )
+        .unwrap();
         // Should select the only item available in favorites-only mode
         assert_eq!(picked.as_deref(), Some(a.id.as_str()));
 
@@ -1398,8 +1902,10 @@ mod tests {
             state: KeyEventState::NONE,
         }));
         let mut es2 = FakeEvents { events: q2 };
-        let picked2 =
-            run_picker_with(&store, false, false, None, true, &mut es2, false, false).unwrap();
+        let picked2 = run_picker_with(
+            &store, false, false, None, true, &mut es2, false, false, false,
+        )
+        .unwrap();
         assert_eq!(picked2.as_deref(), Some(b.id.as_str()));
     }
 }
