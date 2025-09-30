@@ -11,7 +11,7 @@ ignore = []
 
 [bans]
 multiple-versions = "warn"
-denied = []
+deny = []
 # Allow common duplicates until we choose to unify
 wildcards = "allow"
 
