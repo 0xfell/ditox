@@ -62,12 +62,14 @@ enum Item {
         id: String,
         favorite: bool,
         created_at: i64,
+        last_used_at: Option<i64>,
         text: String,
     },
     Image {
         id: String,
         favorite: bool,
         created_at: i64,
+        last_used_at: Option<i64>,
         width: u32,
         height: u32,
         format: String,
@@ -291,6 +293,7 @@ fn list_text(
             id: c.id,
             favorite: c.is_favorite,
             created_at: c.created_at.unix_timestamp(),
+            last_used_at: c.last_used_at.map(|t| t.unix_timestamp()),
             text: c.text,
         });
     }
@@ -317,6 +320,7 @@ fn list_images(
             id: c.id,
             favorite: c.is_favorite,
             created_at: c.created_at.unix_timestamp(),
+            last_used_at: c.last_used_at.map(|t| t.unix_timestamp()),
             width: m.width,
             height: m.height,
             format: m.format,
