@@ -34,7 +34,7 @@ Ditox is a fast, scriptable clipboard history with a focus on reliability, priva
     - Optional remote backend (libSQL/Turso) behind a feature flag (text only).
     - Self‑check (`doctor`) and explicit migrations (`migrate`).
 
-- Status: v0.1.x, Linux‑first. Clipboard adapters for other OSes will land later; the CLI builds but clipboard IO is a no‑op outside Linux.
+- Status: v1.0.x, Linux‑first. Clipboard adapters for other OSes will land later; the CLI builds but clipboard IO is a no‑op outside Linux.
 
 ## Quick Start
 
