@@ -7,10 +7,23 @@ Semantic Versioning where practical.
 
 Unreleased
 ----------
-- Docs: unify remote sync guidance (feature‑gated `libsql` + runtime selection).
-- Docs: remove transient task notes (`task-*.md`).
-- Planned: background daemon (`clipd`), interactive picker, import/export tools.
-- Planned: image thumbnails/filters, remote image strategy, improved conflict tooling.
+- (none)
+
+1.0.0 – 2025-09-30
+------------------
+
+Added
+- TUI picker integrated into the CLI (`pick`), with filtering, favorites, and image toggles.
+- Background daemon (`ditox-clipd`) crate for future always‑on sync/clipboard hooks.
+- Import/Export commands for text and images (JSONL + content‑addressed blobs).
+- Systemd timer installers for prune and sync in `scripts/`.
+
+Changed
+- Stabilized core data model and CLI surface for 1.0.0.
+- Docs: unified remote sync guidance (feature‑gated `libsql` + runtime selection).
+
+Notes
+- Images remain local‑only and are not synced remotely by design.
 
 0.1.0 – 2025-09-29
 ------------------
@@ -41,4 +54,4 @@ Changed
 
 Notes
 - Images are intentionally excluded from remote sync in this release.
-- Release workflow expects tags like `rust-v0.1.0` for packaging.
+- Release workflow expects tags like `v1.0.0` for packaging.

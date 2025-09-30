@@ -23,7 +23,7 @@
         commonArgs = rec {
           inherit src;
           pname = "ditox";
-          version = "0.1.0";
+          version = "1.0.0";
           cargoToml = ./Cargo.toml;
           cargoLock = ./Cargo.lock;
           # Build just the CLI package and disable its default features

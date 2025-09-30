@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "ditox-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -700,7 +700,7 @@ dependencies = [
 
 [[package]]
 name = "ditox-clipd"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "ditox-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "arboard",
