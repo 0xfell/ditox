@@ -37,12 +37,18 @@ publish_crate() {
   return ${publish_status}
 }
 
+VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/ditox-core/Cargo.toml | head -n 1)
+if [[ -z "${VERSION}" ]]; then
+  echo "Failed to determine ditox-core version from Cargo.toml" >&2
+  exit 4
+fi
+
 publish_crate "ditox-core" "ditox-core"
 
 echo
 echo "Check and publish ditox-clipd..."
 if rg -n "ditox-core\s*=\s*\{\s*path\s*=\s*\"\..*\"" crates/ditox-clipd/Cargo.toml >/dev/null; then
-  echo "ditox-clipd depends on ditox-core via path. Update it to 'version = \"1.0.0\"' before publishing." >&2
+  echo "ditox-clipd depends on ditox-core via path. Update it to 'version = \"${VERSION}\"' before publishing." >&2
   exit 2
 fi
 publish_crate "ditox-clipd" "ditox-clipd"
@@ -50,7 +56,7 @@ publish_crate "ditox-clipd" "ditox-clipd"
 echo
 echo "Check and publish ditox-cli..."
 if rg -n "ditox-core\s*=\s*\{\s*path\s*=\s*\"\..*\"" crates/ditox-cli/Cargo.toml >/dev/null; then
-  echo "ditox-cli depends on ditox-core via path. Update it to 'version = \"1.0.0\"' before publishing." >&2
+  echo "ditox-cli depends on ditox-core via path. Update it to 'version = \"${VERSION}\"' before publishing." >&2
   exit 3
 fi
 publish_crate "ditox-cli" "ditox-cli"
