@@ -105,20 +105,20 @@ jobs:
           fi
 
           echo "## Assets" >> dist/RELEASE_NOTES.md
-          cat >> dist/RELEASE_NOTES.md << 'EOS'
- The following artifacts are attached to this release once all jobs finish:
-
- - ditox-Linux-x86_64.zip
- - ditox-macOS-arm64.zip
- - ditox-Windows-AMD64.zip
- - ditox-cli-nix-linux-x86_64.tar.gz
- EOS
+          {
+            echo " The following artifacts are attached to this release once all jobs finish:"
+            echo
+            echo " - ditox-Linux-x86_64.zip"
+            echo " - ditox-macOS-arm64.zip"
+            echo " - ditox-Windows-AMD64.zip"
+            echo " - ditox-cli-nix-linux-x86_64.tar.gz"
+          } >> dist/RELEASE_NOTES.md
 
       - name: Create/Update GitHub Release with notes
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag != '' && github.event.inputs.tag || github.ref_name }}
-          name: ${{ github.event.inputs.tag != '' && github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event.inputs.tag || github.ref_name }}
           body_path: dist/RELEASE_NOTES.md
           draft: false
           prerelease: ${{ contains(github.ref_name, 'rc') }}
