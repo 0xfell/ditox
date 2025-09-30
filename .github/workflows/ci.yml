@@ -78,7 +78,7 @@ jobs:
           fi
       - name: Enable Cachix
         if: steps.cachix_conf.outputs.use_cachix == 'true'
-        uses: cachix/cachix-action@v14
+        uses: cachix/cachix-action@v16
         with:
           name: ${{ steps.cachix_conf.outputs.cache_name }}
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
