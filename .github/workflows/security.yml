@@ -1,0 +1,35 @@
+name: Security
+
+on:
+  pull_request:
+    branches: [ master ]
+  push:
+    branches: [ master ]
+  schedule:
+    - cron: '0 9 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    name: cargo-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Audit crates
+        run: cargo audit -D warnings
+
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --hide-inclusion-graph
