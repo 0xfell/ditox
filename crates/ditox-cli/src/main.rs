@@ -10,6 +10,9 @@ use std::path::PathBuf;
 // config module is declared at the top; avoid duplicate re-declaration here
 mod picker;
 mod xfer;
+mod doctor;
+mod copy_helpers;
+mod theme;
 
 #[derive(Parser)]
 #[command(name = "ditox", version, about = "Ditox clipboard CLI (scaffold)")]
@@ -23,6 +26,9 @@ struct Cli {
     /// Automatically apply pending migrations on startup
     #[arg(long, default_value_t = true)]
     auto_migrate: bool,
+    /// Prefer wl-copy for copy operations (Linux), even if Wayland not detected
+    #[arg(long, default_value_t = false)]
+    force_wl_copy: bool,
     #[command(subcommand)]
     command: Commands,
 }
@@ -316,7 +322,14 @@ fn main() -> Result<()> {
             tag,
             no_daemon,
         } => {
-            picker::run_picker_default(&*store, favorites, images, tag, no_daemon)?;
+            picker::run_picker_default(
+                &*store,
+                favorites,
+                images,
+                tag,
+                no_daemon,
+                cli.force_wl_copy,
+            )?;
         }
         Commands::Search {
             query,
@@ -353,15 +366,14 @@ fn main() -> Result<()> {
         }
         Commands::Copy { id } => {
             if let Some(c) = store.get(&id)? {
-                let cb = SystemClipboard::new();
                 match c.kind {
                     ClipKind::Text => {
-                        cb.set_text(&c.text)?;
+                        copy_helpers::copy_text(&c.text, cli.force_wl_copy)?;
                         println!("copied {}", id);
                     }
                     ClipKind::Image => {
                         if let Some(img) = store.get_image_rgba(&id)? {
-                            cb.set_image(&img)?;
+                            copy_helpers::copy_image(&img, cli.force_wl_copy)?;
                             println!("copied image {} ({}x{})", id, img.width, img.height);
                         } else {
                             eprintln!("image data not found: {}", id);
@@ -469,6 +481,8 @@ fn main() -> Result<()> {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
                 println!("clipboard_hint: other apps may lock the clipboard; try retrying or closing clipboard managers.");
             }
+            // Tool round-trip checks (OS-specific)
+            doctor::clipboard_tools_roundtrip();
             // Store check: run a quick FTS probe via list(search)
             let _ = store.add("_doctor_probe_");
             let has_fts = store

@@ -7,7 +7,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Terminal;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -15,11 +15,16 @@ use std::io;
 use std::io::Write;
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
+// no process or encoder imports needed here
+use crate::copy_helpers;
+use crate::theme;
+use std::path::PathBuf;
+use ditox_core::StoreImpl;
 
 use crate::config;
 use crate::preview;
 use crate::{Query, Store};
-use ditox_core::clipboard::Clipboard;
+// clipboard helpers are in copy_helpers module
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DaemonInfo {
@@ -60,12 +65,14 @@ enum Item {
         id: String,
         favorite: bool,
         created_at: i64,
+        last_used_at: Option<i64>,
         text: String,
     },
     Image {
         id: String,
         favorite: bool,
         created_at: i64,
+        last_used_at: Option<i64>,
         width: u32,
         height: u32,
         format: String,
@@ -79,9 +86,19 @@ pub fn run_picker_default(
     images: bool,
     tag: Option<String>,
     no_daemon: bool,
+    force_wl_copy: bool,
 ) -> Result<()> {
     let mut es = RealEventSource;
-    let _ = run_picker_with(store, favorites, images, tag, no_daemon, &mut es, true)?;
+    let _ = run_picker_with(
+        store,
+        favorites,
+        images,
+        tag,
+        no_daemon,
+        &mut es,
+        true,
+        force_wl_copy,
+    )?;
     Ok(())
 }
 
@@ -99,6 +116,7 @@ impl EventSource for RealEventSource {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_picker_with(
     store: &dyn Store,
     favorites: bool,
@@ -107,28 +125,43 @@ pub fn run_picker_with(
     no_daemon: bool,
     es: &mut dyn EventSource,
     draw: bool,
+    force_wl_copy: bool,
 ) -> Result<Option<String>> {
     const PAGE_SIZE: usize = 200;
     let use_daemon = !no_daemon;
+    // Filters are mutable during the session
+    let mut fav_filter = favorites;
+    let mut images_mode = images;
+    let mut tag_filter = tag.clone();
+    // capture copy errors to report after exiting TUI
+    let mut copy_error: Option<String> = None;
+    // toast + delayed exit
+    let mut toast: Option<(String, Instant)> = None;
+    let mut exit_after: Option<Instant> = None;
+    // defer printing selected id until after TUI exits
+    let mut pending_print_id: Option<String> = None;
+    // delete confirmation state
+    let mut pending_delete_id: Option<String> = None;
+    let mut pending_delete_until: Option<Instant> = None;
     // Load initial dataset (paged via daemon; full via store fallback)
     let (mut items, mut has_more) = if use_daemon {
         match fetch_page_from_daemon(
-            images,
-            favorites,
+            images_mode,
+            fav_filter,
             Some(PAGE_SIZE),
             Some(0),
             None,
-            tag.clone(),
+            tag_filter.clone(),
         ) {
             Ok(p) => (p.items, p.more),
             Err(_) => (
-                fetch_from_store(store, images, favorites, None, tag.clone())?,
+                fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?,
                 false,
             ),
         }
     } else {
         (
-            fetch_from_store(store, images, favorites, None, tag.clone())?,
+            fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?,
             false,
         )
     };
@@ -149,25 +182,32 @@ pub fn run_picker_with(
     let mut last_query = String::new();
     let mut selected = 0usize;
     let mut last_fetch: Instant = Instant::now();
+    // input mode: do not capture characters until '/' pressed
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Mode { Normal, Query }
+    let mut mode = Mode::Normal;
+    // when external filter changes (f/i/tag), we need to recompute filtered
+    let mut needs_refilter = true;
 
     loop {
-        // recompute filtered when query changes
-        if query != last_query {
-            if use_daemon && !images {
-                if let Ok(p) = fetch_page_from_daemon(
-                    images,
-                    favorites,
+        // recompute filtered when query changes or filter toggles
+        if needs_refilter || (mode == Mode::Query && query != last_query) {
+            needs_refilter = false;
+            if use_daemon && !images_mode {
+                match fetch_page_from_daemon(
+                    images_mode,
+                    fav_filter,
                     Some(PAGE_SIZE),
                     Some(0),
-                    Some(query.clone()),
-                    tag.clone(),
+                    if mode == Mode::Query && !query.is_empty() { Some(query.clone()) } else { None },
+                    tag_filter.clone(),
                 ) {
-                    items = p.items;
-                    has_more = p.more;
+                    Ok(p) => { items = p.items; has_more = p.more; }
+                    Err(_) => { items = fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?; has_more = false; }
                 }
                 filtered = (0..items.len()).collect();
             } else {
-                filtered = if query.trim().is_empty() {
+                filtered = if mode != Mode::Query || query.trim().is_empty() {
                     (0..items.len()).collect()
                 } else {
                     let mut scored: Vec<(i64, usize)> = Vec::new();
@@ -185,6 +225,7 @@ pub fn run_picker_with(
                 };
             }
             last_query = query.clone();
+            if selected >= filtered.len() { selected = filtered.len().saturating_sub(1); }
         }
         if selected >= filtered.len() {
             selected = filtered.len().saturating_sub(1);
@@ -193,36 +234,63 @@ pub fn run_picker_with(
         if let Some(ref mut term) = terminal {
             term.draw(|f| {
                 let size = f.size();
-                let chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Length(3), Constraint::Min(5)])
-                    .split(size);
-                let q = Paragraph::new(query.as_str()).block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title("Query (Esc cancel, Enter copy)"),
-                );
-                f.render_widget(q, chunks[0]);
+                let chunks = if mode == Mode::Query {
+                    Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Length(3),  // search bar (only in search mode)
+                            Constraint::Min(5),     // list
+                            Constraint::Length(3),  // shortcuts/status
+                        ])
+                        .split(size)
+                } else {
+                    Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Min(5),     // list only
+                            Constraint::Length(3),  // shortcuts/status
+                        ])
+                        .split(size)
+                };
+
+                if mode == Mode::Query {
+                    let q_title = "Search — type to filter";
+                    let q = Paragraph::new(query.as_str()).block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(q_title)
+                            .border_style(Style::default().fg(theme::load_tui_theme().border_fg)),
+                    );
+                    f.render_widget(q, chunks[0]);
+                }
 
                 let list_items: Vec<ListItem> = filtered
                     .iter()
                     .take(500)
-                    .map(|&i| match &items[i] {
+                    .filter_map(|&i| items.get(i))
+                    .map(|it| match it {
                         Item::Text {
-                            id, favorite, text, ..
-                        } => ListItem::new(Line::from(format!(
-                            "{} {} {}",
-                            if *favorite { "*" } else { " " },
-                            id,
-                            preview(text)
-                        ))),
+                            favorite, text, created_at, last_used_at, ..
+                        } => {
+                            let line1 = format!("{} {}", if *favorite { "*" } else { " " }, preview(text));
+                            let meta = Line::from(format!(
+                                "Created {} • Last used {}",
+                                rel_time(*created_at),
+                                last_used_at
+                                    .map(rel_time)
+                                    .unwrap_or_else(|| "never".into())
+                            ))
+                            .style(Style::default().add_modifier(Modifier::DIM));
+                            ListItem::new(vec![Line::from(line1), meta])
+                        }
                         Item::Image {
-                            id,
                             favorite,
                             width,
                             height,
                             format,
                             path,
+                            created_at,
+                            last_used_at,
                             ..
                         } => {
                             let name = path
@@ -231,28 +299,47 @@ pub fn run_picker_with(
                                     std::path::Path::new(p).file_name().and_then(|n| n.to_str())
                                 })
                                 .unwrap_or("");
-                            ListItem::new(Line::from(format!(
-                                "{} {} {}x{} {} {}",
-                                if *favorite { "*" } else { " " },
-                                id,
-                                width,
-                                height,
-                                format,
-                                name
-                            )))
+                            let line1 = if name.is_empty() {
+                                format!(
+                                    "{} {}x{} {}",
+                                    if *favorite { "*" } else { " " },
+                                    width,
+                                    height,
+                                    format
+                                )
+                            } else {
+                                format!(
+                                    "{} {}x{} {} {}",
+                                    if *favorite { "*" } else { " " },
+                                    width,
+                                    height,
+                                    format,
+                                    name
+                                )
+                            };
+                            let meta = format!(
+                                "Created {} • Last used {}",
+                                rel_time(*created_at),
+                                last_used_at.map(rel_time).unwrap_or_else(|| "never".into())
+                            );
+                            ListItem::new(vec![
+                                Line::from(line1),
+                                Line::from(meta).style(Style::default().add_modifier(Modifier::DIM)),
+                            ])
                         }
                     })
                     .collect();
+                let thm = theme::load_tui_theme();
+                let mut title = if images_mode { String::from("Images") } else { String::from("Text") };
+                if fav_filter { title.push_str(" — Favorites"); }
+                if let Some(ref t) = tag_filter { if !t.is_empty() { title.push_str(&format!(" — Tag: {}", t)); } }
                 let list = List::new(list_items)
-                    .block(Block::default().borders(Borders::ALL).title(if images {
-                        "Images"
-                    } else {
-                        "Text"
-                    }))
-                    .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+                    .block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(thm.border_fg)))
+                    .highlight_style(Style::default().fg(thm.highlight_fg).bg(thm.highlight_bg).add_modifier(Modifier::REVERSED));
+                let list_area_idx = if mode == Mode::Query { 1 } else { 0 };
                 f.render_stateful_widget(
                     list,
-                    chunks[1],
+                    chunks[list_area_idx],
                     &mut ratatui::widgets::ListState::default().with_selected(
                         if filtered.is_empty() {
                             None
@@ -261,22 +348,185 @@ pub fn run_picker_with(
                         },
                     ),
                 );
+
+                // Footer with shortcuts (two lines for clarity)
+                let ln1 = format!(
+                    "/ search | f favorites({}) | i images({}) | t tag | r refresh | p favorite | x delete",
+                    if fav_filter { "on" } else { "off" },
+                    if images_mode { "on" } else { "off" }
+                );
+                let mut ln2 = String::from("Enter copy | m migrate DB | Esc cancel | ↑/↓/PgUp/PgDn move");
+                if has_more { ln2.push_str(" | More available… (scroll down)"); }
+                if let Some((msg, until)) = &toast { if Instant::now() <= *until { ln2.push_str(&format!("  — {}", msg)); } }
+                let thm2 = theme::load_tui_theme();
+                let footer = Paragraph::new(vec![
+                        ratatui::text::Line::raw(ln1),
+                        ratatui::text::Line::raw(ln2),
+                    ])
+                    .block(Block::default().borders(Borders::ALL).title("Shortcuts").border_style(Style::default().fg(thm.border_fg)))
+                    .style(Style::default().fg(thm2.help_fg))
+                    .wrap(Wrap { trim: true });
+                let footer_area_idx = if mode == Mode::Query { 2 } else { 1 };
+                f.render_widget(footer, chunks[footer_area_idx]);
             })?;
         }
 
         if let Some(ev) = es.poll(Duration::from_millis(100))? {
             match ev {
                 Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
-                    KeyCode::Esc => break,
+                    KeyCode::Esc => { break; }
                     KeyCode::Char('c')
                         if k.modifiers
                             .contains(crossterm::event::KeyModifiers::CONTROL) =>
                     {
                         break
                     }
-                    KeyCode::Char(ch) => query.push(ch),
+                    KeyCode::Char('/') => {
+                        // Toggle search mode. Do not clear the query; when leaving
+                        // search, results revert to unfiltered. When entering, apply
+                        // whatever query text is present.
+                        mode = match mode { Mode::Normal => Mode::Query, Mode::Query => Mode::Normal };
+                        last_query.clear();
+                        needs_refilter = true;
+                    }
+                    KeyCode::Char('f') => {
+                        fav_filter = !fav_filter; last_query.clear(); needs_refilter = true; selected = 0;
+                        pending_delete_id = None; pending_delete_until = None;
+                        if use_daemon {
+                            match fetch_page_from_daemon(
+                                images_mode,
+                                fav_filter,
+                                Some(PAGE_SIZE),
+                                Some(0),
+                                None,
+                                tag_filter.clone(),
+                            ) {
+                                Ok(p) => { items = p.items; has_more = p.more; }
+                                Err(_) => { items = fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?; has_more = false; }
+                            }
+                        } else {
+                            items = fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?;
+                        }
+                        filtered = (0..items.len()).collect();
+                    }
+                    KeyCode::Char('i') => {
+                        images_mode = !images_mode; selected = 0; last_query.clear(); needs_refilter = true;
+                        pending_delete_id = None; pending_delete_until = None;
+                        let load_res: anyhow::Result<()> = (|| {
+                            if use_daemon {
+                                let p = fetch_page_from_daemon(images_mode, fav_filter, Some(PAGE_SIZE), Some(0), None, tag_filter.clone())?;
+                                items = p.items; has_more = p.more; Ok(())
+                            } else {
+                                items = fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?; has_more = false; Ok(())
+                            }
+                        })();
+                        match load_res {
+                            Ok(()) => { filtered = (0..items.len()).collect(); }
+                            Err(e) => {
+                                let msg = format!("{}", e);
+                                images_mode = false; // revert toggle to keep session stable
+                                needs_refilter = true;
+                                if msg.contains("no such column: c.image_path") || msg.contains("no such column: image_path") {
+                                    toast = Some(("Images schema missing. Press 'm' to run migrations.".into(), Instant::now() + Duration::from_millis(3000)));
+                                } else {
+                                    toast = Some((format!("Images view failed: {}", truncate_msg(&msg, 80)), Instant::now() + Duration::from_millis(3000)));
+                                }
+                            }
+                        }
+                    }
+                    // Toggle favorite on current item
+                    KeyCode::Char('p') | KeyCode::Char('P') => {
+                        if let Some(idx) = filtered.get(selected).cloned() {
+                            if let Some(it) = items.get(idx) {
+                                let id = match it { Item::Text { id, .. } | Item::Image { id, .. } => id.clone() };
+                                let is_fav = match it { Item::Text { favorite, .. } | Item::Image { favorite, .. } => *favorite };
+                                let _ = store.favorite(&id, !is_fav);
+                                toast = Some((if !is_fav { "Favorited".into() } else { "Unfavorited".into() }, Instant::now() + Duration::from_millis(900)));
+                                // Refresh items so filters apply correctly
+                                if use_daemon {
+                                    match fetch_page_from_daemon(images_mode, fav_filter, Some(PAGE_SIZE), Some(0), None, tag_filter.clone()) {
+                                        Ok(p) => { items = p.items; has_more = p.more; }
+                                        Err(_) => { items = fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?; has_more = false; }
+                                    }
+                                } else {
+                                    items = fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?;
+                                }
+                                filtered = (0..items.len()).collect();
+                                if selected >= filtered.len() { selected = filtered.len().saturating_sub(1); }
+                            }
+                        }
+                    }
+                    // Delete current item with quick confirm
+                    KeyCode::Delete | KeyCode::Char('x') | KeyCode::Char('X') => {
+                        if let Some(idx) = filtered.get(selected).cloned() {
+                            if let Some(it) = items.get(idx) {
+                                let id = match it { Item::Text { id, .. } | Item::Image { id, .. } => id.clone() };
+                                let now = Instant::now();
+                                let confirm_ok = pending_delete_id.as_deref() == Some(id.as_str())
+                                    && pending_delete_until.map(|t| now <= t).unwrap_or(false);
+                                if confirm_ok {
+                                    if store.delete(&id).is_ok() {
+                                        toast = Some(("Deleted".into(), Instant::now() + Duration::from_millis(900)));
+                                        // Refresh after delete
+                                        if use_daemon { if let Ok(p) = fetch_page_from_daemon(images_mode, fav_filter, Some(PAGE_SIZE), Some(0), None, tag_filter.clone()) { items = p.items; has_more = p.more; } } else { items = fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?; }
+                                        filtered = (0..items.len()).collect();
+                                        if selected >= filtered.len() { selected = filtered.len().saturating_sub(1); }
+                                    }
+                                    pending_delete_id = None;
+                                    pending_delete_until = None;
+                                } else {
+                                    pending_delete_id = Some(id);
+                                    pending_delete_until = Some(now + Duration::from_millis(1500));
+                                    toast = Some(("Press x again to delete".into(), now + Duration::from_millis(1500)));
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Char('t') => {
+                        // Apply current query as tag when pressing 't'
+                        tag_filter = if query.trim().is_empty() { None } else { Some(query.clone()) };
+                        last_query.clear();
+                        needs_refilter = true; selected = 0;
+                        if use_daemon {
+                            match fetch_page_from_daemon(images_mode, fav_filter, Some(PAGE_SIZE), Some(0), None, tag_filter.clone()) {
+                                Ok(p) => { items = p.items; has_more = p.more; }
+                                Err(_) => { items = fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?; has_more = false; }
+                            }
+                        } else {
+                            items = fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?;
+                        }
+                        filtered = (0..items.len()).collect();
+                    }
+                    KeyCode::Char('r') => {
+                        last_query.clear(); needs_refilter = true;
+                        if use_daemon {
+                            match fetch_page_from_daemon(images_mode, fav_filter, Some(PAGE_SIZE), Some(0), None, tag_filter.clone()) {
+                                Ok(p) => { items = p.items; has_more = p.more; }
+                                Err(_) => { items = fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?; has_more = false; }
+                            }
+                        } else {
+                            items = fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?; has_more=false;
+                        }
+                        filtered = (0..items.len()).collect();
+                    }
+                    // Run migrations on DB (best-effort) and reload list
+                    KeyCode::Char('m') | KeyCode::Char('M') => {
+                        match migrate_current_db() {
+                            Ok(()) => {
+                                toast = Some(("Migrations applied".into(), Instant::now() + Duration::from_millis(1200)));
+                                // reload items with current filters
+                                if use_daemon { if let Ok(p) = fetch_page_from_daemon(images_mode, fav_filter, Some(PAGE_SIZE), Some(0), None, tag_filter.clone()) { items = p.items; has_more = p.more; } }
+                                else if let Ok(v) = fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone()) { items = v; has_more = false; }
+                                filtered = (0..items.len()).collect();
+                            }
+                            Err(e) => {
+                                toast = Some((format!("Migration failed: {}", truncate_msg(&format!("{}", e), 80)), Instant::now() + Duration::from_millis(3000)));
+                            }
+                        }
+                    }
+                    KeyCode::Char(ch) => { if mode == Mode::Query { query.push(ch); } }
                     KeyCode::Backspace => {
-                        query.pop();
+                        if mode == Mode::Query { query.pop(); }
                     }
                     KeyCode::Up => {
                         selected = selected.saturating_sub(1);
@@ -289,53 +539,64 @@ pub fn run_picker_with(
                                 && query.is_empty()
                                 && filtered.len().saturating_sub(selected) < 5
                             {
-                                if let Ok(p) = fetch_page_from_daemon(
-                                    images,
-                                    favorites,
+                                match fetch_page_from_daemon(
+                                    images_mode,
+                                    fav_filter,
                                     Some(PAGE_SIZE),
                                     Some(items.len()),
                                     None,
-                                    tag.clone(),
+                                    tag_filter.clone(),
                                 ) {
-                                    has_more = p.more;
-                                    items.extend(p.items);
-                                    last_query.clear(); // trigger re-filter include new items
+                                    Ok(p) => { has_more = p.more; items.extend(p.items); last_query.clear(); }
+                                    Err(_) => { /* ignore; keep current items when daemon missing */ }
                                 }
                             }
                         }
                     }
                     KeyCode::Enter => {
+                        if !query.is_empty() && query.starts_with('#') {
+                            // Apply tag from #tag then clear query
+                            tag_filter = if query.len() == 1 { None } else { Some(query[1..].to_string()) };
+                            last_query.clear();
+                            if use_daemon {
+                                match fetch_page_from_daemon(images_mode, fav_filter, Some(PAGE_SIZE), Some(0), None, tag_filter.clone()) {
+                                    Ok(p) => { items = p.items; has_more = p.more; }
+                                    Err(_) => { items = fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?; has_more = false; }
+                                }
+                            } else {
+                                items = fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?;
+                            }
+                            query.clear();
+                            continue;
+                        }
                         if let Some(idx) = filtered.get(selected).cloned() {
                             // perform copy and exit
                             match &items[idx] {
                                 Item::Text { id, text, .. } => {
-                                    // copy via clipboard
-                                    #[cfg(target_os = "linux")]
-                                    let cb = crate::SystemClipboard::new();
-                                    #[cfg(not(target_os = "linux"))]
-                                    let cb = ditox_core::clipboard::NoopClipboard;
-                                    let _ = cb.set_text(text);
-                                    println!("{}", id);
+                                    if let Err(e) = copy_helpers::copy_text(text, force_wl_copy) {
+                                        copy_error = Some(format!("copy failed: {}", e));
+                                    } else { toast = Some((String::from("Copied!"), Instant::now() + Duration::from_millis(500))); exit_after = Some(Instant::now() + Duration::from_millis(500)); }
+                                    let _ = store.touch_last_used(id);
+                                    pending_print_id = Some(id.clone());
                                     if !draw {
                                         return Ok(Some(id.clone()));
                                     }
                                 }
                                 Item::Image { id, .. } => {
                                     if let Ok(Some(img)) = store.get_image_rgba(id) {
-                                        #[cfg(target_os = "linux")]
-                                        let cb = crate::SystemClipboard::new();
-                                        #[cfg(not(target_os = "linux"))]
-                                        let cb = ditox_core::clipboard::NoopClipboard;
-                                        let _ = cb.set_image(&img);
+                                        if let Err(e) = copy_helpers::copy_image(&img, force_wl_copy) {
+                                            copy_error = Some(format!("image copy failed: {}", e));
+                                        } else { toast = Some((String::from("Copied!"), Instant::now() + Duration::from_millis(500))); exit_after = Some(Instant::now() + Duration::from_millis(500)); }
                                     }
-                                    println!("{}", id);
+                                    let _ = store.touch_last_used(id);
+                                    pending_print_id = Some(id.clone());
                                     if !draw {
                                         return Ok(Some(id.clone()));
                                     }
                                 }
                             }
                         }
-                        break;
+                        // Do not break immediately; allow toast to render for a moment
                     }
                     _ => {}
                 },
@@ -345,26 +606,30 @@ pub fn run_picker_with(
 
         // refresh from daemon periodically (e.g., new clips) when idle
         if use_daemon && last_fetch.elapsed() > Duration::from_millis(1500) && query.is_empty() {
-            if let Ok(p) = fetch_page_from_daemon(
-                images,
-                favorites,
+            match fetch_page_from_daemon(
+                images_mode,
+                fav_filter,
                 Some(PAGE_SIZE),
                 Some(0),
                 None,
-                tag.clone(),
+                tag_filter.clone(),
             ) {
-                items = p.items;
-                has_more = p.more;
-                last_query.clear();
+                Ok(p) => { items = p.items; has_more = p.more; last_query.clear(); }
+                Err(_) => { /* ignore periodic refresh when daemon missing */ }
             }
             last_fetch = Instant::now();
         }
+        if let Some(t) = exit_after { if Instant::now() >= t { break; } }
     }
 
     if draw {
         disable_raw_mode()?;
         crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
     }
+    if let Some(e) = copy_error {
+        eprintln!("{}", e);
+    }
+    if let Some(id) = pending_print_id { println!("{}", id); }
     Ok(None)
 }
 
@@ -426,6 +691,7 @@ fn fetch_from_store(
                 id: c.id,
                 favorite: c.is_favorite,
                 created_at: c.created_at.unix_timestamp(),
+                last_used_at: c.last_used_at.map(|t| t.unix_timestamp()),
                 width: m.width,
                 height: m.height,
                 format: m.format,
@@ -446,11 +712,67 @@ fn fetch_from_store(
                 id: c.id,
                 favorite: c.is_favorite,
                 created_at: c.created_at.unix_timestamp(),
+                last_used_at: c.last_used_at.map(|t| t.unix_timestamp()),
                 text: c.text,
             })
             .collect())
     }
 }
+
+// (clipboard helpers moved to crate::copy_helpers)
+
+fn truncate_msg(s: &str, max: usize) -> String {
+    if s.len() > max { format!("{}…", &s[..max]) } else { s.to_string() }
+}
+
+fn resolve_db_path_from_settings() -> PathBuf {
+    let settings = crate::config::load_settings();
+    match settings.storage {
+        crate::config::Storage::LocalSqlite { db_path } => db_path.unwrap_or_else(|| crate::config::config_dir().join("db").join("ditox.db")),
+        _ => crate::config::config_dir().join("db").join("ditox.db"),
+    }
+}
+
+fn migrate_current_db() -> anyhow::Result<()> {
+    let path = resolve_db_path_from_settings();
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let impls = StoreImpl::new_with(&path, true)?; // auto-migrate on open
+    impls.migrate_all()?;
+    Ok(())
+}
+
+fn rel_time(ts: i64) -> String {
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let delta = now.saturating_sub(ts);
+    if delta <= 0 {
+        return "just now".into();
+    }
+    // seconds, minutes, hours, days
+    if delta < 60 {
+        return "just now".into();
+    }
+    let minutes = delta / 60;
+    if minutes < 60 {
+        return format!("{}m ago", minutes);
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{}h ago", hours);
+    }
+    let days = hours / 24;
+    if days < 7 {
+        return format!("{}d ago", days);
+    }
+    let weeks = days / 7;
+    if weeks < 5 {
+        return format!("{}w ago", weeks);
+    }
+    // Fallback to date for older items
+    let dt = time::OffsetDateTime::from_unix_timestamp(ts).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+    let date = dt.date();
+    format!("{}-{:02}-{:02}", date.year(), u8::from(date.month()), date.day())
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -476,6 +798,13 @@ mod tests {
         let c1 = store.add("hello world").unwrap();
         let _ = store.add("second").unwrap();
         let mut q = std::collections::VecDeque::new();
+        // enter search mode then type 'hello'
+        q.push_back(Event::Key(KeyEvent {
+            code: KeyCode::Char('/'),
+            modifiers: KeyModifiers::empty(),
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }));
         for ch in ['h', 'e', 'l', 'l', 'o'] {
             q.push_back(Event::Key(KeyEvent {
                 code: KeyCode::Char(ch),
@@ -491,7 +820,60 @@ mod tests {
             state: KeyEventState::NONE,
         }));
         let mut es = FakeEvents { events: q };
-        let selected = run_picker_with(&store, false, false, None, true, &mut es, false).unwrap();
+        let selected = run_picker_with(&store, false, false, None, true, &mut es, false, false).unwrap();
         assert_eq!(selected.as_deref(), Some(c1.id.as_str()));
+    }
+
+    #[test]
+    fn favorites_only_shows_only_favorited_item() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("p2.db");
+        let store = StoreImpl::new_with(&db, true).unwrap();
+        let a = store.add("alpha").unwrap();
+        let b = store.add("beta").unwrap();
+        // Mark only `a` as favorite
+        store.favorite(&a.id, true).unwrap();
+
+        // Press Enter immediately to select the first (and only) item
+        let mut q = std::collections::VecDeque::new();
+        q.push_back(Event::Key(KeyEvent {
+            code: KeyCode::Enter,
+            modifiers: KeyModifiers::empty(),
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }));
+        let mut es = FakeEvents { events: q };
+
+        let picked = run_picker_with(&store, true, false, None, true, &mut es, false, false)
+            .unwrap();
+        // Should select the only item available in favorites-only mode
+        assert_eq!(picked.as_deref(), Some(a.id.as_str()));
+
+        // Sanity: if favorites filter is off, we can pick `b` via search
+        let mut q2 = std::collections::VecDeque::new();
+        q2.push_back(Event::Key(KeyEvent {
+            code: KeyCode::Char('/'),
+            modifiers: KeyModifiers::empty(),
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }));
+        for ch in ['b', 'e', 't', 'a'] {
+            q2.push_back(Event::Key(KeyEvent {
+                code: KeyCode::Char(ch),
+                modifiers: KeyModifiers::empty(),
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            }));
+        }
+        q2.push_back(Event::Key(KeyEvent {
+            code: KeyCode::Enter,
+            modifiers: KeyModifiers::empty(),
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }));
+        let mut es2 = FakeEvents { events: q2 };
+        let picked2 = run_picker_with(&store, false, false, None, true, &mut es2, false, false)
+            .unwrap();
+        assert_eq!(picked2.as_deref(), Some(b.id.as_str()));
     }
 }
