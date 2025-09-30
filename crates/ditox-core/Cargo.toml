@@ -4,6 +4,9 @@ version = "1.0.0"
 edition = "2021"
 description = "Core library for Ditox clipboard manager"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/0xfell/ditox"
+homepage = "https://github.com/0xfell/ditox"
+readme = "README.md"
 
 [features]
 default = ["mem-store", "clipboard"]
