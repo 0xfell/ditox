@@ -4,6 +4,9 @@ version = "1.0.0"
 edition = "2021"
 description = "Ditox clipboard CLI"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/0xfell/ditox"
+homepage = "https://github.com/0xfell/ditox"
+readme = "README.md"
 
 [features]
 # Default build includes libsql so one binary supports both local + remote at runtime

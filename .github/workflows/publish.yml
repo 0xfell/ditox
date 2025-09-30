@@ -1,0 +1,55 @@
+name: Publish Crates
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Which crates to publish (core|clipd|cli|all)"
+        required: true
+        default: "core"
+        type: choice
+        options: [core, clipd, cli, all]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Configure crates.io token
+        run: |
+          test -n "$CARGO_REGISTRY_TOKEN" || (echo "CARGO_REGISTRY_TOKEN missing" && exit 1)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Publish core
+        if: ${{ inputs.publish == 'core' || inputs.publish == 'all' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p ditox-core
+      - name: Guard clipd path deps
+        if: ${{ inputs.publish == 'clipd' || inputs.publish == 'all' }}
+        run: |
+          if rg -n "ditox-core\s*=\s*\{\s*path\s*=\s*\"\..*\"" crates/ditox-clipd/Cargo.toml; then
+            echo "Update crates/ditox-clipd to depend on ditox-core = \"1.0.0\" before publishing." && exit 2
+          fi
+      - name: Publish clipd
+        if: ${{ inputs.publish == 'clipd' || inputs.publish == 'all' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p ditox-clipd
+      - name: Guard cli path deps
+        if: ${{ inputs.publish == 'cli' || inputs.publish == 'all' }}
+        run: |
+          if rg -n "ditox-core\s*=\s*\{\s*path\s*=\s*\"\..*\"" crates/ditox-cli/Cargo.toml; then
+            echo "Update crates/ditox-cli to depend on ditox-core = \"1.0.0\" before publishing." && exit 3
+          fi
+      - name: Publish cli
+        if: ${{ inputs.publish == 'cli' || inputs.publish == 'all' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p ditox-cli
