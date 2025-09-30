@@ -26,7 +26,7 @@ include_dir = "0.7"
 hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
-libsql = { version = "0.3", optional = true }
+libsql = { version = "0.9", optional = true }
 whoami = { version = "1", optional = true }
 
 [dev-dependencies]
