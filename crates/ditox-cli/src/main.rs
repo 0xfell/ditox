@@ -8,11 +8,11 @@ use ditox_core::{ClipKind, Query, Store, StoreImpl};
 use image::ImageEncoder;
 use std::path::PathBuf;
 // config module is declared at the top; avoid duplicate re-declaration here
-mod picker;
-mod xfer;
-mod doctor;
 mod copy_helpers;
+mod doctor;
+mod picker;
 mod theme;
+mod xfer;
 
 #[derive(Parser)]
 #[command(name = "ditox", version, about = "Ditox clipboard CLI (scaffold)")]
@@ -753,23 +753,32 @@ enum StoreKind {
 }
 
 fn build_store(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>> {
-    // Always operate on local SQLite (or mem when explicitly requested).
-    Ok(match cli.store {
-        StoreKind::Mem => Box::new(ditox_core::MemStore::new()),
-        StoreKind::Sqlite => {
-            let path = cli
-                .db
-                .clone()
-                .or_else(|| match &settings.storage {
-                    config::Storage::LocalSqlite { db_path } => db_path.clone(),
-                    _ => None, // when backend=turso, still use default local DB path
-                })
-                .unwrap_or_else(default_db_path);
-            std::fs::create_dir_all(path.parent().unwrap())?;
-            let s = ditox_core::StoreImpl::new_with(path, cli.auto_migrate)?;
-            Box::new(s)
-        }
-    })
+    // Prefer explicit `--store mem` when requested.
+    if matches!(cli.store, StoreKind::Mem) {
+        return Ok(Box::new(ditox_core::MemStore::new()));
+    }
+
+    // When configured for Turso and built with the libsql feature, use the remote store
+    // so interactive commands (e.g., `pick`, `list`, `search`) operate directly on the
+    // remote database. Images remain unsupported in the remote backend.
+    #[cfg(feature = "libsql")]
+    if let config::Storage::Turso { url, auth_token } = &settings.storage {
+        let s = ditox_core::libsql_backend::LibsqlStore::new(url, auth_token.as_deref())?;
+        return Ok(Box::new(s));
+    }
+
+    // Fallback to local SQLite store.
+    let path = cli
+        .db
+        .clone()
+        .or_else(|| match &settings.storage {
+            config::Storage::LocalSqlite { db_path } => db_path.clone(),
+            _ => None,
+        })
+        .unwrap_or_else(default_db_path);
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let s = ditox_core::StoreImpl::new_with(path, cli.auto_migrate)?;
+    Ok(Box::new(s))
 }
 
 fn build_store_readonly(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>> {
