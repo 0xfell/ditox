@@ -18,7 +18,7 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-ditox-core = { path = "../ditox-core", features = ["sqlite", "clipboard"] }
+ditox-core = { version = "1.0.0", path = "../ditox-core", features = ["sqlite", "clipboard"] }
 directories = "5"
 time = { version = "0.3", features = ["formatting"] }
 image = { version = "0.25", default-features = false, features = ["png","jpeg","gif","bmp","tiff","webp"] }
