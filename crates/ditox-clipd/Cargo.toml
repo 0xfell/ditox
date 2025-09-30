@@ -12,6 +12,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread","macros","net","io-util","time","signal"] }
 directories = "5"
-ditox-core = { path = "../ditox-core", features = ["sqlite", "clipboard"] }
+ditox-core = { version = "1.0.0", path = "../ditox-core", features = ["sqlite", "clipboard"] }
 time = { version = "0.3", features = ["formatting"] }
 toml = "0.8"
