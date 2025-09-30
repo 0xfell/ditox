@@ -1,4 +1,6 @@
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(target_os = "linux")]
+use std::process::Stdio;
 
 pub fn clipboard_tools_roundtrip() {
     #[cfg(target_os = "linux")]

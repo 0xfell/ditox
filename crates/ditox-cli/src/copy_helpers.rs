@@ -33,6 +33,8 @@ fn try_prog_str(prog: &str, args: &[&str], input: &str) -> Result<bool> {
 }
 
 pub fn copy_text(text: &str, force_wl_copy: bool) -> Result<()> {
+    #[cfg(not(target_os = "linux"))]
+    let _ = force_wl_copy; // silence unused on non-Linux targets
     #[cfg(target_os = "linux")]
     {
         if (force_wl_copy || std::env::var_os("WAYLAND_DISPLAY").is_some())
@@ -95,6 +97,8 @@ pub fn copy_text(text: &str, force_wl_copy: bool) -> Result<()> {
 }
 
 pub fn copy_image(img: &ditox_core::ImageRgba, force_wl_copy: bool) -> Result<()> {
+    #[cfg(not(target_os = "linux"))]
+    let _ = force_wl_copy; // silence unused on non-Linux targets
     #[cfg(target_os = "linux")]
     {
         use image::ImageEncoder;

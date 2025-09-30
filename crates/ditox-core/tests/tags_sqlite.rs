@@ -7,9 +7,7 @@ fn tags_roundtrip() {
     let db = dir.path().join("t.db");
     let store = StoreImpl::new_with(&db, true).expect("store");
     let c = store.add("taggable").unwrap();
-    store
-        .add_tags(&c.id, &["x".into(), "y".into()])
-        .unwrap();
+    store.add_tags(&c.id, &["x".into(), "y".into()]).unwrap();
     let tags = store.list_tags(&c.id).unwrap();
     assert!(tags.contains(&"x".to_string()));
     assert!(tags.contains(&"y".to_string()));
