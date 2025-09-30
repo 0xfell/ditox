@@ -17,4 +17,4 @@ tokio = { version = "1", features = ["rt-multi-thread","macros","net","io-util",
 directories = "5"
 ditox-core = { version = "1.0.1", path = "../ditox-core", features = ["sqlite", "clipboard"] }
 time = { version = "0.3", features = ["formatting"] }
-toml = "0.8"
+toml = "0.9"
