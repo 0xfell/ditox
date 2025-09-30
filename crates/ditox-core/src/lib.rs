@@ -98,6 +98,16 @@ pub trait Store: Send + Sync {
         max_age: Option<time::Duration>,
         keep_favorites: bool,
     ) -> anyhow::Result<usize>;
+
+    // Counts (defaults: compute via list/list_images when backends don't override)
+    fn count(&self, mut q: Query) -> anyhow::Result<usize> {
+        q.limit = None;
+        Ok(self.list(q)?.len())
+    }
+    fn count_images(&self, mut q: Query) -> anyhow::Result<usize> {
+        q.limit = None;
+        Ok(self.list_images(q)?.len())
+    }
 }
 
 /// Minimal in-memory store used until SQLite backend lands.
@@ -604,6 +614,17 @@ mod sqlite_store {
                 pending,
             })
         }
+
+        pub fn find_id_by_exact_text(&self, text: &str) -> anyhow::Result<Option<String>> {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(
+                "SELECT id FROM clips WHERE deleted_at IS NULL AND kind = 'text' AND text = ? ORDER BY COALESCE(last_used_at, created_at) DESC LIMIT 1",
+            )?;
+            let opt = stmt
+                .query_row([text], |r| r.get::<_, String>(0))
+                .optional()?;
+            Ok(opt)
+        }
     }
 
     impl Store for SqliteStore {
@@ -613,7 +634,7 @@ mod sqlite_store {
 
         fn add(&self, text: &str) -> anyhow::Result<Clip> {
             let id = super::gen_id();
-            let created_at = OffsetDateTime::now_utc().unix_timestamp();
+            let created_at = OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
             let conn = self.conn.lock().unwrap();
             let updated_at = created_at;
             let lamport: i64 = conn
@@ -628,7 +649,7 @@ mod sqlite_store {
             let clip = Clip {
                 id,
                 text: text.to_string(),
-                created_at: OffsetDateTime::from_unix_timestamp(created_at)?,
+                created_at: OffsetDateTime::from_unix_timestamp_nanos(created_at as i128)?,
                 last_used_at: None,
                 is_favorite: false,
                 kind: ClipKind::Text,
@@ -664,10 +685,10 @@ mod sqlite_store {
                         params.push(rusqlite::types::Value::Text(tag.clone()));
                     }
                     if q.rank {
-                        // Rank primary by bm25, then by recency (max of created_at or last_used_at)
-                        sql.push_str(" AND f.text MATCH ? ORDER BY bm25(clips_fts) ASC, MAX(c.created_at, COALESCE(c.last_used_at, c.created_at)) DESC");
+                        // Rank primary by bm25, then by recent use (fallback to created_at)
+                        sql.push_str(" AND f.text MATCH ? ORDER BY bm25(clips_fts) ASC, COALESCE(c.last_used_at, c.created_at) DESC");
                     } else {
-                        sql.push_str(" AND f.text MATCH ? ORDER BY MAX(c.created_at, COALESCE(c.last_used_at, c.created_at)) DESC");
+                        sql.push_str(" AND f.text MATCH ? ORDER BY COALESCE(c.last_used_at, c.created_at) DESC");
                     }
                     params.push(rusqlite::types::Value::Text(term.clone()));
                     let mut stmt = conn.prepare(&sql)?;
@@ -679,9 +700,10 @@ mod sqlite_store {
                         out.push(Clip {
                             id: row.get(0)?,
                             text: row.get(1)?,
-                            created_at: OffsetDateTime::from_unix_timestamp(created)?,
-                            last_used_at: last_used
-                                .and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
+                            created_at: OffsetDateTime::from_unix_timestamp_nanos(created as i128)?,
+                            last_used_at: last_used.and_then(|ts| {
+                                OffsetDateTime::from_unix_timestamp_nanos(ts as i128).ok()
+                            }),
                             is_favorite: row.get::<_, i64>(3)? != 0,
                             kind: ClipKind::Text,
                             is_image: false,
@@ -695,9 +717,7 @@ mod sqlite_store {
                 } else {
                     sql.push_str(" AND c.text LIKE ?");
                     let like = format!("%{}%", term);
-                    sql.push_str(
-                        " ORDER BY MAX(c.created_at, COALESCE(c.last_used_at, c.created_at)) DESC",
-                    );
+                    sql.push_str(" ORDER BY COALESCE(c.last_used_at, c.created_at) DESC");
                     if let Some(limit) = q.limit {
                         sql.push_str(&format!(" LIMIT {}", limit));
                     }
@@ -711,9 +731,10 @@ mod sqlite_store {
                         out.push(Clip {
                             id: row.get(0)?,
                             text: row.get(1)?,
-                            created_at: OffsetDateTime::from_unix_timestamp(created)?,
-                            last_used_at: last_used
-                                .and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
+                            created_at: OffsetDateTime::from_unix_timestamp_nanos(created as i128)?,
+                            last_used_at: last_used.and_then(|ts| {
+                                OffsetDateTime::from_unix_timestamp_nanos(ts as i128).ok()
+                            }),
                             is_favorite: row.get::<_, i64>(3)? != 0,
                             kind: ClipKind::Text,
                             is_image: false,
@@ -724,9 +745,7 @@ mod sqlite_store {
                 }
             }
             // Order by most recent of created_at or last_used_at
-            sql.push_str(
-                " ORDER BY MAX(c.created_at, COALESCE(c.last_used_at, c.created_at)) DESC",
-            );
+            sql.push_str(" ORDER BY COALESCE(c.last_used_at, c.created_at) DESC");
             if let Some(limit) = q.limit {
                 sql.push_str(&format!(" LIMIT {}", limit));
             }
@@ -739,9 +758,9 @@ mod sqlite_store {
                 out.push(Clip {
                     id: row.get(0)?,
                     text: row.get(1)?,
-                    created_at: OffsetDateTime::from_unix_timestamp(created)?,
+                    created_at: OffsetDateTime::from_unix_timestamp_nanos(created as i128)?,
                     last_used_at: last_used
-                        .and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
+                        .and_then(|ts| OffsetDateTime::from_unix_timestamp_nanos(ts as i128).ok()),
                     is_favorite: row.get::<_, i64>(3)? != 0,
                     kind: ClipKind::Text,
                     is_image: false,
@@ -769,10 +788,11 @@ mod sqlite_store {
                     Ok(Clip {
                         id: row.get(0)?,
                         text: row.get(2)?,
-                        created_at: OffsetDateTime::from_unix_timestamp(created)
+                        created_at: OffsetDateTime::from_unix_timestamp_nanos(created as i128)
                             .unwrap_or(OffsetDateTime::now_utc()),
-                        last_used_at: last_used
-                            .and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
+                        last_used_at: last_used.and_then(|ts| {
+                            OffsetDateTime::from_unix_timestamp_nanos(ts as i128).ok()
+                        }),
                         is_favorite: row.get::<_, i64>(4)? != 0,
                         kind,
                         is_image: is_image != 0,
@@ -790,7 +810,7 @@ mod sqlite_store {
                     r.get(0)
                 })
                 .unwrap_or(1);
-            let now = OffsetDateTime::now_utc().unix_timestamp();
+            let now = OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
             conn.execute(
                 "UPDATE clips SET is_favorite = ?, updated_at = ?, lamport = ? WHERE id = ?",
                 params![if fav { 1 } else { 0 }, now, lamport, id],
@@ -815,7 +835,7 @@ mod sqlite_store {
             let (w, h) = img.dimensions();
             let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
             let id = super::gen_id();
-            let created_at = OffsetDateTime::now_utc().unix_timestamp();
+            let created_at = OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
             let conn = self.conn.lock().unwrap();
             let tx = conn.unchecked_transaction()?;
             tx.execute("INSERT INTO clips(id, kind, text, created_at, is_favorite, is_image, image_path) VALUES(?, 'image', '', ?, 0, 1, ?)", params![id, created_at, path.to_string_lossy()])?;
@@ -824,7 +844,7 @@ mod sqlite_store {
             Ok(Clip {
                 id,
                 text: String::new(),
-                created_at: OffsetDateTime::from_unix_timestamp(created_at)?,
+                created_at: OffsetDateTime::from_unix_timestamp_nanos(created_at as i128)?,
                 last_used_at: None,
                 is_favorite: false,
                 kind: ClipKind::Image,
@@ -851,7 +871,7 @@ mod sqlite_store {
             let sha = bs.put(&buf)?;
             let size = buf.len() as u64;
             let id = super::gen_id();
-            let created_at = OffsetDateTime::now_utc().unix_timestamp();
+            let created_at = OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
             let conn = self.conn.lock().unwrap();
             let tx = conn.unchecked_transaction()?;
             tx.execute("INSERT INTO clips(id, kind, text, created_at, is_favorite, is_image) VALUES(?, 'image', '', ?, 0, 1)", params![id, created_at])?;
@@ -860,7 +880,7 @@ mod sqlite_store {
             Ok(Clip {
                 id,
                 text: String::new(),
-                created_at: OffsetDateTime::from_unix_timestamp(created_at)?,
+                created_at: OffsetDateTime::from_unix_timestamp_nanos(created_at as i128)?,
                 last_used_at: None,
                 is_favorite: false,
                 kind: ClipKind::Image,
@@ -935,9 +955,7 @@ mod sqlite_store {
                 params.push(rusqlite::types::Value::Text(tag.clone()));
             }
             // Order by most recent of created_at or last_used_at
-            sql.push_str(
-                " ORDER BY MAX(c.created_at, COALESCE(c.last_used_at, c.created_at)) DESC",
-            );
+            sql.push_str(" ORDER BY COALESCE(c.last_used_at, c.created_at) DESC");
             if let Some(limit) = q.limit {
                 sql.push_str(&format!(" LIMIT {}", limit));
             }
@@ -950,9 +968,9 @@ mod sqlite_store {
                 let clip = Clip {
                     id: row.get(0)?,
                     text: String::new(),
-                    created_at: OffsetDateTime::from_unix_timestamp(created)?,
+                    created_at: OffsetDateTime::from_unix_timestamp_nanos(created as i128)?,
                     last_used_at: last_used
-                        .and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
+                        .and_then(|ts| OffsetDateTime::from_unix_timestamp_nanos(ts as i128).ok()),
                     is_favorite: row.get::<_, i64>(2)? != 0,
                     kind: ClipKind::Image,
                     is_image: true,
@@ -973,7 +991,7 @@ mod sqlite_store {
 
         fn touch_last_used(&self, id: &str) -> anyhow::Result<()> {
             let conn = self.conn.lock().unwrap();
-            let now = OffsetDateTime::now_utc().unix_timestamp();
+            let now = OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
             let lamport: i64 = conn
                 .query_row("SELECT COALESCE(MAX(lamport),0)+1 FROM clips", [], |r| {
                     r.get(0)
@@ -997,7 +1015,7 @@ mod sqlite_store {
             let mut deleted = 0usize;
             if let Some(age) = max_age {
                 let cutoff = OffsetDateTime::now_utc() - age;
-                let cutoff_ts = cutoff.unix_timestamp();
+                let cutoff_ts = cutoff.unix_timestamp_nanos() as i64;
                 let sql = if keep_favorites {
                     "DELETE FROM clips WHERE created_at < ? AND deleted_at IS NULL AND is_favorite = 0"
                 } else {
@@ -1067,6 +1085,45 @@ mod sqlite_store {
                 out.push(row.get::<_, String>(0)?);
             }
             Ok(out)
+        }
+
+        fn count(&self, q: Query) -> anyhow::Result<usize> {
+            let conn = self.conn.lock().unwrap();
+            let mut sql = String::from(
+                "SELECT COUNT(*) FROM clips c WHERE c.deleted_at IS NULL AND c.kind = 'text'",
+            );
+            let mut params: Vec<rusqlite::types::Value> = Vec::new();
+            if q.favorites_only {
+                sql.push_str(" AND c.is_favorite = 1");
+            }
+            if let Some(tag) = &q.tag {
+                sql.push_str(" AND EXISTS (SELECT 1 FROM clip_tags ct WHERE ct.clip_id = c.id AND ct.name = ?)");
+                params.push(rusqlite::types::Value::Text(tag.clone()));
+            }
+            if let Some(term) = &q.contains {
+                // Use LIKE count (good enough)
+                sql.push_str(" AND c.text LIKE ?");
+                params.push(rusqlite::types::Value::Text(format!("%{}%", term)));
+            }
+            let mut stmt = conn.prepare(&sql)?;
+            let n: i64 = stmt.query_row(rusqlite::params_from_iter(params.iter()), |r| r.get(0))?;
+            Ok(n as usize)
+        }
+
+        fn count_images(&self, q: Query) -> anyhow::Result<usize> {
+            let conn = self.conn.lock().unwrap();
+            let mut sql = String::from("SELECT COUNT(*) FROM clips c JOIN images i ON i.clip_id = c.id WHERE c.deleted_at IS NULL AND c.kind = 'image'");
+            let mut params: Vec<rusqlite::types::Value> = Vec::new();
+            if q.favorites_only {
+                sql.push_str(" AND c.is_favorite = 1");
+            }
+            if let Some(tag) = &q.tag {
+                sql.push_str(" AND EXISTS (SELECT 1 FROM clip_tags ct WHERE ct.clip_id = c.id AND ct.name = ?)");
+                params.push(rusqlite::types::Value::Text(tag.clone()));
+            }
+            let mut stmt = conn.prepare(&sql)?;
+            let n: i64 = stmt.query_row(rusqlite::params_from_iter(params.iter()), |r| r.get(0))?;
+            Ok(n as usize)
         }
     }
 
@@ -1551,7 +1608,7 @@ pub mod libsql_backend {
 
         fn add(&self, text: &str) -> anyhow::Result<Clip> {
             let id = super::gen_id();
-            let created_at = OffsetDateTime::now_utc().unix_timestamp();
+            let created_at = OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
             let conn = self.db.connect()?;
             let id_clone = id.clone();
             self.rt.block_on(async {
@@ -1563,7 +1620,7 @@ pub mod libsql_backend {
             Ok(Clip {
                 id,
                 text: text.into(),
-                created_at: OffsetDateTime::from_unix_timestamp(created_at)?,
+                created_at: OffsetDateTime::from_unix_timestamp_nanos(created_at as i128)?,
                 last_used_at: None,
                 is_favorite: false,
                 kind: ClipKind::Text,
@@ -1579,13 +1636,13 @@ pub mod libsql_backend {
                 sql.push_str(" AND is_favorite = 1");
             }
             let rows = if let Some(term) = &q.contains {
-                sql.push_str(" AND text LIKE ? ORDER BY created_at DESC");
+                sql.push_str(" AND text LIKE ? ORDER BY COALESCE(last_used_at, created_at) DESC");
                 self.rt.block_on(async {
                     conn.query(&sql, libsql::params!(format!("%{}%", term)))
                         .await
                 })?
             } else {
-                sql.push_str(" ORDER BY created_at DESC");
+                sql.push_str(" ORDER BY COALESCE(last_used_at, created_at) DESC");
                 self.rt.block_on(async { conn.query(&sql, ()).await })?
             };
 
@@ -1611,13 +1668,14 @@ pub mod libsql_backend {
                     Ok::<_, libsql::Error>(tmp)
                 })?;
             for (id, text, created, fav, last) in rows_vec {
-                let created_at = OffsetDateTime::from_unix_timestamp(created)
+                let created_at = OffsetDateTime::from_unix_timestamp_nanos(created as i128)
                     .unwrap_or(OffsetDateTime::UNIX_EPOCH);
                 out.push(Clip {
                     id,
                     text,
                     created_at,
-                    last_used_at: last.and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
+                    last_used_at: last
+                        .and_then(|ts| OffsetDateTime::from_unix_timestamp_nanos(ts as i128).ok()),
                     is_favorite: fav != 0,
                     kind: ClipKind::Text,
                     is_image: false,
@@ -1639,7 +1697,7 @@ pub mod libsql_backend {
                         let created: i64 = r.get::<i64>(3)?;
                         let last: Option<i64> = r.get::<Option<i64>>(5)?;
                         let kind: String = r.get::<String>(1)?;
-                        let created_at = OffsetDateTime::from_unix_timestamp(created)
+                        let created_at = OffsetDateTime::from_unix_timestamp_nanos(created as i128)
                             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
                         let kind = if kind == "image" {
                             ClipKind::Image
@@ -1650,8 +1708,9 @@ pub mod libsql_backend {
                             id: r.get::<String>(0)?,
                             text: r.get::<String>(2)?,
                             created_at,
-                            last_used_at: last
-                                .and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
+                            last_used_at: last.and_then(|ts| {
+                                OffsetDateTime::from_unix_timestamp_nanos(ts as i128).ok()
+                            }),
                             is_favorite: {
                                 let v: i64 = r.get::<i64>(4)?;
                                 v != 0
@@ -1690,7 +1749,7 @@ pub mod libsql_backend {
 
         fn touch_last_used(&self, id: &str) -> anyhow::Result<()> {
             let conn = self.db.connect()?;
-            let now = OffsetDateTime::now_utc().unix_timestamp();
+            let now = OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
             self.rt.block_on(async {
                 conn.execute(
                     "UPDATE clips SET last_used_at = ?, updated_at = COALESCE(updated_at, ?), lamport = COALESCE(lamport, 0) + 1 WHERE id = ?",
@@ -1744,7 +1803,7 @@ pub mod libsql_backend {
             let conn = self.db.connect()?;
             let deleted = 0usize;
             if let Some(age) = max_age {
-                let cutoff = (OffsetDateTime::now_utc() - age).unix_timestamp();
+                let cutoff = (OffsetDateTime::now_utc() - age).unix_timestamp_nanos() as i64;
                 let sql = if keep_favorites {
                     "DELETE FROM clips WHERE created_at < ? AND deleted_at IS NULL AND is_favorite = 0"
                 } else {
@@ -1764,6 +1823,50 @@ pub mod libsql_backend {
                     .block_on(async { conn.execute(sql, libsql::params!(n as i64)).await })?;
             }
             Ok(deleted)
+        }
+
+        fn count(&self, q: Query) -> anyhow::Result<usize> {
+            let conn = self.db.connect()?;
+            let mut sql = String::from(
+                "SELECT COUNT(*) FROM clips WHERE deleted_at IS NULL AND kind = 'text'",
+            );
+            if q.favorites_only {
+                sql.push_str(" AND is_favorite = 1");
+            }
+            if let Some(term) = &q.contains {
+                sql.push_str(" AND text LIKE ?");
+                let n: i64 = self.rt.block_on(async {
+                    let mut rows = conn
+                        .query(&sql, libsql::params!(format!("%{}%", term)))
+                        .await?;
+                    let r = rows.next().await?.unwrap();
+                    let v: i64 = r.get::<i64>(0)?;
+                    Ok::<i64, libsql::Error>(v)
+                })?;
+                return Ok(n as usize);
+            }
+            let n: i64 = self.rt.block_on(async {
+                let mut rows = conn.query(&sql, ()).await?;
+                let r = rows.next().await?.unwrap();
+                let v: i64 = r.get::<i64>(0)?;
+                Ok::<i64, libsql::Error>(v)
+            })?;
+            Ok(n as usize)
+        }
+
+        fn count_images(&self, q: Query) -> anyhow::Result<usize> {
+            let conn = self.db.connect()?;
+            let mut sql = String::from("SELECT COUNT(*) FROM clips c JOIN images i ON i.clip_id = c.id WHERE c.deleted_at IS NULL AND c.kind = 'image'");
+            if q.favorites_only {
+                sql.push_str(" AND c.is_favorite = 1");
+            }
+            let n: i64 = self.rt.block_on(async {
+                let mut rows = conn.query(&sql, ()).await?;
+                let r = rows.next().await?.unwrap();
+                let v: i64 = r.get::<i64>(0)?;
+                Ok::<i64, libsql::Error>(v)
+            })?;
+            Ok(n as usize)
         }
     }
 }

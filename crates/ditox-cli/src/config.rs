@@ -56,6 +56,10 @@ pub struct Images {
 pub struct Tui {
     /// Page size (items per page); defaults to 10 when unset
     pub page_size: Option<usize>,
+    /// Auto-apply tag (text after '#') after N ms of idle typing in query mode
+    pub auto_apply_tag_ms: Option<u64>,
+    /// Show absolute timestamps in the picker (Created at • Last used)
+    pub absolute_times: Option<bool>,
 }
 
 pub fn images_dir(settings: &Settings) -> std::path::PathBuf {

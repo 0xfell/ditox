@@ -24,7 +24,7 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     no_watch: bool,
     /// Clipboard poll interval in milliseconds
-    #[arg(long, default_value_t = 1000)]
+    #[arg(long, default_value_t = 200)]
     poll_ms: u64,
     /// Exit automatically after N milliseconds (for CI/testing)
     #[arg(long)]
@@ -88,6 +88,7 @@ struct Response<T> {
 struct Page<T> {
     items: Vec<T>,
     more: bool,
+    total: Option<usize>,
 }
 
 fn main() -> Result<()> {
@@ -185,8 +186,17 @@ fn handle_client(store: Arc<ditox_core::StoreImpl>, stream: TcpStream) -> Result
             }) => {
                 let off = offset.unwrap_or(0);
                 if images {
-                    match list_images(&store, favorites, limit, tag.as_deref()) {
+                    match list_images(&store, favorites, limit, offset, tag.as_deref()) {
                         Ok(items) => {
+                            let total = store
+                                .count_images(ditox_core::Query {
+                                    contains: None,
+                                    favorites_only: favorites,
+                                    limit: None,
+                                    tag: tag.as_deref().map(|s| s.to_string()),
+                                    rank: false,
+                                })
+                                .ok();
                             let more = limit.map(|l| items.len() > off + l).unwrap_or(false);
                             let slice = if let Some(l) = limit {
                                 &items[off..items.len().min(off + l)]
@@ -196,6 +206,7 @@ fn handle_client(store: Arc<ditox_core::StoreImpl>, stream: TcpStream) -> Result
                             let page = Page {
                                 items: slice.to_vec(),
                                 more,
+                                total,
                             };
                             Response {
                                 ok: true,
@@ -210,8 +221,18 @@ fn handle_client(store: Arc<ditox_core::StoreImpl>, stream: TcpStream) -> Result
                         },
                     }
                 } else {
-                    match list_text(&store, favorites, limit, query.as_deref(), tag.as_deref()) {
+                    match list_text(
+                        &store,
+                        favorites,
+                        limit,
+                        offset,
+                        query.as_deref(),
+                        tag.as_deref(),
+                    ) {
                         Ok(items) => {
+                            let (count_q, _) =
+                                build_text_query(favorites, query.as_deref(), tag.as_deref());
+                            let total = store.count(count_q).ok();
                             let more = limit.map(|l| items.len() > off + l).unwrap_or(false);
                             let slice = if let Some(l) = limit {
                                 &items[off..items.len().min(off + l)]
@@ -221,6 +242,7 @@ fn handle_client(store: Arc<ditox_core::StoreImpl>, stream: TcpStream) -> Result
                             let page = Page {
                                 items: slice.to_vec(),
                                 more,
+                                total,
                             };
                             Response {
                                 ok: true,
@@ -254,9 +276,54 @@ fn list_text(
     store: &ditox_core::StoreImpl,
     favorites: bool,
     limit: Option<usize>,
+    offset: Option<usize>,
     query: Option<&str>,
     tag: Option<&str>,
 ) -> Result<Vec<Item>> {
+    let (mut base_q, _fav_resolved) = build_text_query(favorites, query, tag);
+    let off = offset.unwrap_or(0);
+    base_q.limit = limit.map(|l| off + l + 1);
+    let q = base_q;
+    let items = store.list(q)?;
+    let mut out = Vec::with_capacity(items.len());
+    for c in items {
+        out.push(Item::Text {
+            id: c.id,
+            favorite: c.is_favorite,
+            created_at: c.created_at.unix_timestamp_nanos() as i64,
+            last_used_at: c.last_used_at.map(|t| t.unix_timestamp_nanos() as i64),
+            text: c.text,
+        });
+    }
+    Ok(out)
+}
+
+#[allow(dead_code)]
+fn contains_from(q: Option<&str>) -> Option<String> {
+    q.and_then(|qs| {
+        let mut rest: Vec<&str> = Vec::new();
+        for tok in qs.split_whitespace() {
+            if tok.starts_with("tag:")
+                || tok.eq_ignore_ascii_case("is:fav")
+                || tok.eq_ignore_ascii_case("is:favorite")
+            {
+                continue;
+            }
+            rest.push(tok);
+        }
+        if rest.is_empty() {
+            None
+        } else {
+            Some(rest.join(" "))
+        }
+    })
+}
+
+fn build_text_query(
+    favorites: bool,
+    query: Option<&str>,
+    tag: Option<&str>,
+) -> (ditox_core::Query, bool) {
     // Parse simple operators in query: tag:foo, is:fav
     let mut fav = favorites;
     let mut tag_opt = tag.map(|s| s.to_string());
@@ -279,37 +346,31 @@ fn list_text(
             contains = Some(rest.join(" "));
         }
     }
-    let q = ditox_core::Query {
-        contains,
-        favorites_only: fav,
-        limit,
-        tag: tag_opt,
-        rank: false,
-    };
-    let items = store.list(q)?;
-    let mut out = Vec::with_capacity(items.len());
-    for c in items {
-        out.push(Item::Text {
-            id: c.id,
-            favorite: c.is_favorite,
-            created_at: c.created_at.unix_timestamp(),
-            last_used_at: c.last_used_at.map(|t| t.unix_timestamp()),
-            text: c.text,
-        });
-    }
-    Ok(out)
+    (
+        ditox_core::Query {
+            contains,
+            favorites_only: fav,
+            limit: None,
+            tag: tag_opt,
+            rank: false,
+        },
+        fav,
+    )
 }
 
 fn list_images(
     store: &ditox_core::StoreImpl,
     favorites: bool,
     limit: Option<usize>,
+    offset: Option<usize>,
     tag: Option<&str>,
 ) -> Result<Vec<Item>> {
+    let off = offset.unwrap_or(0);
+    let fetch_limit = limit.map(|l| off + l + 1);
     let q = ditox_core::Query {
         contains: None,
         favorites_only: favorites,
-        limit,
+        limit: fetch_limit,
         tag: tag.map(|s| s.to_string()),
         rank: false,
     };
@@ -319,8 +380,8 @@ fn list_images(
         out.push(Item::Image {
             id: c.id,
             favorite: c.is_favorite,
-            created_at: c.created_at.unix_timestamp(),
-            last_used_at: c.last_used_at.map(|t| t.unix_timestamp()),
+            created_at: c.created_at.unix_timestamp_nanos() as i64,
+            last_used_at: c.last_used_at.map(|t| t.unix_timestamp_nanos() as i64),
             width: m.width,
             height: m.height,
             format: m.format,
@@ -370,13 +431,58 @@ fn clipboard_watch_loop(store: Arc<ditox_core::StoreImpl>, poll_ms: u64) {
     let cb = ditox_core::clipboard::NoopClipboard;
     let last = Arc::new(Mutex::new((None::<String>, 0usize)));
     loop {
-        if let Ok(Some(text)) = cb.get_text() {
+        if let Ok(Some(mut text)) = cb.get_text() {
+            // Normalize simple trailing newlines from some apps
+            if text.ends_with('\n') {
+                text.pop();
+            }
             let mut guard = last.lock().unwrap();
-            let h = text.len();
-            if guard.0.as_ref().map(|s| s != &text).unwrap_or(true) || guard.1 != h {
-                // naive change detection by content + length
-                let _ = store.add(&text);
-                *guard = (Some(text), h);
+            let changed =
+                guard.0.as_ref().map(|s| s != &text).unwrap_or(true) || guard.1 != text.len();
+            if changed {
+                // Deduplicate by exact text; update last_used when found, else insert
+                match store.find_id_by_exact_text(&text) {
+                    Ok(Some(id)) => {
+                        let _ = store.touch_last_used(&id);
+                    }
+                    Ok(None) => {
+                        let _ = store.add(&text);
+                    }
+                    Err(_) => {
+                        let _ = store.add(&text);
+                    }
+                }
+                *guard = (Some(text), guard.1);
+                guard.1 = guard.0.as_ref().map(|s| s.len()).unwrap_or(0);
+
+                // Burst drain: quickly sample a few times to catch rapid changes
+                drop(guard);
+                for _ in 0..8 {
+                    std::thread::sleep(std::time::Duration::from_millis(30));
+                    if let Ok(Some(mut txt2)) = cb.get_text() {
+                        if txt2.ends_with('\n') {
+                            txt2.pop();
+                        }
+                        let mut g = last.lock().unwrap();
+                        let diff =
+                            g.0.as_ref().map(|s| s != &txt2).unwrap_or(true) || g.1 != txt2.len();
+                        if diff {
+                            match store.find_id_by_exact_text(&txt2) {
+                                Ok(Some(id)) => {
+                                    let _ = store.touch_last_used(&id);
+                                }
+                                Ok(None) => {
+                                    let _ = store.add(&txt2);
+                                }
+                                Err(_) => {
+                                    let _ = store.add(&txt2);
+                                }
+                            }
+                            *g = (Some(txt2), g.1);
+                            g.1 = g.0.as_ref().map(|s| s.len()).unwrap_or(0);
+                        }
+                    }
+                }
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(poll_ms));

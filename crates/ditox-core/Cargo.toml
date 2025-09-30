@@ -39,3 +39,6 @@ features = ["bundled"]
 [dependencies.arboard]
 version = "3"
 optional = true
+# Wayland clipboard support (Hyprland etc.) isn’t enabled by default in arboard.
+# Enable it so clipd/CLI can read/write on Wayland compositors.
+features = ["wayland-data-control"]

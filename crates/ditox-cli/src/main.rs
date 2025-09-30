@@ -10,6 +10,7 @@ use std::path::PathBuf;
 // config module is declared at the top; avoid duplicate re-declaration here
 mod copy_helpers;
 mod doctor;
+mod lazy_store;
 mod picker;
 mod theme;
 mod xfer;
@@ -31,6 +32,9 @@ struct Cli {
     force_wl_copy: bool,
     #[command(subcommand)]
     command: Commands,
+    /// Timestamp precision for printed times (sec/ms/us/ns)
+    #[arg(long, value_enum, default_value_t = TsPrec::Ns)]
+    ts_precision: TsPrec,
 }
 
 #[derive(Subcommand)]
@@ -56,6 +60,9 @@ enum Commands {
         /// Pick images instead of text entries
         #[arg(long)]
         images: bool,
+        /// Force using the remote (Turso/libsql) backend directly
+        #[arg(long, default_value_t = false)]
+        remote: bool,
         /// Optional tag filter
         #[arg(long)]
         tag: Option<String>,
@@ -79,6 +86,9 @@ enum Commands {
         limit: Option<usize>,
         #[arg(long)]
         json: bool,
+        /// Show created/last_used timestamps (uses --ts-precision)
+        #[arg(long, default_value_t = false)]
+        show_times: bool,
     },
     /// Search entries by substring
     Search {
@@ -184,8 +194,12 @@ enum TagCmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let settings = load_settings();
-    let store = match cli.command {
+    let store: Box<dyn Store> = match cli.command {
+        // For `pick`, avoid opening DBs up front; we pass a lazy store below.
+        Commands::Pick { .. } => Box::new(ditox_core::MemStore::new()),
+        // Migrations are local-only by design; keep read-only local store here.
         Commands::Migrate { .. } => build_store_readonly(&cli, &settings)?,
+        // Others follow configured backend.
         _ => build_store(&cli, &settings)?,
     };
 
@@ -258,6 +272,7 @@ fn main() -> Result<()> {
             images,
             limit,
             json,
+            show_times,
         } => {
             if images {
                 let items = store.list_images(Query {
@@ -271,27 +286,51 @@ fn main() -> Result<()> {
                     println!("{}", serde_json::to_string_pretty(&items.iter().map(|(c,m)| serde_json::json!({
                         "id": c.id,
                         "favorite": c.is_favorite,
-                        "created_at": c.created_at,
+                        "created_at": fmt_ts_prec(&c.created_at, cli.ts_precision),
                         "path": c.image_path,
                         "meta": {"format": m.format, "width": m.width, "height": m.height, "size_bytes": m.size_bytes}
                     })).collect::<Vec<_>>())?);
                 } else {
                     for (c, m) in items {
-                        println!(
-                            "{}\t{}\t{}x{} {} {}",
-                            c.id,
-                            if c.is_favorite { "*" } else { " " },
-                            m.width,
-                            m.height,
-                            m.format,
-                            c.image_path
-                                .as_deref()
-                                .map(|p| std::path::Path::new(p)
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or(p))
-                                .unwrap_or("")
-                        );
+                        if show_times {
+                            let last = c
+                                .last_used_at
+                                .map(|t| fmt_ts_prec(&t, cli.ts_precision))
+                                .unwrap_or_else(|| "never".into());
+                            println!(
+                                "{}\t{}\t{}\t{}\t{}x{} {} {}",
+                                c.id,
+                                if c.is_favorite { "*" } else { " " },
+                                fmt_ts_prec(&c.created_at, cli.ts_precision),
+                                last,
+                                m.width,
+                                m.height,
+                                m.format,
+                                c.image_path
+                                    .as_deref()
+                                    .map(|p| std::path::Path::new(p)
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or(p))
+                                    .unwrap_or("")
+                            );
+                        } else {
+                            println!(
+                                "{}\t{}\t{}x{} {} {}",
+                                c.id,
+                                if c.is_favorite { "*" } else { " " },
+                                m.width,
+                                m.height,
+                                m.format,
+                                c.image_path
+                                    .as_deref()
+                                    .map(|p| std::path::Path::new(p)
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or(p))
+                                    .unwrap_or("")
+                            );
+                        }
                     }
                 }
             } else {
@@ -303,7 +342,28 @@ fn main() -> Result<()> {
                     rank: false,
                 })?;
                 if json {
-                    println!("{}", serde_json::to_string_pretty(&items)?);
+                    println!("{}", serde_json::to_string_pretty(&items.iter().map(|c| serde_json::json!({
+                        "id": c.id,
+                        "favorite": c.is_favorite,
+                        "created_at": fmt_ts_prec(&c.created_at, cli.ts_precision),
+                        "last_used_at": c.last_used_at.map(|t| fmt_ts_prec(&t, cli.ts_precision)),
+                        "text": c.text,
+                    })).collect::<Vec<_>>())?);
+                } else if show_times {
+                    for c in items {
+                        let last = c
+                            .last_used_at
+                            .map(|t| fmt_ts_prec(&t, cli.ts_precision))
+                            .unwrap_or_else(|| "never".into());
+                        println!(
+                            "{}\t{}\t{}\t{}\t{}",
+                            c.id,
+                            if c.is_favorite { "*" } else { " " },
+                            fmt_ts_prec(&c.created_at, cli.ts_precision),
+                            last,
+                            preview(&c.text)
+                        );
+                    }
                 } else {
                     for c in items {
                         println!(
@@ -319,16 +379,56 @@ fn main() -> Result<()> {
         Commands::Pick {
             favorites,
             images,
+            remote,
             tag,
             no_daemon,
         } => {
+            // Build a lazy store so the first TUI frame appears instantly.
+            // Policy:
+            // - --remote forces Turso/libsql and disables daemon.
+            // - Otherwise, use local SQLite for picker operations so daemon path and direct DB writes stay consistent.
+            let lazy = if remote {
+                #[cfg(feature = "libsql")]
+                {
+                    match &settings.storage {
+                        config::Storage::Turso { url, auth_token } => {
+                            lazy_store::LazyStore::remote_libsql(url.clone(), auth_token.clone())
+                        }
+                        _ => {
+                            eprintln!(
+                                "remote backend not configured; falling back to local SQLite"
+                            );
+                            lazy_store::LazyStore::local_sqlite(default_db_path(), false)
+                        }
+                    }
+                }
+                #[cfg(not(feature = "libsql"))]
+                {
+                    eprintln!(
+                        "built without 'libsql' feature; --remote unavailable — using local SQLite"
+                    );
+                    lazy_store::LazyStore::local_sqlite(default_db_path(), false)
+                }
+            } else {
+                // Local store (matches clipd’s DB) — use configured path when present
+                let path = match &settings.storage {
+                    config::Storage::LocalSqlite { db_path } => {
+                        db_path.clone().unwrap_or_else(default_db_path)
+                    }
+                    config::Storage::Turso { .. } => default_db_path(),
+                };
+                lazy_store::LazyStore::local_sqlite(path, false)
+            };
+            // If --remote, bypass daemon even if running
+            let bypass_daemon = no_daemon || remote;
             picker::run_picker_default(
-                &*store,
+                &lazy,
                 favorites,
                 images,
                 tag,
-                no_daemon,
+                bypass_daemon,
                 cli.force_wl_copy,
+                remote,
             )?;
         }
         Commands::Search {
@@ -398,12 +498,12 @@ fn main() -> Result<()> {
                 match c.kind {
                     ClipKind::Text => {
                         println!("id:\t{}\nkind:\ttext\ncreated:\t{}\nfavorite:\t{}\nlen:\t{}\npreview:\t{}",
-                            c.id, c.created_at, c.is_favorite, c.text.len(), preview(&c.text));
+                            c.id, fmt_ts_prec(&c.created_at, cli.ts_precision), c.is_favorite, c.text.len(), preview(&c.text));
                     }
                     ClipKind::Image => {
                         if let Some(m) = store.get_image_meta(&id)? {
                             println!("id:\t{}\nkind:\timage\ncreated:\t{}\nfavorite:\t{}\nformat:\t{}\nsize:\t{} bytes\ndims:\t{}x{}\nsha256:\t{}\npath:\t{}",
-                                c.id, c.created_at, c.is_favorite, m.format, m.size_bytes, m.width, m.height, m.sha256, c.image_path.as_deref().unwrap_or("<in-entry>"));
+                                c.id, fmt_ts_prec(&c.created_at, cli.ts_precision), c.is_favorite, m.format, m.size_bytes, m.width, m.height, m.sha256, c.image_path.as_deref().unwrap_or("<in-entry>"));
                         } else {
                             println!(
                                 "id:\t{}\nkind:\timage (metadata missing)\npath:\t{}",
@@ -739,8 +839,13 @@ fn main() -> Result<()> {
 pub fn preview(s: &str) -> String {
     let s = s.replace('\n', " ");
     const MAX: usize = 60;
-    if s.len() > MAX {
-        format!("{}…", &s[..MAX])
+    if s.chars().count() > MAX {
+        let cut = s
+            .char_indices()
+            .nth(MAX)
+            .map(|(idx, _)| idx)
+            .unwrap_or_else(|| s.len());
+        format!("{}…", &s[..cut])
     } else {
         s
     }
@@ -750,6 +855,49 @@ pub fn preview(s: &str) -> String {
 enum StoreKind {
     Sqlite,
     Mem,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum TsPrec {
+    Sec,
+    Ms,
+    Us,
+    Ns,
+}
+
+fn fmt_ts_prec(ts: &time::OffsetDateTime, p: TsPrec) -> String {
+    match p {
+        TsPrec::Sec => ts
+            .format(
+                &time::format_description::parse("[year]-[month]-[day] [hour]:[minute]:[second]")
+                    .unwrap(),
+            )
+            .unwrap_or_else(|_| ts.to_string()),
+        TsPrec::Ms => ts
+            .format(
+                &time::format_description::parse(
+                    "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]",
+                )
+                .unwrap(),
+            )
+            .unwrap_or_else(|_| ts.to_string()),
+        TsPrec::Us => ts
+            .format(
+                &time::format_description::parse(
+                    "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:6]",
+                )
+                .unwrap(),
+            )
+            .unwrap_or_else(|_| ts.to_string()),
+        TsPrec::Ns => ts
+            .format(
+                &time::format_description::parse(
+                    "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:9]",
+                )
+                .unwrap(),
+            )
+            .unwrap_or_else(|_| ts.to_string()),
+    }
 }
 
 fn build_store(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>> {
@@ -822,6 +970,19 @@ fn chrono_like_timestamp() -> String {
     let dt: time::OffsetDateTime = now.into();
     dt.format(&time::format_description::parse("yyyyMMddHHmmss").unwrap())
         .unwrap()
+}
+
+#[allow(dead_code)]
+fn fmt_ts(ts: &time::OffsetDateTime) -> String {
+    // Example: 2025-09-30 07:07:00.490854340
+    static FMT: once_cell::sync::Lazy<Vec<time::format_description::FormatItem>> =
+        once_cell::sync::Lazy::new(|| {
+            time::format_description::parse(
+                "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:9]",
+            )
+            .unwrap()
+        });
+    ts.format(&FMT).unwrap_or_else(|_| ts.to_string())
 }
 
 fn parse_human_duration(s: &str) -> Result<time::Duration> {
