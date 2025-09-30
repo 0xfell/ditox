@@ -32,4 +32,4 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
-          arguments: --hide-inclusion-graph
+          command-arguments: --hide-inclusion-graph
