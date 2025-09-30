@@ -366,7 +366,7 @@ pub fn run_picker_with(
                 if fav_filter { title.push_str(" — Favorites"); }
                 if let Some(ref t) = tag_filter { if !t.is_empty() { title.push_str(&format!(" — Tag: {}", t)); } }
                 // Counts + page
-                let count_label = if fav_filter { format!(" — Total favoritoes {}", total) } else { format!(" — Total entries {}", total) };
+                let count_label = if fav_filter { format!(" — Total favorites {}", total) } else { format!(" — Total entries {}", total) };
                 let page_label = format!(" — Page {}/{} (page size {})", page_index + 1, total_pages.max(1), page_size);
                 title.push_str(&count_label);
                 title.push_str(&page_label);
