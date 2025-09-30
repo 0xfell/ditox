@@ -209,6 +209,28 @@ Per‑user systemd timers can automate pruning and optional remote sync:
 
 - Workspace build: `cargo build`
 - CLI only: `cargo build -p ditox-cli`
+
+### TUI (Picker)
+
+- Launch: `cargo run -p ditox-cli -- pick --no-daemon`
+- Keys: `/: search`, `f: toggle favorites`, `i: toggle images`, `t: apply current query as tag`, `r: refresh`, `Enter: copy`, `Esc/Ctrl+C: cancel`, `↑/↓/PgUp/PgDn: move`.
+  - Each list item now shows two lines: preview, and a dim metadata line with "Created <relative> • Last used <relative|never>". IDs are hidden in the TUI for readability; printed IDs in headless mode remain unchanged.
+- Copy behavior:
+  - Linux/Wayland: uses `wl-copy` when available (for persistence), otherwise falls back to arboard → xclip/xsel.
+  - macOS: uses system clipboard; falls back to `pbcopy`.
+  - Windows: uses system clipboard; falls back to `clip`.
+- Options:
+  - `--force-wl-copy` (Linux): prefer `wl-copy` even if Wayland isn’t detected.
+
+Theme (experimental): create `~/.config/ditox/tui_theme.toml` to customize colors.
+
+```
+# ~/.config/ditox/tui_theme.toml
+highlight_fg = "black"
+highlight_bg = "#00ffff"   # hex or rgb(0,255,255)
+border_fg    = "gray"
+```
+
 - Lint and format: `cargo fmt --all` and `cargo clippy --all-targets -- -D warnings`
 - Tests: `cargo test --all`
     - Clipboard E2E image test runs on Linux only and is guarded by `DITOX_E2E_CLIPBOARD=1`.

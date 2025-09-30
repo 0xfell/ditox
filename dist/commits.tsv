@@ -1,0 +1,4 @@
+cec8ce955d5f72144864bd1b15f56cb54bf7bd55	ci(release): add SHA256 uploads; richer notes (compare link, sections, contributors)	0xfell
+eb61d9a54cbe1a20b8f6dd31f42b9969618a423f	ci(release): add Nix asset to manual upload workflow	0xfell
+fdfae336e6977f4cb4312ab59d700b63a103c702	ci(release): generate structured notes; upload Nix asset; fix asset naming	0xfell
+65795b6cca4020209782f284fb174a4ee55ca88d	ci(release): fix asset naming; add manual upload workflow for existing tags	0xfell

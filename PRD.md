@@ -85,6 +85,7 @@ Notes
     - `kind` TEXT ('text'|'image')
     - `text` TEXT
     - `created_at` INTEGER (unix seconds)
+    - `last_used_at` INTEGER NULL (unix seconds; updated when selected/copied)
     - `is_favorite` INTEGER (0/1)
     - `deleted_at` INTEGER NULL
     - Image columns: `is_image` INTEGER (0/1), `image_path` TEXT NULL
