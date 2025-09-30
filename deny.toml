@@ -5,7 +5,7 @@ all-features = true
 # deny any vulnerable advisories; allow yanked (often false positives)
 vulnerability = "deny"
 yanked = "warn"
-unmaintained = "warn"
+unmaintained = "workspace"
 notice = "warn"
 ignore = []
 
