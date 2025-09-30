@@ -19,16 +19,16 @@ clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ditox-core = { version = "1.0.1", path = "../ditox-core", features = ["sqlite", "clipboard"] }
-directories = "5"
+directories = "6"
 time = { version = "0.3", features = ["formatting"] }
 image = { version = "0.25", default-features = false, features = ["png","jpeg","gif","bmp","tiff","webp"] }
-toml = "0.8"
+toml = "0.9"
 whoami = "1"
 shellexpand = "3"
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
-libsql = { version = "0.3", optional = true }
-ratatui = "0.27"
-crossterm = "0.27"
+libsql = { version = "0.9", optional = true }
+ratatui = "0.29"
+crossterm = "0.29"
 fuzzy-matcher = "0.3"
 sha2 = "0.10"
 hex = "0.4"
