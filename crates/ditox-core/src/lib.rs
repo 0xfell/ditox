@@ -158,6 +158,15 @@ impl Store for MemStore {
             })
             .cloned()
             .collect();
+        // Sort by the most recent of created_at or last_used_at (descending)
+        items.sort_by_key(|c| {
+            let created = c.created_at.unix_timestamp();
+            let last = c
+                .last_used_at
+                .map(|t| t.unix_timestamp())
+                .unwrap_or(created);
+            std::cmp::Reverse(std::cmp::max(created, last))
+        });
         if let Some(limit) = q.limit {
             items.truncate(limit);
         }
@@ -260,6 +269,15 @@ impl Store for MemStore {
                 ));
             }
         }
+        // Sort by most recent of created_at or last_used_at (descending)
+        out.sort_by_key(|(c, _)| {
+            let created = c.created_at.unix_timestamp();
+            let last = c
+                .last_used_at
+                .map(|t| t.unix_timestamp())
+                .unwrap_or(created);
+            std::cmp::Reverse(std::cmp::max(created, last))
+        });
         if let Some(limit) = q.limit {
             out.truncate(limit);
         }
@@ -466,7 +484,11 @@ mod sqlite_store {
             if (has_is_image && has_image_path) && current < 3 {
                 let _ = conn.execute_batch("PRAGMA user_version = 3");
             }
-            let current = if (has_is_image && has_image_path) && current < 3 { 3 } else { current };
+            let current = if (has_is_image && has_image_path) && current < 3 {
+                3
+            } else {
+                current
+            };
             let has_updated_at: bool = {
                 conn.prepare("SELECT 1 FROM pragma_table_info('clips') WHERE name='updated_at'")?
                     .exists([])?
@@ -503,7 +525,9 @@ mod sqlite_store {
                         .prepare("SELECT 1 FROM pragma_table_info('clips') WHERE name='is_image'")?
                         .exists([])?;
                     let has_image_path: bool = conn
-                        .prepare("SELECT 1 FROM pragma_table_info('clips') WHERE name='image_path'")?
+                        .prepare(
+                            "SELECT 1 FROM pragma_table_info('clips') WHERE name='image_path'",
+                        )?
                         .exists([])?;
                     if has_is_image && has_image_path {
                         continue;
@@ -640,11 +664,10 @@ mod sqlite_store {
                         params.push(rusqlite::types::Value::Text(tag.clone()));
                     }
                     if q.rank {
-                        sql.push_str(
-                            " AND f.text MATCH ? ORDER BY bm25(clips_fts) ASC, c.created_at DESC",
-                        );
+                        // Rank primary by bm25, then by recency (max of created_at or last_used_at)
+                        sql.push_str(" AND f.text MATCH ? ORDER BY bm25(clips_fts) ASC, MAX(c.created_at, COALESCE(c.last_used_at, c.created_at)) DESC");
                     } else {
-                        sql.push_str(" AND f.text MATCH ? ORDER BY c.created_at DESC");
+                        sql.push_str(" AND f.text MATCH ? ORDER BY MAX(c.created_at, COALESCE(c.last_used_at, c.created_at)) DESC");
                     }
                     params.push(rusqlite::types::Value::Text(term.clone()));
                     let mut stmt = conn.prepare(&sql)?;
@@ -672,7 +695,9 @@ mod sqlite_store {
                 } else {
                     sql.push_str(" AND c.text LIKE ?");
                     let like = format!("%{}%", term);
-                    sql.push_str(" ORDER BY created_at DESC");
+                    sql.push_str(
+                        " ORDER BY MAX(c.created_at, COALESCE(c.last_used_at, c.created_at)) DESC",
+                    );
                     if let Some(limit) = q.limit {
                         sql.push_str(&format!(" LIMIT {}", limit));
                     }
@@ -698,7 +723,10 @@ mod sqlite_store {
                     return Ok(out);
                 }
             }
-            sql.push_str(" ORDER BY created_at DESC");
+            // Order by most recent of created_at or last_used_at
+            sql.push_str(
+                " ORDER BY MAX(c.created_at, COALESCE(c.last_used_at, c.created_at)) DESC",
+            );
             if let Some(limit) = q.limit {
                 sql.push_str(&format!(" LIMIT {}", limit));
             }
@@ -906,7 +934,10 @@ mod sqlite_store {
                 sql.push_str(" AND EXISTS (SELECT 1 FROM clip_tags ct WHERE ct.clip_id = c.id AND ct.name = ?)");
                 params.push(rusqlite::types::Value::Text(tag.clone()));
             }
-            sql.push_str(" ORDER BY c.created_at DESC");
+            // Order by most recent of created_at or last_used_at
+            sql.push_str(
+                " ORDER BY MAX(c.created_at, COALESCE(c.last_used_at, c.created_at)) DESC",
+            );
             if let Some(limit) = q.limit {
                 sql.push_str(&format!(" LIMIT {}", limit));
             }
@@ -944,7 +975,9 @@ mod sqlite_store {
             let conn = self.conn.lock().unwrap();
             let now = OffsetDateTime::now_utc().unix_timestamp();
             let lamport: i64 = conn
-                .query_row("SELECT COALESCE(MAX(lamport),0)+1 FROM clips", [], |r| r.get(0))
+                .query_row("SELECT COALESCE(MAX(lamport),0)+1 FROM clips", [], |r| {
+                    r.get(0)
+                })
                 .unwrap_or(1);
             conn.execute(
                 "UPDATE clips SET last_used_at = ?, updated_at = ?, lamport = ? WHERE id = ?",
@@ -1557,25 +1590,26 @@ pub mod libsql_backend {
             };
 
             let mut out = Vec::new();
-            let rows_vec: Vec<(String, String, i64, i64, Option<i64>)> = self.rt.block_on(async {
-                let mut rows = rows;
-                let mut tmp = Vec::new();
-                loop {
-                    match rows.next().await {
-                        Ok(Some(r)) => {
-                            let id: String = r.get::<String>(0)?;
-                            let text: String = r.get::<String>(1)?;
-                            let created: i64 = r.get::<i64>(2)?;
-                            let fav: i64 = r.get::<i64>(3)?;
-                            let last: Option<i64> = r.get::<Option<i64>>(4)?;
-                            tmp.push((id, text, created, fav, last));
+            let rows_vec: Vec<(String, String, i64, i64, Option<i64>)> =
+                self.rt.block_on(async {
+                    let mut rows = rows;
+                    let mut tmp = Vec::new();
+                    loop {
+                        match rows.next().await {
+                            Ok(Some(r)) => {
+                                let id: String = r.get::<String>(0)?;
+                                let text: String = r.get::<String>(1)?;
+                                let created: i64 = r.get::<i64>(2)?;
+                                let fav: i64 = r.get::<i64>(3)?;
+                                let last: Option<i64> = r.get::<Option<i64>>(4)?;
+                                tmp.push((id, text, created, fav, last));
+                            }
+                            Ok(None) => break,
+                            Err(e) => return Err(e),
                         }
-                        Ok(None) => break,
-                        Err(e) => return Err(e),
                     }
-                }
-                Ok::<_, libsql::Error>(tmp)
-            })?;
+                    Ok::<_, libsql::Error>(tmp)
+                })?;
             for (id, text, created, fav, last) in rows_vec {
                 let created_at = OffsetDateTime::from_unix_timestamp(created)
                     .unwrap_or(OffsetDateTime::UNIX_EPOCH);
@@ -1616,7 +1650,8 @@ pub mod libsql_backend {
                             id: r.get::<String>(0)?,
                             text: r.get::<String>(2)?,
                             created_at,
-                            last_used_at: last.and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
+                            last_used_at: last
+                                .and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
                             is_favorite: {
                                 let v: i64 = r.get::<i64>(4)?;
                                 v != 0
