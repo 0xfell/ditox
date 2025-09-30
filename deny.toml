@@ -2,11 +2,9 @@
 all-features = true
 
 [advisories]
-# deny any vulnerable advisories; allow yanked (often false positives)
-vulnerability = "deny"
-yanked = "warn"
+# cargo-deny >=0.16 removes 'vulnerability' and 'notice'; advisories are denied by default.
 unmaintained = "workspace"
-notice = "warn"
+yanked = "warn"
 ignore = []
 
 [bans]
@@ -16,7 +14,6 @@ deny = []
 wildcards = "allow"
 
 [licenses]
-unlicensed = "deny"
 allow = [
   "Apache-2.0",
   "MIT",
@@ -29,8 +26,6 @@ allow = [
   "MPL-2.0",
   "MIT-0",
 ]
-# Some crates mark license as OR variants; treat them as allowed
-copyleft = "warn"
 confidence-threshold = 0.8
 
 [sources]
