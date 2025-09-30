@@ -294,7 +294,7 @@ pub fn run_picker_with(
     // Draw immediate loading frame
     if let Some(ref mut term) = terminal {
         term.draw(|f| {
-            let size = f.size();
+            let size = f.area();
             let block = Block::default().borders(Borders::ALL).title("Loading…");
             f.render_widget(block, size);
         })?;
@@ -448,7 +448,7 @@ pub fn run_picker_with(
 
         if let Some(ref mut term) = terminal {
             term.draw(|f| {
-                let size = f.size();
+                let size = f.area();
                 let chunks = if mode == Mode::Query {
                     Layout::default()
                         .direction(Direction::Vertical)
