@@ -11,6 +11,7 @@ pub struct Clip {
     pub id: ClipId,
     pub text: String,
     pub created_at: OffsetDateTime,
+    pub last_used_at: Option<OffsetDateTime>,
     pub is_favorite: bool,
     pub kind: ClipKind,
     pub is_image: bool,
@@ -23,6 +24,7 @@ impl Clip {
             id,
             text: text.into(),
             created_at: OffsetDateTime::now_utc(),
+            last_used_at: None,
             is_favorite: false,
             kind: ClipKind::Text,
             is_image: false,
@@ -73,6 +75,7 @@ pub trait Store: Send + Sync {
     fn add(&self, text: &str) -> anyhow::Result<Clip>;
     fn list(&self, q: Query) -> anyhow::Result<Vec<Clip>>;
     fn get(&self, id: &str) -> anyhow::Result<Option<Clip>>;
+    fn touch_last_used(&self, id: &str) -> anyhow::Result<()>;
     fn favorite(&self, id: &str, fav: bool) -> anyhow::Result<()>;
     fn delete(&self, id: &str) -> anyhow::Result<()>;
     fn clear(&self) -> anyhow::Result<()>;
@@ -127,6 +130,7 @@ impl Store for MemStore {
             id: gen_id(),
             text: text.to_string(),
             created_at: OffsetDateTime::now_utc(),
+            last_used_at: None,
             is_favorite: false,
             kind: ClipKind::Text,
             is_image: false,
@@ -193,6 +197,7 @@ impl Store for MemStore {
             id: id.clone(),
             text: String::new(),
             created_at: OffsetDateTime::now_utc(),
+            last_used_at: None,
             is_favorite: false,
             kind: ClipKind::Image,
             is_image: true,
@@ -313,6 +318,14 @@ impl Store for MemStore {
             .get(id)
             .map(|s| s.iter().cloned().collect())
             .unwrap_or_default())
+    }
+
+    fn touch_last_used(&self, id: &str) -> anyhow::Result<()> {
+        let mut v = self.inner.write().unwrap();
+        if let Some(c) = v.iter_mut().find(|c| c.id == id) {
+            c.last_used_at = Some(OffsetDateTime::now_utc());
+        }
+        Ok(())
     }
 }
 
@@ -439,19 +452,21 @@ mod sqlite_store {
 
         fn run_migrations(&self, conn: &Connection, auto: bool) -> anyhow::Result<()> {
             let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-            // Heuristic: bump user_version if schema objects already exist
-            let has_is_image: bool = {
-                conn.prepare("SELECT 1 FROM pragma_table_info('clips') WHERE name='is_image'")?
-                    .exists([])?
-            };
-            if has_is_image && current < 3 {
+            // Heuristic: bump user_version if schema objects already exist, and fix partial upgrades
+            let has_is_image: bool = conn
+                .prepare("SELECT 1 FROM pragma_table_info('clips') WHERE name='is_image'")?
+                .exists([])?;
+            let has_image_path: bool = conn
+                .prepare("SELECT 1 FROM pragma_table_info('clips') WHERE name='image_path'")?
+                .exists([])?;
+            // Some older DBs may have is_image but not image_path; add it proactively
+            if has_is_image && !has_image_path {
+                let _ = conn.execute_batch("ALTER TABLE clips ADD COLUMN image_path TEXT;");
+            }
+            if (has_is_image && has_image_path) && current < 3 {
                 let _ = conn.execute_batch("PRAGMA user_version = 3");
             }
-            let current = if has_is_image && current < 3 {
-                3
-            } else {
-                current
-            };
+            let current = if (has_is_image && has_image_path) && current < 3 { 3 } else { current };
             let has_updated_at: bool = {
                 conn.prepare("SELECT 1 FROM pragma_table_info('clips') WHERE name='updated_at'")?
                     .exists([])?
@@ -482,12 +497,15 @@ mod sqlite_store {
                 if ver <= current {
                     continue;
                 }
-                // Skip image-path migration if columns already exist
+                // Skip image-path migration only if both columns exist
                 if name.contains("0003_images_path") {
-                    let exists: bool = conn
+                    let has_is_image: bool = conn
                         .prepare("SELECT 1 FROM pragma_table_info('clips') WHERE name='is_image'")?
                         .exists([])?;
-                    if exists {
+                    let has_image_path: bool = conn
+                        .prepare("SELECT 1 FROM pragma_table_info('clips') WHERE name='image_path'")?
+                        .exists([])?;
+                    if has_is_image && has_image_path {
                         continue;
                     }
                 }
@@ -587,6 +605,7 @@ mod sqlite_store {
                 id,
                 text: text.to_string(),
                 created_at: OffsetDateTime::from_unix_timestamp(created_at)?,
+                last_used_at: None,
                 is_favorite: false,
                 kind: ClipKind::Text,
                 is_image: false,
@@ -597,7 +616,7 @@ mod sqlite_store {
 
         fn list(&self, q: Query) -> anyhow::Result<Vec<Clip>> {
             let conn = self.conn.lock().unwrap();
-            let mut sql = String::from("SELECT c.id, c.text, c.created_at, c.is_favorite FROM clips c WHERE c.deleted_at IS NULL AND c.kind = 'text'");
+            let mut sql = String::from("SELECT c.id, c.text, c.created_at, c.is_favorite, c.last_used_at FROM clips c WHERE c.deleted_at IS NULL AND c.kind = 'text'");
             if q.favorites_only {
                 sql.push_str(" AND c.is_favorite = 1");
             }
@@ -612,7 +631,7 @@ mod sqlite_store {
                     .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='clips_fts'")?
                     .exists([])?;
                 if has_fts {
-                    sql = String::from("SELECT c.id, c.text, c.created_at, c.is_favorite FROM clips c JOIN clips_fts f ON f.rowid = c.rowid WHERE c.deleted_at IS NULL AND c.kind = 'text'");
+                    sql = String::from("SELECT c.id, c.text, c.created_at, c.is_favorite, c.last_used_at FROM clips c JOIN clips_fts f ON f.rowid = c.rowid WHERE c.deleted_at IS NULL AND c.kind = 'text'");
                     if q.favorites_only {
                         sql.push_str(" AND c.is_favorite = 1");
                     }
@@ -633,10 +652,13 @@ mod sqlite_store {
                     let mut out = Vec::new();
                     while let Some(row) = rows.next()? {
                         let created: i64 = row.get(2)?;
+                        let last_used: Option<i64> = row.get(4)?;
                         out.push(Clip {
                             id: row.get(0)?,
                             text: row.get(1)?,
                             created_at: OffsetDateTime::from_unix_timestamp(created)?,
+                            last_used_at: last_used
+                                .and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
                             is_favorite: row.get::<_, i64>(3)? != 0,
                             kind: ClipKind::Text,
                             is_image: false,
@@ -660,10 +682,13 @@ mod sqlite_store {
                     let mut out = Vec::new();
                     while let Some(row) = rows.next()? {
                         let created: i64 = row.get(2)?;
+                        let last_used: Option<i64> = row.get(4)?;
                         out.push(Clip {
                             id: row.get(0)?,
                             text: row.get(1)?,
                             created_at: OffsetDateTime::from_unix_timestamp(created)?,
+                            last_used_at: last_used
+                                .and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
                             is_favorite: row.get::<_, i64>(3)? != 0,
                             kind: ClipKind::Text,
                             is_image: false,
@@ -682,10 +707,13 @@ mod sqlite_store {
             let mut out = Vec::new();
             while let Some(row) = rows.next()? {
                 let created: i64 = row.get(2)?;
+                let last_used: Option<i64> = row.get(4)?;
                 out.push(Clip {
                     id: row.get(0)?,
                     text: row.get(1)?,
                     created_at: OffsetDateTime::from_unix_timestamp(created)?,
+                    last_used_at: last_used
+                        .and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
                     is_favorite: row.get::<_, i64>(3)? != 0,
                     kind: ClipKind::Text,
                     is_image: false,
@@ -697,10 +725,11 @@ mod sqlite_store {
 
         fn get(&self, id: &str) -> anyhow::Result<Option<Clip>> {
             let conn = self.conn.lock().unwrap();
-            let mut stmt = conn.prepare("SELECT id, kind, text, created_at, is_favorite, COALESCE(image_path,''), CASE WHEN kind='image' THEN 1 ELSE 0 END FROM clips WHERE id = ? AND deleted_at IS NULL")?;
+            let mut stmt = conn.prepare("SELECT id, kind, text, created_at, is_favorite, COALESCE(image_path,''), CASE WHEN kind='image' THEN 1 ELSE 0 END, last_used_at FROM clips WHERE id = ? AND deleted_at IS NULL")?;
             let opt = stmt
                 .query_row([id], |row| {
                     let created: i64 = row.get(3)?;
+                    let last_used: Option<i64> = row.get(7)?;
                     let kind_str: String = row.get(1)?;
                     let kind = if kind_str == "image" {
                         ClipKind::Image
@@ -714,6 +743,8 @@ mod sqlite_store {
                         text: row.get(2)?,
                         created_at: OffsetDateTime::from_unix_timestamp(created)
                             .unwrap_or(OffsetDateTime::now_utc()),
+                        last_used_at: last_used
+                            .and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
                         is_favorite: row.get::<_, i64>(4)? != 0,
                         kind,
                         is_image: is_image != 0,
@@ -766,6 +797,7 @@ mod sqlite_store {
                 id,
                 text: String::new(),
                 created_at: OffsetDateTime::from_unix_timestamp(created_at)?,
+                last_used_at: None,
                 is_favorite: false,
                 kind: ClipKind::Image,
                 is_image: true,
@@ -801,6 +833,7 @@ mod sqlite_store {
                 id,
                 text: String::new(),
                 created_at: OffsetDateTime::from_unix_timestamp(created_at)?,
+                last_used_at: None,
                 is_favorite: false,
                 kind: ClipKind::Image,
                 is_image: true,
@@ -864,7 +897,7 @@ mod sqlite_store {
 
         fn list_images(&self, q: Query) -> anyhow::Result<Vec<(Clip, ImageMeta)>> {
             let conn = self.conn.lock().unwrap();
-            let mut sql = String::from("SELECT c.id, c.created_at, c.is_favorite, c.image_path, i.format, i.width, i.height, i.size_bytes, i.sha256, i.thumb_path FROM clips c JOIN images i ON i.clip_id = c.id WHERE c.deleted_at IS NULL AND c.kind = 'image'");
+            let mut sql = String::from("SELECT c.id, c.created_at, c.is_favorite, c.image_path, c.last_used_at, i.format, i.width, i.height, i.size_bytes, i.sha256, i.thumb_path FROM clips c JOIN images i ON i.clip_id = c.id WHERE c.deleted_at IS NULL AND c.kind = 'image'");
             let mut params: Vec<rusqlite::types::Value> = Vec::new();
             if q.favorites_only {
                 sql.push_str(" AND c.is_favorite = 1");
@@ -882,26 +915,42 @@ mod sqlite_store {
             let mut out = Vec::new();
             while let Some(row) = rows.next()? {
                 let created: i64 = row.get(1)?;
+                let last_used: Option<i64> = row.get(4)?;
                 let clip = Clip {
                     id: row.get(0)?,
                     text: String::new(),
                     created_at: OffsetDateTime::from_unix_timestamp(created)?,
+                    last_used_at: last_used
+                        .and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
                     is_favorite: row.get::<_, i64>(2)? != 0,
                     kind: ClipKind::Image,
                     is_image: true,
                     image_path: row.get::<_, Option<String>>(3)?,
                 };
                 let meta = ImageMeta {
-                    format: row.get(4)?,
-                    width: row.get::<_, i64>(5)? as u32,
-                    height: row.get::<_, i64>(6)? as u32,
-                    size_bytes: row.get::<_, i64>(7)? as u64,
-                    sha256: row.get(8)?,
-                    thumb_path: row.get(9)?,
+                    format: row.get(5)?,
+                    width: row.get::<_, i64>(6)? as u32,
+                    height: row.get::<_, i64>(7)? as u32,
+                    size_bytes: row.get::<_, i64>(8)? as u64,
+                    sha256: row.get(9)?,
+                    thumb_path: row.get(10)?,
                 };
                 out.push((clip, meta));
             }
             Ok(out)
+        }
+
+        fn touch_last_used(&self, id: &str) -> anyhow::Result<()> {
+            let conn = self.conn.lock().unwrap();
+            let now = OffsetDateTime::now_utc().unix_timestamp();
+            let lamport: i64 = conn
+                .query_row("SELECT COALESCE(MAX(lamport),0)+1 FROM clips", [], |r| r.get(0))
+                .unwrap_or(1);
+            conn.execute(
+                "UPDATE clips SET last_used_at = ?, updated_at = ?, lamport = ? WHERE id = ?",
+                rusqlite::params![now, now, lamport, id],
+            )?;
+            Ok(())
         }
 
         fn prune(
@@ -1482,6 +1531,7 @@ pub mod libsql_backend {
                 id,
                 text: text.into(),
                 created_at: OffsetDateTime::from_unix_timestamp(created_at)?,
+                last_used_at: None,
                 is_favorite: false,
                 kind: ClipKind::Text,
                 is_image: false,
@@ -1491,7 +1541,7 @@ pub mod libsql_backend {
 
         fn list(&self, q: Query) -> anyhow::Result<Vec<Clip>> {
             let conn = self.db.connect()?;
-            let mut sql = String::from("SELECT id, text, created_at, is_favorite FROM clips WHERE deleted_at IS NULL AND kind = 'text'");
+            let mut sql = String::from("SELECT id, text, created_at, is_favorite, last_used_at FROM clips WHERE deleted_at IS NULL AND kind = 'text'");
             if q.favorites_only {
                 sql.push_str(" AND is_favorite = 1");
             }
@@ -1507,7 +1557,7 @@ pub mod libsql_backend {
             };
 
             let mut out = Vec::new();
-            let rows_vec: Vec<(String, String, i64, i64)> = self.rt.block_on(async {
+            let rows_vec: Vec<(String, String, i64, i64, Option<i64>)> = self.rt.block_on(async {
                 let mut rows = rows;
                 let mut tmp = Vec::new();
                 loop {
@@ -1517,7 +1567,8 @@ pub mod libsql_backend {
                             let text: String = r.get::<String>(1)?;
                             let created: i64 = r.get::<i64>(2)?;
                             let fav: i64 = r.get::<i64>(3)?;
-                            tmp.push((id, text, created, fav));
+                            let last: Option<i64> = r.get::<Option<i64>>(4)?;
+                            tmp.push((id, text, created, fav, last));
                         }
                         Ok(None) => break,
                         Err(e) => return Err(e),
@@ -1525,13 +1576,14 @@ pub mod libsql_backend {
                 }
                 Ok::<_, libsql::Error>(tmp)
             })?;
-            for (id, text, created, fav) in rows_vec {
+            for (id, text, created, fav, last) in rows_vec {
                 let created_at = OffsetDateTime::from_unix_timestamp(created)
                     .unwrap_or(OffsetDateTime::UNIX_EPOCH);
                 out.push(Clip {
                     id,
                     text,
                     created_at,
+                    last_used_at: last.and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
                     is_favorite: fav != 0,
                     kind: ClipKind::Text,
                     is_image: false,
@@ -1546,11 +1598,12 @@ pub mod libsql_backend {
 
         fn get(&self, id: &str) -> anyhow::Result<Option<Clip>> {
             let conn = self.db.connect()?;
-            let mut rows = self.rt.block_on(async { conn.query("SELECT id, kind, text, created_at, is_favorite FROM clips WHERE id = ? AND deleted_at IS NULL", libsql::params!(id)).await })?;
+            let mut rows = self.rt.block_on(async { conn.query("SELECT id, kind, text, created_at, is_favorite, last_used_at FROM clips WHERE id = ? AND deleted_at IS NULL", libsql::params!(id)).await })?;
             let opt = self.rt.block_on(async {
                 match rows.next().await? {
                     Some(r) => {
                         let created: i64 = r.get::<i64>(3)?;
+                        let last: Option<i64> = r.get::<Option<i64>>(5)?;
                         let kind: String = r.get::<String>(1)?;
                         let created_at = OffsetDateTime::from_unix_timestamp(created)
                             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
@@ -1563,6 +1616,7 @@ pub mod libsql_backend {
                             id: r.get::<String>(0)?,
                             text: r.get::<String>(2)?,
                             created_at,
+                            last_used_at: last.and_then(|ts| OffsetDateTime::from_unix_timestamp(ts).ok()),
                             is_favorite: {
                                 let v: i64 = r.get::<i64>(4)?;
                                 v != 0
@@ -1595,6 +1649,19 @@ pub mod libsql_backend {
             self.rt.block_on(async {
                 conn.execute("DELETE FROM clips WHERE id = ?", libsql::params!(id))
                     .await
+            })?;
+            Ok(())
+        }
+
+        fn touch_last_used(&self, id: &str) -> anyhow::Result<()> {
+            let conn = self.db.connect()?;
+            let now = OffsetDateTime::now_utc().unix_timestamp();
+            self.rt.block_on(async {
+                conn.execute(
+                    "UPDATE clips SET last_used_at = ?, updated_at = COALESCE(updated_at, ?), lamport = COALESCE(lamport, 0) + 1 WHERE id = ?",
+                    libsql::params!(now, now, id),
+                )
+                .await
             })?;
             Ok(())
         }
