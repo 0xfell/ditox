@@ -8,10 +8,18 @@ pub struct TuiTheme {
     pub help_fg: ratatui::style::Color,
 }
 
-fn default_highlight_fg() -> ratatui::style::Color { ratatui::style::Color::Black }
-fn default_highlight_bg() -> ratatui::style::Color { ratatui::style::Color::Cyan }
-fn default_border_fg() -> ratatui::style::Color { ratatui::style::Color::Gray }
-fn default_help_fg() -> ratatui::style::Color { ratatui::style::Color::Yellow }
+fn default_highlight_fg() -> ratatui::style::Color {
+    ratatui::style::Color::Black
+}
+fn default_highlight_bg() -> ratatui::style::Color {
+    ratatui::style::Color::Cyan
+}
+fn default_border_fg() -> ratatui::style::Color {
+    ratatui::style::Color::Gray
+}
+fn default_help_fg() -> ratatui::style::Color {
+    ratatui::style::Color::Yellow
+}
 
 #[derive(Deserialize)]
 struct RawTheme {
@@ -53,7 +61,9 @@ pub fn load_tui_theme() -> TuiTheme {
     }
 }
 
-pub fn parse_color(s: String) -> Option<ratatui::style::Color> { parse_color_str(&s) }
+pub fn parse_color(s: String) -> Option<ratatui::style::Color> {
+    parse_color_str(&s)
+}
 
 fn parse_color_str(s: &str) -> Option<ratatui::style::Color> {
     use ratatui::style::Color;
@@ -69,8 +79,12 @@ fn parse_color_str(s: &str) -> Option<ratatui::style::Color> {
         "white" => Some(Color::White),
         "gray" | "grey" => Some(Color::Gray),
         _ => {
-            if let Some(hex) = k.strip_prefix('#') { return parse_hex(hex); }
-            if let Some(rest) = k.strip_prefix("rgb(") { return parse_rgb_tuple(rest.to_string()); }
+            if let Some(hex) = k.strip_prefix('#') {
+                return parse_hex(hex);
+            }
+            if let Some(rest) = k.strip_prefix("rgb(") {
+                return parse_rgb_tuple(rest.to_string());
+            }
             None
         }
     }
@@ -82,13 +96,17 @@ fn parse_hex(hex: &str) -> Option<ratatui::style::Color> {
         let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
         let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
         Some(ratatui::style::Color::Rgb(r, g, b))
-    } else { None }
+    } else {
+        None
+    }
 }
 
 fn parse_rgb_tuple(rest: String) -> Option<ratatui::style::Color> {
     let t = rest.strip_suffix(')')?;
     let parts: Vec<_> = t.split(',').map(|p| p.trim()).collect();
-    if parts.len() != 3 { return None; }
+    if parts.len() != 3 {
+        return None;
+    }
     let r = parts[0].parse::<u8>().ok()?;
     let g = parts[1].parse::<u8>().ok()?;
     let b = parts[2].parse::<u8>().ok()?;
