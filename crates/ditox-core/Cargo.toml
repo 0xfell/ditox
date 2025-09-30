@@ -35,7 +35,7 @@ assert_matches = "1"
 
 # Optional SQLite backend
 [dependencies.rusqlite]
-version = "0.31"
+version = "0.37"
 optional = true
 features = ["bundled"]
 
