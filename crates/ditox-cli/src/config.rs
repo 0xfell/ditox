@@ -8,6 +8,7 @@ pub struct Settings {
     pub max_storage_mb: Option<u64>,
     pub sync: Option<Sync>,
     pub images: Option<Images>,
+    pub tui: Option<Tui>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +50,12 @@ pub struct Images {
     pub local_file_path_mode: Option<bool>,
     pub dir: Option<String>,
     pub encoding: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Tui {
+    /// Page size (items per page); defaults to 10 when unset
+    pub page_size: Option<usize>,
 }
 
 pub fn images_dir(settings: &Settings) -> std::path::PathBuf {
