@@ -266,22 +266,21 @@ pub fn run_picker_with(
         if let Some(ref mut term) = terminal {
             term.draw(|f| {
                 let size = f.size();
-                let footer_rows = if show_help { 9 } else { 3 };
                 let chunks = if mode == Mode::Query {
                     Layout::default()
                         .direction(Direction::Vertical)
                         .constraints([
                             Constraint::Length(3),  // search bar (only in search mode)
                             Constraint::Min(5),     // list
-                            Constraint::Length(footer_rows),  // shortcuts/status (expandable)
+                            Constraint::Length(3),  // shortcuts/status
                         ])
                         .split(size)
                 } else {
                     Layout::default()
                         .direction(Direction::Vertical)
                         .constraints([
-                            Constraint::Min(5),               // list only
-                            Constraint::Length(footer_rows),  // shortcuts/status (expandable)
+                            Constraint::Min(5),     // list only
+                            Constraint::Length(3),  // shortcuts/status
                         ])
                         .split(size)
                 };
@@ -385,14 +384,27 @@ pub fn run_picker_with(
                         },
                     ),
                 );
-                // Footer — simple vs expanded help
+                // Footer — simple hint
                 let thm2 = theme::load_tui_theme();
                 let footer_block = Block::default().borders(Borders::ALL).title("Shortcuts").border_style(Style::default().fg(thm.border_fg));
                 let footer_area_idx = if mode == Mode::Query { 2 } else { 1 };
+                let mut simple = String::from("⏎ copy | x delete | p fav/unfav | Tab favorites | ? more");
+                if has_more { simple.push_str(" | More available…"); }
+                if let Some((msg, until)) = &toast { if Instant::now() <= *until { simple.push_str(&format!("  — {}", msg)); } }
+                let footer = Paragraph::new(simple)
+                    .block(footer_block)
+                    .style(Style::default().fg(thm2.help_fg))
+                    .wrap(Wrap { trim: true });
+                f.render_widget(footer, chunks[footer_area_idx]);
+
+                // Expanded help as centered modal overlay
                 if show_help {
-                    // Render block and a 3-column layout inside it
-                    let area = chunks[footer_area_idx];
-                    f.render_widget(footer_block.clone(), area);
+                    let overlay = centered_rect(70, 70, size);
+                    let block = Block::default()
+                        .borders(Borders::ALL)
+                        .title("Shortcuts — Help (? to close)")
+                        .border_style(Style::default().fg(thm.border_fg));
+                    f.render_widget(block.clone(), overlay);
                     let cols = Layout::default()
                         .direction(Direction::Horizontal)
                         .constraints([
@@ -400,7 +412,7 @@ pub fn run_picker_with(
                             Constraint::Percentage(33),
                             Constraint::Percentage(33),
                         ])
-                        .split(inner(area));
+                        .split(inner(overlay));
                     let col1 = Paragraph::new(
                         "↑/k up\n↓/j down\n→/l/PgDn next page\n←/h/PgUp prev page\nHome/g go to start\nEnd/G go to end",
                     )
@@ -419,15 +431,6 @@ pub fn run_picker_with(
                     f.render_widget(col1, cols[0]);
                     f.render_widget(col2, cols[1]);
                     f.render_widget(col3, cols[2]);
-                } else {
-                    let mut simple = String::from("⏎ copy | x delete | p fav/unfav | Tab favorites | ? more");
-                    if has_more { simple.push_str(" | More available…"); }
-                    if let Some((msg, until)) = &toast { if Instant::now() <= *until { simple.push_str(&format!("  — {}", msg)); } }
-                    let footer = Paragraph::new(simple)
-                        .block(footer_block)
-                        .style(Style::default().fg(thm2.help_fg))
-                        .wrap(Wrap { trim: true });
-                    f.render_widget(footer, chunks[footer_area_idx]);
                 }
             })?;
         }
@@ -1217,6 +1220,27 @@ fn inner(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
         width: area.width.saturating_sub(2),
         height: area.height.saturating_sub(2),
     }
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    let vert = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+    let mid = vert[1];
+    let horiz = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(mid);
+    horiz[1]
 }
 
 fn resolve_db_path_from_settings() -> PathBuf {
