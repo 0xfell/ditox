@@ -9,6 +9,17 @@ Unreleased
 ----------
 - (none)
 
+1.0.1 – 2025-09-30
+------------------
+
+Changed
+- CI: auto‑publish crates on tag (core → clipd → cli).
+- CI: add version‑sync check on PRs; enforce version coherence.
+- Security: add cargo‑audit and cargo‑deny workflows (with sane defaults).
+
+Fixed
+- macOS clippy issues (cfg Stdio import, unused params on non‑Linux).
+
 1.0.0 – 2025-09-30
 ------------------
 

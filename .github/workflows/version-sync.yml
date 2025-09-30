@@ -1,0 +1,46 @@
+name: Version Sync
+
+on:
+  pull_request:
+    branches: [ master ]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify crate versions are in sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          get_ver() {
+            awk '
+              BEGIN{inpkg=0}
+              /^\[package\]/{inpkg=1; next}
+              /^\[/{inpkg=0}
+              inpkg && $1=="version" { gsub(/"/, "", $3); print $3; exit }
+            ' "$1"
+          }
+          CORE=$(get_ver crates/ditox-core/Cargo.toml)
+          CLI=$(get_ver crates/ditox-cli/Cargo.toml)
+          CLIPD=$(get_ver crates/ditox-clipd/Cargo.toml)
+          echo "core=$CORE cli=$CLI clipd=$CLIPD"
+          if [[ "$CORE" != "$CLI" || "$CORE" != "$CLIPD" ]]; then
+            echo "Version mismatch: core=$CORE cli=$CLI clipd=$CLIPD" >&2
+            exit 1
+          fi
+          VER="$CORE"
+          # README badge
+          BADGE=$(grep -oE 'version-[0-9]+\.[0-9]+\.[0-9]+' README.md | head -n1 | sed 's/version-//') || BADGE=""
+          if [[ -n "$BADGE" && "$BADGE" != "$VER" ]]; then
+            echo "README badge version ($BADGE) != $VER" >&2; exit 1; fi
+          # flake version (if present)
+          if [[ -f flake.nix ]]; then
+            FVER=$(sed -nE 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' flake.nix | head -n1 || true)
+            if [[ -n "$FVER" && "$FVER" != "$VER" ]]; then
+              echo "flake.nix version ($FVER) != $VER" >&2; exit 1; fi
+          fi
+          echo "Versions in sync: $VER"

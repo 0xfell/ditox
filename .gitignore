@@ -6,3 +6,9 @@ Cargo.lock
 .vscode/
 *.log
 
+# Nix build symlinks
+result
+result-*
+\n+# Nix build symlinks
+result
+result-*

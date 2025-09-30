@@ -19,7 +19,7 @@ DDDDDDDDDDDDD        iiiiiiii         ttttttttttt     ooooooooooo xxxxxxx      x
 
 # Ditox — Clipboard TUI and CLI for Developers
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)](#)
 [![CI](https://github.com/0xfell/ditox/actions/workflows/ci.yml/badge.svg)](https://github.com/0xfell/ditox/actions/workflows/ci.yml)
 
 Note: Docs below use the command name `ditox` for readability. If you installed from source without a wrapper, your binary name may be `ditox-cli` — use that instead (e.g., `ditox-cli list`).
