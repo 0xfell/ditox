@@ -109,7 +109,7 @@ jobs:
           if [ $CODE -ne 0 ] && ! grep -qiE "already (uploaded|exists)" <<<"$POUT"; then
             echo "$POUT"; exit $CODE
           fi
-          wait_until_published ditox-core "$VER"
+          # Skipping crates.io polling due to intermittent API 403 from runners.
 
       - name: Publish ditox-clipd
         env:
@@ -125,7 +125,7 @@ jobs:
           if [ $CODE -ne 0 ] && ! grep -qiE "already (uploaded|exists)" <<<"$POUT"; then
             echo "$POUT"; exit $CODE
           fi
-          wait_until_published ditox-clipd "$VER"
+          # Skipping crates.io polling due to intermittent API 403 from runners.
 
       - name: Publish ditox-cli
         env:
