@@ -4,16 +4,39 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to publish (e.g., v1.0.2)
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      has_token: ${{ steps.chk.outputs.has_token }}
+    steps:
+      - name: Check secret availability
+        id: chk
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.CARGO_REGISTRY_TOKEN }}" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+          fi
+
   publish:
-    if: ${{ !contains(github.ref_name, 'rc') }}
+    needs: preflight
+    # Skip entirely for RC tags or when token is unavailable (e.g. forked contexts)
+    if: ${{ !contains(github.ref_name, 'rc') && needs.preflight.outputs.has_token == 'true' }}
     runs-on: ubuntu-latest
     env:
-      TAG: ${{ github.ref_name }}
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
       - uses: actions/checkout@v4
