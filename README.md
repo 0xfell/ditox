@@ -1,20 +1,20 @@
 ```
-DDDDDDDDDDDDD          iiii          tttt
-D::::::::::::DDD      i::::i      ttt:::t
-D:::::::::::::::DD     iiii       t:::::t
-DDD:::::DDDDD:::::D               t:::::t
-D:::::D    D:::::D iiiiiiittttttt:::::ttttttt       ooooooooooo xxxxxxx      xxxxxxx
-D:::::D     D:::::Di:::::it:::::::::::::::::t     oo:::::::::::oox:::::x    x:::::x
-D:::::D     D:::::D i::::it:::::::::::::::::t    o:::::::::::::::ox:::::x  x:::::x
-D:::::D     D:::::D i::::itttttt:::::::tttttt    o:::::ooooo:::::o x:::::xx:::::x
-D:::::D     D:::::D i::::i      t:::::t          o::::o     o::::o  x::::::::::x
-D:::::D     D:::::D i::::i      t:::::t          o::::o     o::::o   x::::::::x
-D:::::D     D:::::D i::::i      t:::::t          o::::o     o::::o   x::::::::x
-D:::::D    D:::::D  i::::i      t:::::t    tttttto::::o     o::::o  x::::::::::x
-DDD:::::DDDDD:::::D  i::::::i     t::::::tttt:::::to:::::ooooo:::::o x:::::xx:::::x
-D:::::::::::::::DD   i::::::i     tt::::::::::::::to:::::::::::::::ox:::::x  x:::::x
-D::::::::::::DDD     i::::::i       tt:::::::::::tt oo:::::::::::oox:::::x    x:::::x
-DDDDDDDDDDDDD        iiiiiiii         ttttttttttt     ooooooooooo xxxxxxx      xxxxxxx
+DDDDDDDDDDDDD         iiii               tttt
+D::::::::::::DDD     i::::i           ttt:::t
+D:::::::::::::::DD    iiii            t:::::t
+DDD:::::DDDDD:::::D                   t:::::t
+D:::::D     D:::::D iiiiiiii  ttttttt:::::ttttttt       ooooooooooo   xxxxxxx      xxxxxxx
+D:::::D     D:::::D i::::::i t:::::::::::::::::t      oo:::::::::::oo  x:::::x    x:::::x
+D:::::D     D:::::D  i::::i  t:::::::::::::::::t     o:::::::::::::::o  x:::::x  x:::::x
+D:::::D     D:::::D  i::::i  tttttt:::::::tttttt     o:::::ooooo:::::o   x:::::xx:::::x
+D:::::D     D:::::D  i::::i        t:::::t           o::::o     o::::o    x::::::::::x
+D:::::D     D:::::D  i::::i        t:::::t           o::::o     o::::o     x::::::::x
+D:::::D     D:::::D  i::::i        t:::::t           o::::o     o::::o     x::::::::x
+D:::::D     D:::::D  i::::i        t:::::t    tttttt o::::o     o::::o    x::::::::::x
+DDD:::::DDDDD:::::D i::::::i       t::::::tttt:::::t o:::::ooooo:::::o   x:::::xx:::::x
+D:::::::::::::::DD  i::::::i       tt::::::::::::::t o:::::::::::::::o  x:::::x  x:::::x
+D::::::::::::DDD    i::::::i         tt:::::::::::tt  oo:::::::::::oo  x:::::x    x:::::x
+DDDDDDDDDDDDD       iiiiiiii           ttttttttttt      ooooooooooo   xxxxxxx      xxxxxxx
 ```
 
 # Ditox -- Clipboard TUI and CLI for Developers
@@ -214,7 +214,7 @@ Per-user systemd timers can automate pruning and optional remote sync:
 
 - Launch: `cargo run -p ditox-cli -- pick --no-daemon`
 - Keys: `/: search`, `f: toggle favorites`, `i: toggle images`, `t: apply current query as tag`, `r: refresh`, `Enter: copy`, `Esc/Ctrl+C: cancel`, `Up/Down/PgUp/PgDn: move`.
-    - Each list item now shows two lines: preview, and a dim metadata line with "Created <relative> * Last used <relative|never>". IDs are hidden in the TUI for readability; printed IDs in headless mode remain unchanged.
+    - Each list item now shows two lines: preview, and a dim metadata line with "Created <relative> \* Last used <relative|never>". IDs are hidden in the TUI for readability; printed IDs in headless mode remain unchanged.
 - Copy behavior:
     - Linux/Wayland: uses `wl-copy` when available (for persistence), otherwise falls back to arboard -> xclip/xsel.
     - macOS: uses system clipboard; falls back to `pbcopy`.

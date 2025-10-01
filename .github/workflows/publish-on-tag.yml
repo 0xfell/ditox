@@ -108,12 +108,15 @@ jobs:
           set -euo pipefail
           . /tmp/helpers.sh
           VER='${{ steps.ver.outputs.ver }}'
-          if exists ditox-core "$VER"; then
-            echo "ditox-core@$VER already published; skipping"
-          else
-            cargo publish -p ditox-core
+          # Try to publish; treat "already exists" as success to avoid flakiness
+          set +e
+          POUT=$(cargo publish -p ditox-core 2>&1)
+          CODE=$?
+          set -e
+          if [ $CODE -ne 0 ] && ! grep -qiE "already (uploaded|exists)" <<<"$POUT"; then
+            echo "$POUT"; exit $CODE
           fi
-          wait_until_published ditox-core "$VER"
+          # Skipping crates.io polling due to intermittent API 403 from runners.
 
       - name: Publish ditox-clipd
         env:
@@ -122,12 +125,14 @@ jobs:
           set -euo pipefail
           . /tmp/helpers.sh
           VER='${{ steps.ver.outputs.ver }}'
-          if exists ditox-clipd "$VER"; then
-            echo "ditox-clipd@$VER already published; skipping"
-          else
-            cargo publish -p ditox-clipd
+          set +e
+          POUT=$(cargo publish -p ditox-clipd 2>&1)
+          CODE=$?
+          set -e
+          if [ $CODE -ne 0 ] && ! grep -qiE "already (uploaded|exists)" <<<"$POUT"; then
+            echo "$POUT"; exit $CODE
           fi
-          wait_until_published ditox-clipd "$VER"
+          # Skipping crates.io polling due to intermittent API 403 from runners.
 
       - name: Publish ditox-cli
         env:
@@ -136,8 +141,10 @@ jobs:
           set -euo pipefail
           . /tmp/helpers.sh
           VER='${{ steps.ver.outputs.ver }}'
-          if exists ditox-cli "$VER"; then
-            echo "ditox-cli@$VER already published; skipping"
-          else
-            cargo publish -p ditox-cli
+          set +e
+          POUT=$(cargo publish -p ditox-cli 2>&1)
+          CODE=$?
+          set -e
+          if [ $CODE -ne 0 ] && ! grep -qiE "already (uploaded|exists)" <<<"$POUT"; then
+            echo "$POUT"; exit $CODE
           fi
