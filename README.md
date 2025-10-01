@@ -17,24 +17,24 @@ D::::::::::::DDD     i::::::i       tt:::::::::::tt oo:::::::::::oox:::::x    x:
 DDDDDDDDDDDDD        iiiiiiii         ttttttttttt     ooooooooooo xxxxxxx      xxxxxxx
 ```
 
-# Ditox — Clipboard TUI and CLI for Developers
+# Ditox -- Clipboard TUI and CLI for Developers
 
-[![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-1.0.2-blue.svg)](#)
 [![CI](https://github.com/0xfell/ditox/actions/workflows/ci.yml/badge.svg)](https://github.com/0xfell/ditox/actions/workflows/ci.yml)
 
-Note: Docs below use the command name `ditox` for readability. If you installed from source without a wrapper, your binary name may be `ditox-cli` — use that instead (e.g., `ditox-cli list`).
+Note: Docs below use the command name `ditox` for readability. If you installed from source without a wrapper, your binary name may be `ditox-cli` -- use that instead (e.g., `ditox-cli list`).
 
-Ditox is a fast, scriptable clipboard history with a focus on reliability, privacy, and great CLI ergonomics. It targets Linux first (X11/Wayland via `arboard`) and is designed as a Rust workspace with a reusable core library and a small command‑line tool.
+Ditox is a fast, scriptable clipboard history with a focus on reliability, privacy, and great CLI ergonomics. It targets Linux first (X11/Wayland via `arboard`) and is designed as a Rust workspace with a reusable core library and a small command-line tool.
 
 - Core features:
     - Add/list/search text clips; JSON output for scripting.
     - Favorites and retention pruning by age or count.
-    - Images: add/list/info/copy; content‑addressed blobs on disk.
+    - Images: add/list/info/copy; content-addressed blobs on disk.
     - SQLite store with FTS5 when available; LIKE fallback otherwise.
     - Optional remote backend (libSQL/Turso) behind a feature flag (text only).
-    - Self‑check (`doctor`) and explicit migrations (`migrate`).
+    - Self-check (`doctor`) and explicit migrations (`migrate`).
 
-- Status: v1.0.x, Linux‑first. Clipboard adapters for other OSes will land later; the CLI builds but clipboard IO is a no‑op outside Linux.
+- Status: v1.0.x, Linux-first. Clipboard adapters for other OSes will land later; the CLI builds but clipboard IO is a no-op outside Linux.
 
 ## Quick Start
 
@@ -51,13 +51,13 @@ The default database lives at `~/.config/ditox/db/ditox.db` (XDG). You can overr
 - Cargo (local checkout):
     - `cargo install --path crates/ditox-cli`
 - Nix (flake):
-    - `nix build -L .#ditox` → binary at `result/bin/ditox-cli`
+    - `nix build -L .#ditox` -> binary at `result/bin/ditox-cli`
     - `nix run .#ditox -- --help`
 - CI artifacts: see GitHub Actions workflows under `.github/workflows/` for prebuilt tarballs produced on tags.
 
 Optional features:
 
-- libSQL/Turso remote sync (text only): feature‑gated. Build with `cargo build -p ditox-cli --features libsql`. When built with this feature, remote is selected at runtime via `[storage.backend = "turso"]` in settings; otherwise the CLI operates fully locally.
+- libSQL/Turso remote sync (text only): feature-gated. Build with `cargo build -p ditox-cli --features libsql`. When built with this feature, remote is selected at runtime via `[storage.backend = "turso"]` in settings; otherwise the CLI operates fully locally.
 
 ## Usage
 
@@ -73,7 +73,7 @@ Add text (argument or STDIN):
 List recent entries:
 
 - `ditox list`
-- `ditox list --json` (machine‑readable)
+- `ditox list --json` (machine-readable)
 - `ditox list --favorites`
 
 Search by substring or FTS5 if available:
@@ -89,7 +89,7 @@ Favorite / unfavorite:
 Copy back to clipboard:
 
 - `ditox copy <id>`
-    - Linux only. On non‑Linux builds the clipboard adapter is a no‑op.
+    - Linux only. On non-Linux builds the clipboard adapter is a no-op.
 
 Show details for an entry:
 
@@ -104,7 +104,7 @@ Prune history (by count, age; favorites kept by default):
 Migrations (SQLite):
 
 - `ditox migrate --status`
-- `ditox migrate --backup` (copy `.db` → `.bak.<timestamp>` then apply pending migrations)
+- `ditox migrate --backup` (copy `.db` -> `.bak.<timestamp>` then apply pending migrations)
 
 Doctor (environment/store check):
 
@@ -117,7 +117,7 @@ Images (Linux):
 - List images: `ditox list --images [--json]`
 - Copy image to clipboard: `ditox copy <id>` (for image clips)
 
-Sync (feature‑gated):
+Sync (feature-gated):
 
 - Build with `-p ditox-cli --features libsql`.
 - Configure `[storage.backend = "turso"]` with `url` and optional `auth_token` in settings.
@@ -126,26 +126,26 @@ Sync (feature‑gated):
 ## Command Reference
 
 - Global flags
-    - `--store <sqlite|mem>` (default `sqlite`) — choose backend
-    - `--db <path>` — path to SQLite database file (when `sqlite`)
-    - `--auto-migrate[=true|false]` (default `true`) — apply pending migrations on startup
+    - `--store <sqlite|mem>` (default `sqlite`) -- choose backend
+    - `--db <path>` -- path to SQLite database file (when `sqlite`)
+    - `--auto-migrate[=true|false]` (default `true`) -- apply pending migrations on startup
 
 - Subcommands
-    - `init-db` — initialize local database
-    - `add [TEXT] [--image-path <file>] [--image-from-clipboard]` — add text or image
-    - `list [--json] [--favorites] [--images] [--limit N]` — list entries
-    - `search <query> [--json] [--favorites]` — search text entries
-    - `favorite <id>` / `unfavorite <id>` — toggle favorite
-    - `copy <id>` — copy entry to clipboard (Linux)
-    - `delete [<id>]` — delete one entry or clear all when omitted
-    - `info <id>` — show entry details
-    - `prune [--max-items N] [--max-age DUR] [--keep-favorites]` — retention
-    - `migrate [--status|--backup]` — show status or backup and apply (backup file is `ditox.bak.<yyyyMMddHHmmss>` next to your DB)
-    - `doctor` — environment/store self‑check (Wayland/X11 clipboard probes, FTS capability)
-    - `export <dir> [--favorites] [--images] [--tag <t>]` — write JSONL + image blobs to a directory
-    - `import <dir|clips.jsonl> [--keep-ids]` — import previously exported data
-    - `config [--json]` — print effective configuration and paths
-    - `sync status|run|doctor [--push-only|--pull-only]` — remote sync and diagnostics (feature‑gated)
+    - `init-db` -- initialize local database
+    - `add [TEXT] [--image-path <file>] [--image-from-clipboard]` -- add text or image
+    - `list [--json] [--favorites] [--images] [--limit N]` -- list entries
+    - `search <query> [--json] [--favorites]` -- search text entries
+    - `favorite <id>` / `unfavorite <id>` -- toggle favorite
+    - `copy <id>` -- copy entry to clipboard (Linux)
+    - `delete [<id>]` -- delete one entry or clear all when omitted
+    - `info <id>` -- show entry details
+    - `prune [--max-items N] [--max-age DUR] [--keep-favorites]` -- retention
+    - `migrate [--status|--backup]` -- show status or backup and apply (backup file is `ditox.bak.<yyyyMMddHHmmss>` next to your DB)
+    - `doctor` -- environment/store self-check (Wayland/X11 clipboard probes, FTS capability)
+    - `export <dir> [--favorites] [--images] [--tag <t>]` -- write JSONL + image blobs to a directory
+    - `import <dir|clips.jsonl> [--keep-ids]` -- import previously exported data
+    - `config [--json]` -- print effective configuration and paths
+    - `sync status|run|doctor [--push-only|--pull-only]` -- remote sync and diagnostics (feature-gated)
 
 ## Configuration
 
@@ -186,15 +186,15 @@ Effective paths/config can be printed with:
 ## Data Layout
 
 - Database: `~/.config/ditox/db/ditox.db` by default.
-- Image blobs: content‑addressed files under the database directory: `~/.config/ditox/db/objects/aa/bb/<sha256>`.
-    - `ditox export <dir>` writes `clips.jsonl` and stores image blobs under `<dir>/objects/aa/bb/<sha256>` using the real sha256. `ditox import` accepts either `<dir>` or `<dir>/clips.jsonl` (with `objects/` alongside) for a full round‑trip.
+- Image blobs: content-addressed files under the database directory: `~/.config/ditox/db/objects/aa/bb/<sha256>`.
+    - `ditox export <dir>` writes `clips.jsonl` and stores image blobs under `<dir>/objects/aa/bb/<sha256>` using the real sha256. `ditox import` accepts either `<dir>` or `<dir>/clips.jsonl` (with `objects/` alongside) for a full round-trip.
 - Migrations: embedded SQL files in `crates/ditox-core/migrations/` (`NNNN_description.sql`).
 
 FTS5 is used when available (see `0002_fts.sql`). If not available, search uses a `LIKE` fallback. `ditox doctor` reports capability.
 
 ## Systemd Timers (sync + prune)
 
-Per‑user systemd timers can automate pruning and optional remote sync:
+Per-user systemd timers can automate pruning and optional remote sync:
 
 - `scripts/install_prune_timer.sh`
     - Installs `ditox-prune.timer` based on `[prune].every` (e.g., `7d`).
@@ -213,14 +213,14 @@ Per‑user systemd timers can automate pruning and optional remote sync:
 ### TUI (Picker)
 
 - Launch: `cargo run -p ditox-cli -- pick --no-daemon`
-- Keys: `/: search`, `f: toggle favorites`, `i: toggle images`, `t: apply current query as tag`, `r: refresh`, `Enter: copy`, `Esc/Ctrl+C: cancel`, `↑/↓/PgUp/PgDn: move`.
-    - Each list item now shows two lines: preview, and a dim metadata line with "Created <relative> • Last used <relative|never>". IDs are hidden in the TUI for readability; printed IDs in headless mode remain unchanged.
+- Keys: `/: search`, `f: toggle favorites`, `i: toggle images`, `t: apply current query as tag`, `r: refresh`, `Enter: copy`, `Esc/Ctrl+C: cancel`, `Up/Down/PgUp/PgDn: move`.
+    - Each list item now shows two lines: preview, and a dim metadata line with "Created <relative> * Last used <relative|never>". IDs are hidden in the TUI for readability; printed IDs in headless mode remain unchanged.
 - Copy behavior:
-    - Linux/Wayland: uses `wl-copy` when available (for persistence), otherwise falls back to arboard → xclip/xsel.
+    - Linux/Wayland: uses `wl-copy` when available (for persistence), otherwise falls back to arboard -> xclip/xsel.
     - macOS: uses system clipboard; falls back to `pbcopy`.
     - Windows: uses system clipboard; falls back to `clip`.
 - Options:
-    - `--force-wl-copy` (Linux): prefer `wl-copy` even if Wayland isn’t detected.
+    - `--force-wl-copy` (Linux): prefer `wl-copy` even if Wayland isn't detected.
 
 Theme (experimental): create `~/.config/ditox/tui_theme.toml` to customize colors.
 
@@ -235,7 +235,7 @@ border_fg    = "gray"
 - Tests: `cargo test --all`
     - Integration tests isolate `XDG_CONFIG_HOME` and always pass `--db` to avoid touching user state.
     - Clipboard E2E image test runs on Linux only and is guarded by `DITOX_E2E_CLIPBOARD=1`.
-    - `doctor` probes system clipboard helpers only when appropriate (e.g., Wayland → `wl-clipboard`), so tests are stable in headless CI.
+    - `doctor` probes system clipboard helpers only when appropriate (e.g., Wayland -> `wl-clipboard`), so tests are stable in headless CI.
 
 Nix dev shell (with Rust, clippy, rustfmt, X11/Wayland headers):
 
@@ -245,8 +245,8 @@ Nix dev shell (with Rust, clippy, rustfmt, X11/Wayland headers):
 
 - `crates/ditox-core/` (library)
     - Domain types (`Clip`, `ClipKind::{Text, Image}`, `ImageMeta`).
-    - `Store` trait with in‑memory and SQLite implementations.
-    - SQLite backend (WAL, migrations, optional FTS5), content‑addressed blob store for images.
+    - `Store` trait with in-memory and SQLite implementations.
+    - SQLite backend (WAL, migrations, optional FTS5), content-addressed blob store for images.
     - Clipboard adapters behind features (Linux uses `arboard`).
     - Optional libSQL/Turso backend behind `libsql` feature.
 - `crates/ditox-cli/` (binary)
@@ -257,7 +257,7 @@ Nix dev shell (with Rust, clippy, rustfmt, X11/Wayland headers):
 
 - Clipboard history can contain secrets. Ditox avoids logging content and provides JSON export and pruning tools.
 - Default store is local SQLite; remote sync is off by default and gated by a feature + explicit configuration.
-- Settings are plain‑text TOML; the installer script hardens permissions to `0600` when present.
+- Settings are plain-text TOML; the installer script hardens permissions to `0600` when present.
 
 ## Contributing
 
@@ -276,7 +276,7 @@ We welcome issues and PRs. Before opening a PR:
 
 ## License
 
-Dual‑licensed under either of:
+Dual-licensed under either of:
 
 - MIT license
 - Apache License, Version 2.0

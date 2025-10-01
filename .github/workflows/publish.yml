@@ -14,7 +14,24 @@ permissions:
   contents: read
 
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      has_token: ${{ steps.chk.outputs.has_token }}
+    steps:
+      - name: Check secret availability
+        id: chk
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.CARGO_REGISTRY_TOKEN }}" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+          fi
+
   publish:
+    needs: preflight
+    if: ${{ needs.preflight.outputs.has_token == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
