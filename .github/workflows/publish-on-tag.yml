@@ -67,8 +67,13 @@ jobs:
 
       - name: Ensure cli/clipd depend on versioned core
         run: |
-          rg -n "ditox-core\s*=\s*\{[^}]*version\s*=\s*\"${{ steps.ver.outputs.ver }}\"" crates/ditox-cli/Cargo.toml crates/ditox-clipd/Cargo.toml >/dev/null \
-            || { echo "cli/clipd must specify 'version = \"${{ steps.ver.outputs.ver }}\"' for ditox-core"; cat crates/ditox-cli/Cargo.toml; exit 3; }
+          set -euo pipefail
+          VER='${{ steps.ver.outputs.ver }}'
+          for f in crates/ditox-cli/Cargo.toml crates/ditox-clipd/Cargo.toml; do
+            echo "Checking dependency in $f"
+            grep -Eq '^[[:space:]]*ditox-core[[:space:]]*=[[:space:]]*\{[^}]*version[[:space:]]*=[[:space:]]*"'"$VER"'"' "$f" \
+              || { echo "Expected ditox-core version=\"$VER\" in $f"; sed -n '1,160p' "$f"; exit 3; }
+          done
 
       - name: Function helpers
         shell: bash
@@ -77,9 +82,11 @@ jobs:
           set -euo pipefail
           exists() {
             local crate="$1" ver="$2"
-            # Exit 0 if any version matches; jq -e returns 0 on truthy, 1 otherwise
-            curl -fsSL "https://crates.io/api/v1/crates/${crate}" \
-              | jq -er --arg v "$ver" 'any(.versions[]; .num == $v)' >/dev/null 2>&1
+            # Check single-version endpoint with UA + retries to avoid 403
+            curl -fsSL --retry 6 --retry-all-errors --retry-delay 2 \
+              -H 'Accept: application/json' \
+              -H 'User-Agent: ditox-ci (+https://github.com/0xfell/ditox)' \
+              -o /dev/null "https://crates.io/api/v1/crates/${crate}/${ver}" >/dev/null 2>&1
           }
           wait_until_published() {
             local crate="$1" ver="$2" tries=40
