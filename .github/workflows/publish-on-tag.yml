@@ -67,8 +67,15 @@ jobs:
 
       - name: Ensure cli/clipd depend on versioned core
         run: |
-          # Temporarily bypassing strict check due to CI grep differences; versions are already validated above.
-          echo "Skipping secondary dependency version check"
+          set -euo pipefail
+          VER='${{ steps.ver.outputs.ver }}'
+          for f in crates/ditox-cli/Cargo.toml crates/ditox-clipd/Cargo.toml; do
+            echo "Checking ditox-core dependency in $f"
+            if ! grep -Eq 'ditox-core\s*=\s*\{[^}]*version\s*=\s*"'"$VER"'"' "$f"; then
+              echo "Expected ditox-core dependency to specify version \"$VER\" in $f"
+              exit 3
+            fi
+          done
 
       - name: Function helpers
         shell: bash
