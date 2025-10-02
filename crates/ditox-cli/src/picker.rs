@@ -350,11 +350,7 @@ pub fn run_picker_with(
                 fav_filter,
                 Some(page_rows),
                 Some(0),
-                if mode == Mode::Query && !query.is_empty() {
-                    Some(query.clone())
-                } else {
-                    None
-                },
+                None, // fuzzy mode: do not pre-filter on server
                 tag_filter.clone(),
             ) {
                 Ok(p) => {
@@ -367,12 +363,12 @@ pub fn run_picker_with(
                         store,
                         images_mode,
                         fav_filter,
-                        Some(page_rows),
                         if mode == Mode::Query && !query.is_empty() {
-                            Some(query.clone())
-                        } else {
                             None
+                        } else {
+                            Some(page_rows)
                         },
+                        None,
                         tag_filter.clone(),
                     )?;
                     has_more = false;
@@ -384,11 +380,7 @@ pub fn run_picker_with(
             fav_filter,
             Some(page_rows),
             Some(0),
-            if mode == Mode::Query && !query.is_empty() {
-                Some(query.clone())
-            } else {
-                None
-            },
+            None,
             tag_filter.clone(),
         ) {
             items = p.items;
@@ -399,12 +391,12 @@ pub fn run_picker_with(
                 store,
                 images_mode,
                 fav_filter,
-                Some(page_rows),
                 if mode == Mode::Query && !query.is_empty() {
-                    Some(query.clone())
-                } else {
                     None
+                } else {
+                    Some(page_rows)
                 },
+                None,
                 tag_filter.clone(),
             )?;
             has_more = false;
@@ -414,12 +406,12 @@ pub fn run_picker_with(
             store,
             images_mode,
             fav_filter,
-            Some(page_rows),
             if mode == Mode::Query && !query.is_empty() {
-                Some(query.clone())
-            } else {
                 None
+            } else {
+                Some(page_rows)
             },
+            None,
             tag_filter.clone(),
         )?;
         has_more = false;
@@ -444,11 +436,7 @@ pub fn run_picker_with(
                         fav_filter,
                         Some(page_rows),
                         Some(0),
-                        if mode == Mode::Query && !query.is_empty() {
-                            Some(query.clone())
-                        } else {
-                            None
-                        },
+                        None,
                         tag_filter.clone(),
                     ) {
                         Ok(p) => {
@@ -461,11 +449,7 @@ pub fn run_picker_with(
                                 images_mode,
                                 fav_filter,
                                 None,
-                                if mode == Mode::Query && !query.is_empty() {
-                                    Some(query.clone())
-                                } else {
-                                    None
-                                },
+                                None,
                                 tag_filter.clone(),
                             )?;
                             has_more = false;
@@ -478,11 +462,7 @@ pub fn run_picker_with(
                         images_mode,
                         fav_filter,
                         None,
-                        if mode == Mode::Query && !query.is_empty() {
-                            Some(query.clone())
-                        } else {
-                            None
-                        },
+                        None,
                         tag_filter.clone(),
                     )?;
                     has_more = false;
@@ -503,6 +483,77 @@ pub fn run_picker_with(
                     scored.sort_by_key(|(s, _)| -*s);
                     scored.into_iter().map(|(_, i)| i).collect()
                 };
+                // Prefetch more pages from daemon until we have enough fuzzy matches to fill the page
+                if mode == Mode::Query && !query.is_empty() && use_daemon {
+                    let want = page_rows.saturating_mul(3);
+                    let mut guard = 0usize;
+                    while filtered.len() < want && has_more && guard < 20 {
+                        if let Some(dc) = daemon.as_mut() {
+                            if let Ok(p) = dc.request_page(
+                                images_mode,
+                                fav_filter,
+                                Some(page_rows),
+                                Some(items.len()),
+                                None,
+                                tag_filter.clone(),
+                            ) {
+                                has_more = p.more;
+                                let base = items.len();
+                                items.extend(p.items);
+                                // compute fuzzy over newly fetched tail only, then merge
+                                for (i, it) in items[base..].iter().enumerate() {
+                                    let hay = match it {
+                                        Item::Text { text, .. } => text.as_str(),
+                                        Item::Image { format, .. } => format.as_str(),
+                                    };
+                                    if let Some(_s) = matcher.fuzzy_match(hay, &query) {
+                                        // store as absolute index
+                                        filtered.push(base + i);
+                                    }
+                                }
+                                guard += 1;
+                            } else {
+                                break;
+                            }
+                        } else if let Ok(p) = fetch_page_from_daemon(
+                            images_mode,
+                            fav_filter,
+                            Some(page_rows),
+                            Some(items.len()),
+                            None,
+                            tag_filter.clone(),
+                        ) {
+                            has_more = p.more;
+                            let base = items.len();
+                            items.extend(p.items);
+                            for (i, it) in items[base..].iter().enumerate() {
+                                let hay = match it {
+                                    Item::Text { text, .. } => text.as_str(),
+                                    Item::Image { format, .. } => format.as_str(),
+                                };
+                                if matcher.fuzzy_match(hay, &query).is_some() {
+                                    filtered.push(base + i);
+                                }
+                            }
+                            guard += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    // keep order stable by re-sorting filtered by fuzzy score
+                    let mut rescored: Vec<(i64, usize)> = Vec::new();
+                    for &i in &filtered {
+                        let hay = match &items[i] {
+                            Item::Text { text, .. } => text.as_str(),
+                            Item::Image { format, .. } => format.as_str(),
+                        };
+                        if let Some(score) = matcher.fuzzy_match(hay, &query) {
+                            rescored.push((score, i));
+                        }
+                    }
+                    rescored.sort_by_key(|(s, _)| -*s);
+                    filtered = rescored.into_iter().map(|(_, i)| i).collect();
+                }
             } else {
                 filtered = build_filtered_indices(
                     &items,
@@ -1150,11 +1201,7 @@ pub fn run_picker_with(
                                     fav_filter,
                                     Some(page_rows),
                                     Some(0),
-                                    if mode == Mode::Query && !query.is_empty() {
-                                        Some(query.clone())
-                                    } else {
-                                        None
-                                    },
+                                    None,
                                     tag_filter.clone(),
                                 ) {
                                     Ok(p) => {
@@ -1167,11 +1214,7 @@ pub fn run_picker_with(
                                             images_mode,
                                             fav_filter,
                                             None,
-                                            if mode == Mode::Query && !query.is_empty() {
-                                                Some(query.clone())
-                                            } else {
-                                                None
-                                            },
+                                            None,
                                             tag_filter.clone(),
                                         )?;
                                         has_more = false;
@@ -1184,11 +1227,7 @@ pub fn run_picker_with(
                                     images_mode,
                                     fav_filter,
                                     None,
-                                    if mode == Mode::Query && !query.is_empty() {
-                                        Some(query.clone())
-                                    } else {
-                                        None
-                                    },
+                                    None,
                                     tag_filter.clone(),
                                 )?;
                                 has_more = false;
@@ -1199,11 +1238,7 @@ pub fn run_picker_with(
                                 images_mode,
                                 fav_filter,
                                 None,
-                                if mode == Mode::Query && !query.is_empty() {
-                                    Some(query.clone())
-                                } else {
-                                    None
-                                },
+                                None,
                                 tag_filter.clone(),
                             )?;
                         }
@@ -1430,11 +1465,7 @@ pub fn run_picker_with(
                                     fav_filter,
                                     Some(page_rows),
                                     Some(0),
-                                    if mode == Mode::Query && !query.is_empty() {
-                                        Some(query.clone())
-                                    } else {
-                                        None
-                                    },
+                                    None,
                                     tag_filter.clone(),
                                 ) {
                                     Ok(p) => {
@@ -1463,11 +1494,7 @@ pub fn run_picker_with(
                                     images_mode,
                                     fav_filter,
                                     None,
-                                    if mode == Mode::Query && !query.is_empty() {
-                                        Some(query.clone())
-                                    } else {
-                                        None
-                                    },
+                                    None,
                                     tag_filter.clone(),
                                 )?;
                             }
@@ -1521,11 +1548,7 @@ pub fn run_picker_with(
                                     fav_filter,
                                     Some(page_rows),
                                     Some(0),
-                                    if mode == Mode::Query && !query.is_empty() {
-                                        Some(query.clone())
-                                    } else {
-                                        None
-                                    },
+                                    None,
                                     tag_filter.clone(),
                                 ) {
                                     items = p.items;
@@ -1537,11 +1560,7 @@ pub fn run_picker_with(
                                     images_mode,
                                     fav_filter,
                                     None,
-                                    if mode == Mode::Query && !query.is_empty() {
-                                        Some(query.clone())
-                                    } else {
-                                        None
-                                    },
+                                    None,
                                     tag_filter.clone(),
                                 )?;
                             }
@@ -1594,11 +1613,7 @@ pub fn run_picker_with(
                                             fav_filter,
                                             Some(page_rows),
                                             Some(0),
-                                            if mode == Mode::Query && !query.is_empty() {
-                                                Some(query.clone())
-                                            } else {
-                                                None
-                                            },
+                                            None,
                                             tag_filter.clone(),
                                         ) {
                                             items = p.items;
@@ -1658,11 +1673,7 @@ pub fn run_picker_with(
                                         fav_filter,
                                         Some(page_rows),
                                         Some(0),
-                                        if mode == Mode::Query && !query.is_empty() {
-                                            Some(query.clone())
-                                        } else {
-                                            None
-                                        },
+                                        None,
                                         tag_filter.clone(),
                                     ) {
                                         items = p.items;
@@ -1675,11 +1686,7 @@ pub fn run_picker_with(
                                     images_mode,
                                     fav_filter,
                                     None,
-                                    if mode == Mode::Query && !query.is_empty() {
-                                        Some(query.clone())
-                                    } else {
-                                        None
-                                    },
+                                    None,
                                     tag_filter.clone(),
                                 )?;
                             }
@@ -1748,11 +1755,7 @@ pub fn run_picker_with(
                                     images_mode,
                                     fav_filter,
                                     None,
-                                    if mode == Mode::Query && !query.is_empty() {
-                                        Some(query.clone())
-                                    } else {
-                                        None
-                                    },
+                                    None,
                                     tag_filter.clone(),
                                 )?;
                                 has_more = false;
@@ -2224,21 +2227,17 @@ pub fn run_picker_with(
                         store,
                         images_mode,
                         fav_filter,
-                        Some(page_rows),
                         if mode == Mode::Query && !query.is_empty() {
-                            Some(query.clone())
-                        } else {
                             None
+                        } else {
+                            Some(page_rows)
                         },
+                        None,
                         tag_filter.clone(),
                     )?;
                     // Update total via store count
                     let total = store.count(Query {
-                        contains: if mode == Mode::Query && !query.is_empty() {
-                            Some(query.clone())
-                        } else {
-                            None
-                        },
+                        contains: None,
                         favorites_only: fav_filter,
                         limit: None,
                         tag: tag_filter.clone(),
@@ -2256,11 +2255,7 @@ pub fn run_picker_with(
                         fav_filter,
                         Some(page_rows),
                         Some(0),
-                        if mode == Mode::Query && !query.is_empty() {
-                            Some(query.clone())
-                        } else {
-                            None
-                        },
+                        None,
                         tag_filter.clone(),
                     ) {
                         last_known_total = p0.total;
@@ -2274,11 +2269,7 @@ pub fn run_picker_with(
                             fav_filter,
                             Some(page_rows),
                             Some(fetched.len()),
-                            if mode == Mode::Query && !query.is_empty() {
-                                Some(query.clone())
-                            } else {
-                                None
-                            },
+                            None,
                             tag_filter.clone(),
                         ) {
                             more = p.more;
