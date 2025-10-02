@@ -134,13 +134,16 @@ fn gen_id() -> String {
     format!("{:x}", ns)
 }
 
-    impl Store for MemStore {
+impl Store for MemStore {
     fn add(&self, text: &str) -> anyhow::Result<Clip> {
         let now = OffsetDateTime::now_utc();
         // Deduplicate exact text: update last_used_at and move to front
         {
             let mut v = self.inner.write().expect("poisoned");
-            if let Some(pos) = v.iter().position(|c| c.kind == ClipKind::Text && c.text == text) {
+            if let Some(pos) = v
+                .iter()
+                .position(|c| c.kind == ClipKind::Text && c.text == text)
+            {
                 let mut c = v.remove(pos);
                 c.last_used_at = Some(now);
                 v.insert(0, c.clone());
@@ -650,14 +653,16 @@ mod sqlite_store {
                     let conn = self.conn.lock().unwrap();
                     let now = OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
                     let lamport: i64 = conn
-                        .query_row("SELECT COALESCE(MAX(lamport),0)+1 FROM clips", [], |r| r.get(0))
+                        .query_row("SELECT COALESCE(MAX(lamport),0)+1 FROM clips", [], |r| {
+                            r.get(0)
+                        })
                         .unwrap_or(1);
                     conn.execute(
                         "UPDATE clips SET last_used_at = ?, updated_at = ?, lamport = ? WHERE id = ?",
                         params![now, now, lamport, existing_id],
                     )?;
                 } // drop conn lock before calling self.get (avoids deadlock)
-                // Return updated row
+                  // Return updated row
                 return self
                     .get(&existing_id)?
                     .ok_or_else(|| anyhow::anyhow!("clip not found after update"));

@@ -17,8 +17,8 @@ use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 // no process or encoder imports needed here
 use crate::copy_helpers;
-use crate::theme;
 use crate::managed_daemon;
+use crate::theme;
 use ditox_core::StoreImpl;
 use std::path::{Path, PathBuf};
 
@@ -296,8 +296,14 @@ pub fn run_picker_with(
     let mut show_help: bool = false;
     let mut last_fetch: Instant = Instant::now();
     // Auto-refresh interval (ms): env overrides config; default 1500ms
-    let refresh_ms_env = std::env::var("DITOX_TUI_REFRESH_MS").ok().and_then(|v| v.parse::<u64>().ok());
-    let refresh_ms_cfg = settings.tui.as_ref().and_then(|t| t.refresh_ms).filter(|&v| v > 0);
+    let refresh_ms_env = std::env::var("DITOX_TUI_REFRESH_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok());
+    let refresh_ms_cfg = settings
+        .tui
+        .as_ref()
+        .and_then(|t| t.refresh_ms)
+        .filter(|&v| v > 0);
     let refresh_every_ms: u64 = refresh_ms_env.or(refresh_ms_cfg).unwrap_or(1500);
     // input mode: do not capture characters until '/' pressed
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -395,7 +401,12 @@ pub fn run_picker_with(
         has_more = false;
     }
     trace("data: initial page", t0);
-    filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+    filtered = build_filtered_indices(
+        &items,
+        if mode == Mode::Query { &query } else { "" },
+        match_fuzzy,
+        &matcher,
+    );
 
     loop {
         // recompute filtered when query changes or filter toggles
@@ -454,7 +465,12 @@ pub fn run_picker_with(
                     scored.into_iter().map(|(_, i)| i).collect()
                 };
             } else {
-                filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                filtered = build_filtered_indices(
+                    &items,
+                    if mode == Mode::Query { &query } else { "" },
+                    match_fuzzy,
+                    &matcher,
+                );
             }
             last_query = query.clone();
             // Track tag typing timestamp when in tag mode
@@ -1001,12 +1017,17 @@ pub fn run_picker_with(
                     }
                     // Managed capture controls (when available): Ctrl+P pause/resume, D toggle images capture
                     KeyCode::Char('p')
-                        if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                        if k.modifiers
+                            .contains(crossterm::event::KeyModifiers::CONTROL) =>
                     {
                         if let Some(ctrl) = managed_daemon::global_control() {
                             ctrl.toggle_pause();
                             toast = Some((
-                                if ctrl.is_paused() { "Capture paused".into() } else { "Capture resumed".into() },
+                                if ctrl.is_paused() {
+                                    "Capture paused".into()
+                                } else {
+                                    "Capture resumed".into()
+                                },
                                 Instant::now() + Duration::from_millis(1200),
                             ));
                         }
@@ -1015,7 +1036,11 @@ pub fn run_picker_with(
                         if let Some(ctrl) = managed_daemon::global_control() {
                             ctrl.toggle_images();
                             toast = Some((
-                                if ctrl.images_on() { "Images: on".into() } else { "Images: off".into() },
+                                if ctrl.images_on() {
+                                    "Images: on".into()
+                                } else {
+                                    "Images: off".into()
+                                },
                                 Instant::now() + Duration::from_millis(900),
                             ));
                         }
@@ -1085,7 +1110,12 @@ pub fn run_picker_with(
                                 tag_filter.clone(),
                             )?;
                         }
-                        filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                        filtered = build_filtered_indices(
+                            &items,
+                            if mode == Mode::Query { &query } else { "" },
+                            match_fuzzy,
+                            &matcher,
+                        );
                     }
                     KeyCode::Char('f') if mode == Mode::Normal => {
                         fav_filter = !fav_filter;
@@ -1140,7 +1170,12 @@ pub fn run_picker_with(
                                 tag_filter.clone(),
                             )?;
                         }
-                        filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                        filtered = build_filtered_indices(
+                            &items,
+                            if mode == Mode::Query { &query } else { "" },
+                            match_fuzzy,
+                            &matcher,
+                        );
                     }
                     KeyCode::Char('i') if mode == Mode::Normal => {
                         images_mode = !images_mode;
@@ -1189,7 +1224,12 @@ pub fn run_picker_with(
                         })();
                         match load_res {
                             Ok(()) => {
-                                filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                                filtered = build_filtered_indices(
+                                    &items,
+                                    if mode == Mode::Query { &query } else { "" },
+                                    match_fuzzy,
+                                    &matcher,
+                                );
                             }
                             Err(e) => {
                                 let msg = format!("{}", e);
@@ -1287,7 +1327,12 @@ pub fn run_picker_with(
                                     tag_filter.clone(),
                                 )?;
                             }
-                            filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                            filtered = build_filtered_indices(
+                                &items,
+                                if mode == Mode::Query { &query } else { "" },
+                                match_fuzzy,
+                                &matcher,
+                            );
                             if selected >= page_rows {
                                 selected = page_rows.saturating_sub(1);
                             }
@@ -1347,7 +1392,12 @@ pub fn run_picker_with(
                                     tag_filter.clone(),
                                 )?;
                             }
-                            filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                            filtered = build_filtered_indices(
+                                &items,
+                                if mode == Mode::Query { &query } else { "" },
+                                match_fuzzy,
+                                &matcher,
+                            );
                             if selected >= page_rows {
                                 selected = page_rows.saturating_sub(1);
                             }
@@ -1406,7 +1456,12 @@ pub fn run_picker_with(
                                             tag_filter.clone(),
                                         )?;
                                     }
-                                    filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                                    filtered = build_filtered_indices(
+                                        &items,
+                                        if mode == Mode::Query { &query } else { "" },
+                                        match_fuzzy,
+                                        &matcher,
+                                    );
                                     if selected >= page_rows {
                                         selected = page_rows.saturating_sub(1);
                                     }
@@ -1457,7 +1512,12 @@ pub fn run_picker_with(
                                     tag_filter.clone(),
                                 )?;
                             }
-                filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                            filtered = build_filtered_indices(
+                                &items,
+                                if mode == Mode::Query { &query } else { "" },
+                                match_fuzzy,
+                                &matcher,
+                            );
                             if selected >= page_rows {
                                 selected = page_rows.saturating_sub(1);
                             }
@@ -1522,7 +1582,12 @@ pub fn run_picker_with(
                             )?;
                             has_more = false;
                         }
-                        filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                        filtered = build_filtered_indices(
+                            &items,
+                            if mode == Mode::Query { &query } else { "" },
+                            match_fuzzy,
+                            &matcher,
+                        );
                     }
                     // Run migrations on DB (best-effort) and reload list
                     KeyCode::Char('m') | KeyCode::Char('M') if mode == Mode::Normal => {
@@ -1557,7 +1622,12 @@ pub fn run_picker_with(
                                     items = v;
                                     has_more = false;
                                 }
-                                filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                                filtered = build_filtered_indices(
+                                    &items,
+                                    if mode == Mode::Query { &query } else { "" },
+                                    match_fuzzy,
+                                    &matcher,
+                                );
                             }
                             Err(e) => {
                                 toast = Some((
@@ -1616,7 +1686,12 @@ pub fn run_picker_with(
                                     has_more = p.more;
                                     items.extend(p.items);
                                     last_query.clear();
-                                    filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                                    filtered = build_filtered_indices(
+                                        &items,
+                                        if mode == Mode::Query { &query } else { "" },
+                                        match_fuzzy,
+                                        &matcher,
+                                    );
                                 }
                             }
                         }
@@ -1645,7 +1720,12 @@ pub fn run_picker_with(
                                     has_more = p.more;
                                     items.extend(p.items);
                                     last_query.clear();
-                                    filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                                    filtered = build_filtered_indices(
+                                        &items,
+                                        if mode == Mode::Query { &query } else { "" },
+                                        match_fuzzy,
+                                        &matcher,
+                                    );
                                 }
                             }
                         }
@@ -1668,7 +1748,12 @@ pub fn run_picker_with(
                                         has_more = p.more;
                                         items.extend(p.items);
                                         last_query.clear();
-                                        filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                                        filtered = build_filtered_indices(
+                                            &items,
+                                            if mode == Mode::Query { &query } else { "" },
+                                            match_fuzzy,
+                                            &matcher,
+                                        );
                                     } else {
                                         break;
                                     }
@@ -1865,7 +1950,12 @@ pub fn run_picker_with(
                                             items = p.items;
                                             has_more = p.more;
                                             last_query.clear();
-                                            filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                                            filtered = build_filtered_indices(
+                                                &items,
+                                                if mode == Mode::Query { &query } else { "" },
+                                                match_fuzzy,
+                                                &matcher,
+                                            );
                                         }
                                     }
                                 } else if let Ok(v) = fetch_from_store(
@@ -1878,7 +1968,12 @@ pub fn run_picker_with(
                                     items = v;
                                     has_more = false;
                                     last_query.clear();
-                                    filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                                    filtered = build_filtered_indices(
+                                        &items,
+                                        if mode == Mode::Query { &query } else { "" },
+                                        match_fuzzy,
+                                        &matcher,
+                                    );
                                 }
                             }
                         }
@@ -1889,24 +1984,25 @@ pub fn run_picker_with(
 
         // Periodic auto-reload when idle (no active query)
         if last_fetch.elapsed() > Duration::from_millis(refresh_every_ms) && query.is_empty() {
-            let fetched_from_store = |store: &dyn Store| -> anyhow::Result<(Vec<Item>, Option<usize>)> {
-                let v = fetch_from_store(
-                store,
-                images_mode,
-                fav_filter,
-                Some(page_rows),
-                tag_filter.clone(),
-            )?;
-                // Update total via store count
-                let total = store.count(Query {
-                    contains: None,
-                    favorites_only: fav_filter,
-                    limit: None,
-                    tag: tag_filter.clone(),
-                    rank: false,
-                })?;
-                Ok((v, Some(total)))
-            };
+            let fetched_from_store =
+                |store: &dyn Store| -> anyhow::Result<(Vec<Item>, Option<usize>)> {
+                    let v = fetch_from_store(
+                        store,
+                        images_mode,
+                        fav_filter,
+                        Some(page_rows),
+                        tag_filter.clone(),
+                    )?;
+                    // Update total via store count
+                    let total = store.count(Query {
+                        contains: None,
+                        favorites_only: fav_filter,
+                        limit: None,
+                        tag: tag_filter.clone(),
+                        rank: false,
+                    })?;
+                    Ok((v, Some(total)))
+                };
 
             if use_daemon {
                 let target_len = (page_index + 1) * page_size;
@@ -1945,7 +2041,12 @@ pub fn run_picker_with(
                         items = fetched;
                         has_more = more;
                         last_query.clear();
-                        filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                        filtered = build_filtered_indices(
+                            &items,
+                            if mode == Mode::Query { &query } else { "" },
+                            match_fuzzy,
+                            &matcher,
+                        );
                     }
                 } else {
                     // Managed mode (no external daemon): fall back to reading from the store
@@ -1953,7 +2054,12 @@ pub fn run_picker_with(
                         items = v;
                         has_more = false;
                         last_query.clear();
-                        filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                        filtered = build_filtered_indices(
+                            &items,
+                            if mode == Mode::Query { &query } else { "" },
+                            match_fuzzy,
+                            &matcher,
+                        );
                         last_known_total = total;
                     }
                 }
@@ -1961,7 +2067,12 @@ pub fn run_picker_with(
                 items = v;
                 has_more = false;
                 last_query.clear();
-                filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                filtered = build_filtered_indices(
+                    &items,
+                    if mode == Mode::Query { &query } else { "" },
+                    match_fuzzy,
+                    &matcher,
+                );
                 last_known_total = total;
             }
             last_fetch = Instant::now();
@@ -2098,16 +2209,31 @@ fn build_filtered_indices(
                         .as_deref()
                         .and_then(|p| Path::new(p).file_name().and_then(|n| n.to_str()))
                         .unwrap_or("");
-                    if name.is_empty() { format.as_str() } else { name }
+                    if name.is_empty() {
+                        format.as_str()
+                    } else {
+                        name
+                    }
                 }
             };
-            if let Some(s) = matcher.fuzzy_match(hay, q) { scored.push((s, idx)); }
+            if let Some(s) = matcher.fuzzy_match(hay, q) {
+                scored.push((s, idx));
+            }
         }
         scored.sort_by_key(|(s, _)| -*s);
         scored.into_iter().map(|(_, i)| i).collect()
     } else {
         // ASCII-insensitive substring match (preserves byte positions)
-        let ql = q.chars().map(|c| if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c }).collect::<String>();
+        let ql = q
+            .chars()
+            .map(|c| {
+                if c.is_ascii_uppercase() {
+                    c.to_ascii_lowercase()
+                } else {
+                    c
+                }
+            })
+            .collect::<String>();
         items
             .iter()
             .enumerate()
@@ -2119,16 +2245,36 @@ fn build_filtered_indices(
                             .as_deref()
                             .and_then(|p| Path::new(p).file_name().and_then(|n| n.to_str()))
                             .unwrap_or("");
-                        if name.is_empty() { format.as_str() } else { name }
+                        if name.is_empty() {
+                            format.as_str()
+                        } else {
+                            name
+                        }
                     }
                 };
-                let hl: String = hay.chars().map(|c| if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c }).collect();
+                let hl: String = hay
+                    .chars()
+                    .map(|c| {
+                        if c.is_ascii_uppercase() {
+                            c.to_ascii_lowercase()
+                        } else {
+                            c
+                        }
+                    })
+                    .collect();
                 let m = hl.contains(&ql);
                 if m && std::env::var("DITOX_DEBUG_FILTER").ok().as_deref() == Some("1") {
                     let snippet: String = hay.chars().take(160).collect();
-                    eprintln!("[filter] substring matched idx={} query='{}' text_starts='{}'", idx, q, snippet);
+                    eprintln!(
+                        "[filter] substring matched idx={} query='{}' text_starts='{}'",
+                        idx, q, snippet
+                    );
                 }
-                if m { Some(idx) } else { None }
+                if m {
+                    Some(idx)
+                } else {
+                    None
+                }
             })
             .collect()
     };

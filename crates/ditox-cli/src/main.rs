@@ -11,9 +11,9 @@ use std::path::PathBuf;
 mod copy_helpers;
 mod doctor;
 mod lazy_store;
+mod managed_daemon;
 mod picker;
 mod theme;
-mod managed_daemon;
 mod xfer;
 
 #[derive(Parser)]
@@ -475,8 +475,11 @@ fn main() -> Result<()> {
             glyphs,
             layout,
             glyphsets,
-            layouts } => {
-            if no_alt_screen { std::env::set_var("DITOX_TUI_ALT_SCREEN", "0"); }
+            layouts,
+        } => {
+            if no_alt_screen {
+                std::env::set_var("DITOX_TUI_ALT_SCREEN", "0");
+            }
             // Utility modes that don't start the TUI
             if themes {
                 for name in theme::available_themes() {
@@ -601,14 +604,17 @@ fn main() -> Result<()> {
                 #[cfg(feature = "libsql")]
                 {
                     match &settings.storage {
-                        config::Storage::Turso { url, auth_token } => {
-                            Arc::new(lazy_store::LazyStore::remote_libsql(url.clone(), auth_token.clone()))
-                        }
+                        config::Storage::Turso { url, auth_token } => Arc::new(
+                            lazy_store::LazyStore::remote_libsql(url.clone(), auth_token.clone()),
+                        ),
                         _ => {
                             eprintln!(
                                 "remote backend not configured; falling back to local SQLite"
                             );
-                            Arc::new(lazy_store::LazyStore::local_sqlite(default_db_path(), false))
+                            Arc::new(lazy_store::LazyStore::local_sqlite(
+                                default_db_path(),
+                                false,
+                            ))
                         }
                     }
                 }
@@ -617,7 +623,10 @@ fn main() -> Result<()> {
                     eprintln!(
                         "built without 'libsql' feature; --remote unavailable — using local SQLite"
                     );
-                    Arc::new(lazy_store::LazyStore::local_sqlite(default_db_path(), false))
+                    Arc::new(lazy_store::LazyStore::local_sqlite(
+                        default_db_path(),
+                        false,
+                    ))
                 }
             } else {
                 // Local store (matches clipd’s DB) — use configured path when present
@@ -644,15 +653,19 @@ fn main() -> Result<()> {
                     _ => None,
                 });
             let mut mode = daemon
-                .or_else(|| env_mode.as_deref().and_then(|m| match m {
-                    "managed" => Some(DaemonMode::Managed),
-                    "external" => Some(DaemonMode::External),
-                    "off" => Some(DaemonMode::Off),
-                    _ => None,
-                }))
+                .or_else(|| {
+                    env_mode.as_deref().and_then(|m| match m {
+                        "managed" => Some(DaemonMode::Managed),
+                        "external" => Some(DaemonMode::External),
+                        "off" => Some(DaemonMode::Off),
+                        _ => None,
+                    })
+                })
                 .or(cfg_mode)
                 .unwrap_or(DaemonMode::Managed);
-            if bypass_daemon { mode = DaemonMode::Off; }
+            if bypass_daemon {
+                mode = DaemonMode::Off;
+            }
             let sample_str = daemon_sample
                 .or_else(|| std::env::var("DITOX_DAEMON_SAMPLE").ok())
                 .or_else(|| settings.daemon.as_ref().and_then(|d| d.sample.clone()))
@@ -660,11 +673,13 @@ fn main() -> Result<()> {
             let sample_ms = parse_sample_ms(&sample_str).unwrap_or(200);
             let images_on = daemon_images
                 .or_else(|| {
-                    std::env::var("DITOX_DAEMON_IMAGES").ok().and_then(|v| match v.as_str() {
-                        "1" | "true" | "on" => Some(true),
-                        "0" | "false" | "off" => Some(false),
-                        _ => None,
-                    })
+                    std::env::var("DITOX_DAEMON_IMAGES")
+                        .ok()
+                        .and_then(|v| match v.as_str() {
+                            "1" | "true" | "on" => Some(true),
+                            "0" | "false" | "off" => Some(false),
+                            _ => None,
+                        })
                 })
                 .or_else(|| settings.daemon.as_ref().and_then(|d| d.images))
                 .unwrap_or(true);
@@ -676,12 +691,24 @@ fn main() -> Result<()> {
                         if crate::managed_daemon::detect_external_clipd() {
                             std::env::set_var("DITOX_CAPTURE_STATUS", "external");
                         } else {
-                            match crate::managed_daemon::start_managed(lazy.clone(), crate::managed_daemon::DaemonConfig { sample_ms, images: images_on }) {
+                            match crate::managed_daemon::start_managed(
+                                lazy.clone(),
+                                crate::managed_daemon::DaemonConfig {
+                                    sample_ms,
+                                    images: images_on,
+                                },
+                            ) {
                                 Ok(h) => {
                                     let ctrl = h.control();
                                     crate::managed_daemon::set_global_control(ctrl);
                                     managed_handle = Some(h);
-                                    std::env::set_var("DITOX_CAPTURE_STATUS", format!("managed(active,{}ms,images:{})", sample_ms, images_on));
+                                    std::env::set_var(
+                                        "DITOX_CAPTURE_STATUS",
+                                        format!(
+                                            "managed(active,{}ms,images:{})",
+                                            sample_ms, images_on
+                                        ),
+                                    );
                                 }
                                 Err(_) => {
                                     std::env::set_var("DITOX_CAPTURE_STATUS", "off");
@@ -689,8 +716,12 @@ fn main() -> Result<()> {
                             }
                         }
                     }
-                    DaemonMode::External => { std::env::set_var("DITOX_CAPTURE_STATUS", "external"); }
-                    DaemonMode::Off => { std::env::set_var("DITOX_CAPTURE_STATUS", "off"); }
+                    DaemonMode::External => {
+                        std::env::set_var("DITOX_CAPTURE_STATUS", "external");
+                    }
+                    DaemonMode::Off => {
+                        std::env::set_var("DITOX_CAPTURE_STATUS", "off");
+                    }
                 }
             }
 
@@ -1302,7 +1333,9 @@ use config::load_settings;
 fn parse_sample_ms(s: &str) -> Result<u64> {
     // Accept numbers with optional unit: ms|s. Default to ms if no unit.
     let s = s.trim();
-    if s.is_empty() { return Ok(200); }
+    if s.is_empty() {
+        return Ok(200);
+    }
     let (num, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
     let n: u64 = num.parse().unwrap_or(200);
     let ms = match unit.trim() {
