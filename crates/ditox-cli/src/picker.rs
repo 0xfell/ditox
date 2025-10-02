@@ -4,9 +4,9 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Terminal;
 use serde::{Deserialize, Serialize};
@@ -260,9 +260,6 @@ pub fn run_picker_with(
 ) -> Result<Option<String>> {
     let t0 = Instant::now();
     let use_daemon = !no_daemon;
-    // Alt screen preference from env (set via CLI or settings)
-    let alt_env = std::env::var("DITOX_TUI_ALT_SCREEN").ok();
-    let want_alt_screen = alt_env.as_deref().map(|v| v != "0").unwrap_or(true);
     // Filters are mutable during the session
     let mut fav_filter = favorites;
     let mut images_mode = images;
@@ -282,14 +279,10 @@ pub fn run_picker_with(
     let mut items: Vec<Item> = Vec::new();
     let mut has_more: bool;
 
-    let mut used_alt_screen = false;
     let mut terminal = if draw {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        if want_alt_screen {
-            crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
-            used_alt_screen = true;
-        }
+        crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
         let term = Terminal::new(backend)?;
         trace("tui: terminal", t0);
@@ -301,9 +294,6 @@ pub fn run_picker_with(
     let mut query = String::new();
     let matcher = SkimMatcherV2::default();
     let tui_theme = theme::load_tui_theme();
-    let glyphs = theme::load_glyphs();
-    let layout = theme::load_layout();
-    let caps = theme::detect_caps();
     #[allow(unused_assignments)]
     let mut filtered: Vec<usize> = Vec::new();
     let mut last_query = String::new();
@@ -346,8 +336,6 @@ pub fn run_picker_with(
         Query,
     }
     let mut mode = Mode::Normal;
-    // Dynamic page rows (items per page) based on viewport height; initialized from settings
-    let mut page_rows: usize = page_size;
     // when external filter changes (f/i/tag), we need to recompute filtered
     let mut needs_refilter = true;
 
@@ -355,10 +343,7 @@ pub fn run_picker_with(
     if let Some(ref mut term) = terminal {
         term.draw(|f| {
             let size = f.area();
-            let mut block = Block::default().title("Loading…");
-            if caps.unicode {
-                block = block.borders(Borders::ALL);
-            }
+            let block = Block::default().borders(Borders::ALL).title("Loading…");
             f.render_widget(block, size);
         })?;
         trace("tui: first frame", t0);
@@ -394,7 +379,7 @@ pub fn run_picker_with(
             match dc.request_page(
                 images_mode,
                 fav_filter,
-                Some(page_rows),
+                Some(page_size),
                 Some(0),
                 None,
                 tag_filter.clone(),
@@ -409,7 +394,7 @@ pub fn run_picker_with(
                         store,
                         images_mode,
                         fav_filter,
-                        Some(page_rows),
+                        Some(page_size),
                         tag_filter.clone(),
                     )?;
                     has_more = false;
@@ -419,7 +404,7 @@ pub fn run_picker_with(
         } else if let Ok(p) = fetch_page_from_daemon(
             images_mode,
             fav_filter,
-            Some(page_rows),
+            Some(page_size),
             Some(0),
             None,
             tag_filter.clone(),
@@ -432,7 +417,7 @@ pub fn run_picker_with(
                 store,
                 images_mode,
                 fav_filter,
-                Some(page_rows),
+                Some(page_size),
                 tag_filter.clone(),
             )?;
             has_more = false;
@@ -442,7 +427,7 @@ pub fn run_picker_with(
             store,
             images_mode,
             fav_filter,
-            Some(page_rows),
+            Some(page_size),
             tag_filter.clone(),
         )?;
         has_more = false;
@@ -460,7 +445,7 @@ pub fn run_picker_with(
                     match dc.request_page(
                         images_mode,
                         fav_filter,
-                        Some(page_rows),
+                        Some(page_size),
                         Some(0),
                         if mode == Mode::Query && !query.is_empty() {
                             Some(query.clone())
@@ -563,25 +548,14 @@ pub fn run_picker_with(
             term.draw(|f| {
                 let size = f.area();
                 let chunks = if mode == Mode::Query {
-                    if layout.search_bar_bottom {
-                        Layout::default()
-                            .direction(Direction::Vertical)
-                            .constraints([
-                                Constraint::Min(5),     // list
-                                Constraint::Length(3),  // shortcuts/status
-                                Constraint::Length(3),  // search bar bottom
-                            ])
-                            .split(size)
-                    } else {
-                        Layout::default()
-                            .direction(Direction::Vertical)
-                            .constraints([
-                                Constraint::Length(3),  // search bar top
-                                Constraint::Min(5),     // list
-                                Constraint::Length(3),  // shortcuts/status
-                            ])
-                            .split(size)
-                    }
+                    Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Length(3),  // search bar (only in search mode)
+                            Constraint::Min(5),     // list
+                            Constraint::Length(3),  // shortcuts/status
+                        ])
+                        .split(size)
                 } else {
                     Layout::default()
                         .direction(Direction::Vertical)
@@ -594,181 +568,24 @@ pub fn run_picker_with(
 
                 if mode == Mode::Query {
                     let q_title = "Search — type to filter";
-                    let mut q_block = Block::default().title(q_title);
-                    if caps.unicode {
-                        if let Some(bt) = layout.border_search.or(tui_theme.border_type) {
-                            q_block = q_block
-                                .borders(Borders::ALL)
-                                .border_type(bt)
-                                .border_style(Style::default().fg(tui_theme.border_fg));
-                        }
-                    }
-                    let q = Paragraph::new(query.as_str()).block(q_block);
-                    let q_idx = if layout.search_bar_bottom { 2 } else { 0 };
-                    f.render_widget(q, chunks[q_idx]);
+                    let q = Paragraph::new(query.as_str()).block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(q_title)
+                            .border_style(Style::default().fg(tui_theme.border_fg)),
+                    );
+                    f.render_widget(q, chunks[0]);
                 }
-
-                // Compute dynamic rows-per-page from list area height and item height
-                let list_area_idx = if mode == Mode::Query {
-                    if layout.search_bar_bottom { 0 } else { 1 }
-                } else { 0 };
-                let list_area = chunks[list_area_idx];
-                let item_rows = layout.list_line_height.clamp(1, 2) as usize;
-                page_rows = std::cmp::max(1, (list_area.height as usize) / item_rows);
 
                 // Pagination window
                 let total = filtered.len();
-                let total_pages = if total == 0 { 1 } else { (total - 1) / page_rows + 1 };
+                let total_pages = if total == 0 { 1 } else { (total - 1) / page_size + 1 };
                 if page_index >= total_pages { page_index = total_pages.saturating_sub(1); }
-                let start = page_index.saturating_mul(page_rows);
-                let end = (start + page_rows).min(total);
+                let start = page_index.saturating_mul(page_size);
+                let end = (start + page_size).min(total);
                 let visible = &filtered[start..end];
 
-
-                fn highlight_line<'a>(s: String, query: &str, th: &crate::theme::TuiTheme) -> Line<'a> {
-                    if query.is_empty() || query.starts_with('#') { return Line::from(s); }
-                    let lc = s.to_lowercase();
-                    let qlc = query.to_lowercase();
-                    if let Some(idx) = lc.find(&qlc) {
-                        let end = idx + qlc.len();
-                        let (a,b,c) = (&s[..idx], &s[idx..end], &s[end..]);
-                        Line::from(vec![
-                            Span::raw(a.to_string()),
-                            Span::styled(b.to_string(), Style::default().fg(th.search_match_fg).bg(th.search_match_bg).add_modifier(Modifier::BOLD)),
-                            Span::raw(c.to_string()),
-                        ])
-                    } else {
-                        Line::from(s)
-                    }
-                }
-
-                fn render_item_text(
-                    id: &str, favorite: bool, text: &str, created_at: i64, last_used_at: &Option<i64>,
-                    absolute_times: bool, selected_ids: &std::collections::HashSet<String>, glyphs: &crate::theme::Glyphs,
-                    layout: &crate::theme::LayoutPack, th: &crate::theme::TuiTheme, query: &str,
-                ) -> ListItem<'static> {
-                    let fav = if favorite { glyphs.favorite_on.as_str() } else { glyphs.favorite_off.as_str() };
-                    let sel_mark = if selected_ids.contains(id) { glyphs.selected.as_str() } else { glyphs.unselected.as_str() };
-                    let created_str = if absolute_times { fmt_abs_ns(created_at) } else { rel_time_ns(created_at) };
-                    let last_str = if let Some(lu) = last_used_at { if absolute_times { fmt_abs_ns(*lu) } else { rel_time_ns(*lu) } } else { "never".into() };
-                    let line1 = if let Some(tpl) = &layout.item_template {
-                        let mut s = tpl.clone();
-                        let pairs = [
-                            ("{favorite}", fav),
-                            ("{selected}", sel_mark),
-                            ("{kind}", glyphs.kind_text.as_str()),
-                            ("{preview}", &preview(text)),
-                        ];
-                        for (k,v) in pairs { s = s.replace(k, v); }
-                        s
-                    } else {
-                        format!("{}{} {} {}", fav, sel_mark, glyphs.kind_text, preview(text))
-                    };
-                    let meta_s = if let Some(tpl) = &layout.meta_template {
-                        let mut s = tpl.clone();
-                        let (recent_ns, recent_kind) = most_recent(created_at, *last_used_at);
-                        let created_rel = rel_time_ns(created_at);
-                        let last_rel = last_used_at.map(rel_time_ns).unwrap_or_else(|| "never".into());
-                        let created_auto = fmt_auto_ns(created_at);
-                        let last_used_auto = last_used_at.map(fmt_auto_ns).unwrap_or_else(|| "never".to_string());
-                        let recent_str = fmt_auto_ns(recent_ns);
-                        let recent_label = if recent_kind == "created" { "Created at" } else { "Last time used" };
-                        let pairs = [
-                            ("{created}", created_str.as_str()),
-                            ("{last_used}", last_str.as_str()),
-                            ("{created_rel}", created_rel.as_str()),
-                            ("{last_used_rel}", last_rel.as_str()),
-                            ("{created_auto}", created_auto.as_str()),
-                            ("{last_used_auto}", last_used_auto.as_str()),
-                            ("{recent}", recent_str.as_str()),
-                            ("{recent_kind}", recent_kind),
-                            ("{recent_label}", recent_label),
-                            ("{created_label}", "Created at"),
-                            ("{last_used_label}", "Last time used"),
-                        ];
-                        for (k,v) in pairs { s = s.replace(k, v); }
-                        s
-                    } else {
-                        format!("Created at {} • Last used {}", created_str, last_str)
-                    };
-                    let line1 = highlight_line(line1, query, th);
-                    if layout.list_line_height == 1 {
-                        ListItem::new(vec![line1])
-                    } else {
-                        ListItem::new(vec![
-                            line1,
-                            Line::from(meta_s).style(Style::default().fg(th.muted_fg).add_modifier(Modifier::DIM)),
-                        ])
-                    }
-                }
-
-                fn render_item_image(
-                    id: &str, favorite: bool, width: u32, height: u32, format: &str, name: &str,
-                    created_at: i64, last_used_at: &Option<i64>, absolute_times: bool,
-                    selected_ids: &std::collections::HashSet<String>, glyphs: &crate::theme::Glyphs,
-                    layout: &crate::theme::LayoutPack, th: &crate::theme::TuiTheme, query: &str,
-                ) -> ListItem<'static> {
-                    let fav = if favorite { glyphs.favorite_on.as_str() } else { glyphs.favorite_off.as_str() };
-                    let sel_mark = if selected_ids.contains(id) { glyphs.selected.as_str() } else { glyphs.unselected.as_str() };
-                    let created_str = if absolute_times { fmt_abs_ns(created_at) } else { rel_time_ns(created_at) };
-                    let last_str = if let Some(lu) = last_used_at { if absolute_times { fmt_abs_ns(*lu) } else { rel_time_ns(*lu) } } else { "never".into() };
-                    let line1 = if let Some(tpl) = &layout.item_template {
-                        let mut s = tpl.clone();
-                        let dims = format!("{}x{}", width, height);
-                        let pairs = [
-                            ("{favorite}", fav),
-                            ("{selected}", sel_mark),
-                            ("{kind}", glyphs.kind_image.as_str()),
-                            ("{name}", name),
-                            ("{format}", format),
-                            ("{dims}", dims.as_str()),
-                        ];
-                        for (k,v) in pairs { s = s.replace(k, v); }
-                        s
-                    } else if name.is_empty() {
-                        format!("{}{} {} {}x{} {}", fav, sel_mark, glyphs.kind_image, width, height, format)
-                    } else {
-                        format!("{}{} {} {}x{} {} {}", fav, sel_mark, glyphs.kind_image, width, height, format, name)
-                    };
-                    let meta_s = if let Some(tpl) = &layout.meta_template {
-                        let mut s = tpl.clone();
-                        let (recent_ns, recent_kind) = most_recent(created_at, *last_used_at);
-                        let created_rel = rel_time_ns(created_at);
-                        let last_rel = last_used_at.map(rel_time_ns).unwrap_or_else(|| "never".into());
-                        let created_auto = fmt_auto_ns(created_at);
-                        let last_used_auto = last_used_at.map(fmt_auto_ns).unwrap_or_else(|| "never".to_string());
-                        let recent_str = fmt_auto_ns(recent_ns);
-                        let recent_label = if recent_kind == "created" { "Created at" } else { "Last time used" };
-                        let pairs = [
-                            ("{created}", created_str.as_str()),
-                            ("{last_used}", last_str.as_str()),
-                            ("{created_rel}", created_rel.as_str()),
-                            ("{last_used_rel}", last_rel.as_str()),
-                            ("{created_auto}", created_auto.as_str()),
-                            ("{last_used_auto}", last_used_auto.as_str()),
-                            ("{recent}", recent_str.as_str()),
-                            ("{recent_kind}", recent_kind),
-                            ("{recent_label}", recent_label),
-                            ("{created_label}", "Created at"),
-                            ("{last_used_label}", "Last time used"),
-                        ];
-                        for (k,v) in pairs { s = s.replace(k, v); }
-                        s
-                    } else {
-                        format!("Created at {} • Last used {}", created_str, last_str)
-                    };
-                    let line1 = highlight_line(line1, query, th);
-                    if layout.list_line_height == 1 {
-                        ListItem::new(vec![line1])
-                    } else {
-                        ListItem::new(vec![
-                            line1,
-                            Line::from(meta_s).style(Style::default().fg(th.muted_fg).add_modifier(Modifier::DIM)),
-                        ])
-                    }
-                }
-
- 5e66a45 (feat(cli): preserve selection on manual filter changes and add 'New' badge\n\n- Keep cursor position across favorites/images/tag refreshes\n- Show a subtle 'New' badge for ~2.5s on recently added items\n- Debounce selection restore and prune badges automatically\n)
+                let now = Instant::now();
                 let list_items: Vec<ListItem> = visible
                     .iter()
                     .filter_map(|&i| items.get(i))
@@ -776,9 +593,20 @@ pub fn run_picker_with(
                         Item::Text {
                             id, favorite, text, created_at, last_used_at, ..
                         } => {
-
-                            render_item_text(id, *favorite, text, *created_at, last_used_at, absolute_times, &selected_ids, &glyphs, &layout, &tui_theme, if mode == Mode::Query { &query } else { "" })
- 5e66a45 (feat(cli): preserve selection on manual filter changes and add 'New' badge\n\n- Keep cursor position across favorites/images/tag refreshes\n- Show a subtle 'New' badge for ~2.5s on recently added items\n- Debounce selection restore and prune badges automatically\n)
+                            let fav = if *favorite { "*" } else { " " };
+                            let sel_mark = if selected_ids.contains(id) { "•" } else { " " };
+                            let line1 = format!("{}{} {}", fav, sel_mark, preview(text));
+                            let created_str = if absolute_times { fmt_abs_ns(*created_at) } else { rel_time_ns(*created_at) };
+                            let last_str = if let Some(lu) = last_used_at { if absolute_times { fmt_abs_ns(*lu) } else { rel_time_ns(*lu) } } else { "never".into() };
+                            let is_new = new_until.get(id).map(|&t| t > now).unwrap_or(false);
+                            let meta = Line::from(format!(
+                                "Created at {} • Last used {}{}",
+                                created_str,
+                                last_str,
+                                if is_new { " • New" } else { "" }
+                            ))
+                            .style(Style::default().add_modifier(Modifier::DIM));
+                            ListItem::new(vec![Line::from(line1), meta])
                         }
                         Item::Image {
                             id,
@@ -797,63 +625,54 @@ pub fn run_picker_with(
                                     std::path::Path::new(p).file_name().and_then(|n| n.to_str())
                                 })
                                 .unwrap_or("");
-
-                            render_item_image(id, *favorite, *width, *height, format, name, *created_at, last_used_at, absolute_times, &selected_ids, &glyphs, &layout, &tui_theme, if mode == Mode::Query { &query } else { "" })
- 5e66a45 (feat(cli): preserve selection on manual filter changes and add 'New' badge\n\n- Keep cursor position across favorites/images/tag refreshes\n- Show a subtle 'New' badge for ~2.5s on recently added items\n- Debounce selection restore and prune badges automatically\n)
+                            let fav = if *favorite { "*" } else { " " };
+                            let sel_mark = if selected_ids.contains(id) { "•" } else { " " };
+                            let line1 = if name.is_empty() {
+                                format!("{}{} {}x{} {}", fav, sel_mark, width, height, format)
+                            } else {
+                                format!("{}{} {}x{} {} {}", fav, sel_mark, width, height, format, name)
+                            };
+                            let created_str = if absolute_times { fmt_abs_ns(*created_at) } else { rel_time_ns(*created_at) };
+                            let last_str = if let Some(lu) = last_used_at { if absolute_times { fmt_abs_ns(*lu) } else { rel_time_ns(*lu) } } else { "never".into() };
+                            let is_new = new_until.get(id).map(|&t| t > now).unwrap_or(false);
+                            let meta = format!(
+                                "Created at {} • Last used {}{}",
+                                created_str,
+                                last_str,
+                                if is_new { " • New" } else { "" }
+                            );
+                            ListItem::new(vec![
+                                Line::from(line1),
+                                Line::from(meta).style(Style::default().add_modifier(Modifier::DIM)),
+                            ])
                         }
                     })
                     .collect();
                 let thm = &tui_theme;
-                // Compute title tokens
-                let mode_str = if images_mode { "Images" } else { "Text" };
+                let mut title = if images_mode { String::from("Images") } else { String::from("Text") };
+                if fav_filter { title.push_str(" — Favorites"); }
+                if let Some(ref t) = tag_filter { if !t.is_empty() { title.push_str(&format!(" — Tag: {}", t)); } }
+                // Counts + page
                 let loaded = items.len();
                 let total_known = last_known_total.or(if use_daemon { None } else { Some(total) });
                 let total_to_show = total_known.unwrap_or(loaded);
-                let total_pages_known = total_known.map(|tt| if tt == 0 { 1 } else { (tt - 1) / page_rows + 1 });
-                let page_count = total_pages_known.unwrap_or(total_pages);
-                let page_count_str = page_count.to_string();
-                let favorites_str = if fav_filter { " — Favorites" } else { "" };
-                let tag_str = tag_filter.as_deref().filter(|s| !s.is_empty()).map(|t| format!(" — Tag: {}", t)).unwrap_or_default();
-                let remote_str = if remote_badge { " — Remote" } else { "" };
-                let title_text = if let Some(tpl) = &layout.list_title_template {
-                    tpl.replace("{mode}", mode_str)
-                        .replace("{favorites}", favorites_str)
-                        .replace("{tag}", &tag_str)
-                        .replace("{total}", &total_to_show.to_string())
-                        .replace("{page}", &(page_index + 1).to_string())
-                        .replace("{page_count}", &page_count_str)
-                        .replace("{page_size}", &page_rows.to_string())
-                        .replace("{remote}", remote_str)
+                let count_label = if fav_filter {
+                    format!(" — Total favorites {}", total_to_show)
                 } else {
-                    let mut t = String::from(mode_str);
-                    if fav_filter { t.push_str(" — Favorites"); }
-                    if !tag_str.is_empty() { t.push_str(&tag_str); }
-                    let count_label = if fav_filter { format!(" — Total favorites {}", total_to_show) } else { format!(" — Total entries {}", total_to_show) };
-                    t.push_str(&count_label);
-                    if remote_badge { t.push_str(" — Remote"); }
-                    t
+                    format!(" — Total entries {}", total_to_show)
                 };
-                // Styled title with optional remote badge (remote already in text if template used it)
-                let mut title_spans: Vec<Span> = vec![Span::styled(title_text.clone(), Style::default().fg(tui_theme.title_fg))];
-                if remote_badge {
-                    if let Some(tpl) = &layout.list_title_template {
-                        if !tpl.contains("{remote}") {
-                            title_spans.push(Span::styled(" — Remote", Style::default().fg(tui_theme.badge_fg).bg(tui_theme.badge_bg)));
-                        }
-                    }
-                }
-                let mut list_block = Block::default().title(Line::from(title_spans));
-                if caps.unicode {
-                    if let Some(bt) = layout.border_list.or(tui_theme.border_type) {
-                        list_block = list_block
-                            .borders(Borders::ALL)
-                            .border_type(bt)
-                            .border_style(Style::default().fg(thm.border_fg));
-                    }
-                }
+                let total_pages_known = total_known.map(|tt| if tt == 0 { 1 } else { (tt - 1) / page_size + 1 });
+                let page_label = match total_pages_known {
+                    Some(tp) => format!(" — Page {}/{} (page size {})", page_index + 1, tp, page_size),
+                    None => format!(" — Page {} (page size {})", page_index + 1, page_size),
+                };
+                title.push_str(&count_label);
+                title.push_str(&page_label);
+                if remote_badge { title.push_str(" — Remote"); }
                 let list = List::new(list_items)
-                    .block(list_block)
+                    .block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(thm.border_fg)))
                     .highlight_style(Style::default().fg(thm.highlight_fg).bg(thm.highlight_bg).add_modifier(Modifier::REVERSED));
+                let list_area_idx = if mode == Mode::Query { 1 } else { 0 };
                 f.render_stateful_widget(
                     list,
                     chunks[list_area_idx],
@@ -865,93 +684,44 @@ pub fn run_picker_with(
                         },
                     ),
                 );
-                // Optional compact pager at bottom-right of the list area (e.g., "1/14" or "11-20/245")
-                if layout.show_list_pager.unwrap_or(true) {
-                    let total_known2 = last_known_total.or(if use_daemon { None } else { Some(total) });
-                    let total_to_show2 = total_known2.unwrap_or(total);
-                    let first = if total == 0 { 0 } else { start + 1 };
-                    let last = end;
-                    let pager_tpl = layout.pager_template.as_deref().unwrap_or("{page}/{page_count}");
-                    let pager_text = pager_tpl
-                        .replace("{page}", &(page_index + 1).to_string())
-                        .replace("{page_count}", &page_count_str)
-                        .replace("{first}", &first.to_string())
-                        .replace("{last}", &last.to_string())
-                        .replace("{total}", &total_to_show2.to_string());
-                    let la = chunks[list_area_idx];
-                    let pager_rect = ratatui::layout::Rect { x: la.x, y: la.y + la.height.saturating_sub(1), width: la.width, height: 1 };
-                    let pager = Paragraph::new(pager_text).alignment(Alignment::Left).style(Style::default().fg(tui_theme.muted_fg));
-                    f.render_widget(pager, pager_rect);
-                }
-                // Footer — simple hint (optional via layout)
+                // Footer — simple hint
                 let thm2 = &tui_theme;
-                let thm2 = &tui_theme;
-                let mut footer_block = Block::default().title(Line::styled("Shortcuts", Style::default().fg(tui_theme.title_fg)));
-                if caps.unicode {
-                    if let Some(bt) = layout.border_footer.or(tui_theme.border_type) {
-                        footer_block = footer_block
-                            .borders(Borders::ALL)
-                            .border_type(bt)
-                            .border_style(Style::default().fg(thm.border_fg));
-                    }
-                }
-                let footer_area_idx = if mode == Mode::Query { if layout.search_bar_bottom { 1 } else { 2 } } else { 1 };
-                let more_hint = if has_more { " | More available…" } else { "" };
-                let selected_count = selected_ids.len().to_string();
-                let toast_text = if let Some((msg, until)) = &toast {
-                    if Instant::now() <= *until { format!("  — {}", msg) } else { String::new() }
-                } else { String::new() };
+                let footer_block = Block::default().borders(Borders::ALL).title("Shortcuts").border_style(Style::default().fg(thm.border_fg));
+                let footer_area_idx = if mode == Mode::Query { 2 } else { 1 };
+                let mut simple = String::from("⏎ copy | x delete | p fav/unfav | Tab favorites | ? more");
+                if !selected_ids.is_empty() { simple.push_str(&format!(" | {} selected", selected_ids.len())); }
+                if has_more { simple.push_str(" | More available…"); }
+                if let Some((msg, until)) = &toast { if Instant::now() <= *until { simple.push_str(&format!("  — {}", msg)); } }
                 // Capture status summary
                 let cap_str = match cap.mode {
                     CaptureMode::Managed => {
                         let paused = cap.managed.as_ref().map(|m| m.is_paused()).unwrap_or(false);
                         let img_on = cap.managed.as_ref().map(|m| m.images_on()).unwrap_or(true);
-                        let ms = cap.managed.as_ref().map(|m| m.sample().as_millis()).unwrap_or(0);
-                        format!("managed ({}ms, images:{}, {})", ms, if img_on {"on"} else {"off"}, if paused {"paused"} else {"active"})
+                        let s = cap.managed.as_ref().map(|m| {
+                            let ms = m.sample().as_millis();
+                            format!("managed ({}ms, images:{}, {})", ms, if img_on {"on"} else {"off"}, if paused {"paused"} else {"active"})
+                        }).unwrap_or_else(|| "managed".into());
+                        s
                     }
                     CaptureMode::External => "external".into(),
                     CaptureMode::Off => "off".into(),
                 };
-                let simple = if let Some(tpl) = &layout.footer_template {
-                    tpl.replace("{enter_label}", &glyphs.enter_label)
-                        .replace("{selected_count}", &selected_count)
-                        .replace("{more_hint}", more_hint)
-                        .replace("{toast}", &toast_text)
-                        .replace("{page}", &(page_index + 1).to_string())
-                        .replace("{page_count}", &page_count_str)
-                } else {
-                    let mut s = format!("{} copy | x delete | p fav/unfav | Tab favorites | D images (managed) | Ctrl+P pause (managed) | ? more", glyphs.enter_label);
-                    if !selected_ids.is_empty() { s.push_str(&format!(" | {} selected", selected_ids.len())); }
-                    if has_more { s.push_str(" | More available…"); }
-                    if !toast_text.is_empty() { s.push_str(&toast_text); }
-                    s
-                };
-                let simple = format!("{} | capture: {}", simple, cap_str);
-                if layout.help_footer {
-                    let footer = Paragraph::new(simple)
-                        .block(footer_block)
-                        .style(Style::default().fg(tui_theme.status_fg).bg(tui_theme.status_bg))
-                        .wrap(Wrap { trim: true });
-                    f.render_widget(footer, chunks[footer_area_idx]);
-                }
-9d55e (feat(cli): embedded managed capture, TUI status, hotkeys, and search auto-refresh\n\n- Add managed daemon inside picker with lockfile + pause/images controls\n- Show capture status in footer; bind Ctrl+P (pause) and D (images)\n- Debounced auto-refresh incl. during search; preserve selection on refresh\n- Add --refresh-ms flag and [tui].refresh_ms config\n- Optional tray (feature ) with Pause/Images/QUIT; flake app \n- Doctor prints capture: managed/external/off\n\nchore(flake): add packages.ditox-tray and apps.tray; devShell includes GTK3/AppIndicator\n)
+                simple.push_str(&format!(" | capture: {}", cap_str));
+                let footer = Paragraph::new(simple)
+                    .block(footer_block)
+                    .style(Style::default().fg(thm2.help_fg))
+                    .wrap(Wrap { trim: true });
+                f.render_widget(footer, chunks[footer_area_idx]);
 
                 // Expanded help as centered modal overlay
                 if show_help {
                     let overlay = centered_rect(70, 70, size);
                     // Clear underlying area so content doesn't bleed through
                     f.render_widget(Clear, overlay);
-                    let mut block = Block::default()
-                        .title(Line::styled("Shortcuts — Help (? to close)", Style::default().fg(tui_theme.title_fg)))
-                        .style(Style::default().bg(tui_theme.status_bg));
-                    if caps.unicode {
-                        if let Some(bt) = layout.border_help.or(tui_theme.border_type) {
-                            block = block
-                                .borders(Borders::ALL)
-                                .border_type(bt)
-                                .border_style(Style::default().fg(thm.border_fg));
-                        }
-                    }
+                    let block = Block::default()
+                        .borders(Borders::ALL)
+                        .title("Shortcuts — Help (? to close)")
+                        .border_style(Style::default().fg(thm.border_fg));
                     f.render_widget(block.clone(), overlay);
                     let cols = Layout::default()
                         .direction(Direction::Horizontal)
@@ -962,66 +732,23 @@ pub fn run_picker_with(
                         ])
                         .split(inner(overlay));
                     let col1 = Paragraph::new(
-                        "↑/k up
-↓/j down
-→/l/PgDn next page
-←/h/PgUp prev page
-Home/g go to start
-End/G go to end",
+                        "↑/k up\n↓/j down\n→/l/PgDn next page\n←/h/PgUp prev page\nHome/g go to start\nEnd/G go to end",
                     )
                     .wrap(Wrap { trim: true })
-                    .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
+                    .style(Style::default().fg(thm2.help_fg));
                     let col2 = Paragraph::new(
-                        "/ filter
-s select
-S clear selected
-Tab favorites toggle
-i images view toggle
-D images capture toggle (managed)
-Ctrl+P pause/resume capture (managed)
-t apply #tag
-r refresh",
+                        "/ filter\ns select\nS clear selected\nTab favorites toggle\ni images view toggle\nD images capture toggle (managed)\nCtrl+P pause/resume capture (managed)\nt apply #tag\nr refresh",
                     )
                     .wrap(Wrap { trim: true })
-                    .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
-                    let mut col3_text = if caps.unicode {
-                        String::from("⏎ copy | x delete | p fav/unfav
-q quit
-? close help")
-                    } else {
-                        String::from("Enter copy | x delete | p fav/unfav
-q quit
-? close help")
-                    };
-                    if has_more { col3_text.push_str("
-More available…"); }
+                    .style(Style::default().fg(thm2.help_fg));
+                    let mut col3_text = String::from("⏎ copy | x delete | p fav/unfav\nq quit\n? close help");
+                    if has_more { col3_text.push_str("\nMore available…"); }
                     let col3 = Paragraph::new(col3_text)
                         .wrap(Wrap { trim: true })
-                        .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
+                        .style(Style::default().fg(thm2.help_fg));
                     f.render_widget(col1, cols[0]);
                     f.render_widget(col2, cols[1]);
                     f.render_widget(col3, cols[2]);
-9d55e (feat(cli): embedded managed capture, TUI status, hotkeys, and search auto-refresh\n\n- Add managed daemon inside picker with lockfile + pause/images controls\n- Show capture status in footer; bind Ctrl+P (pause) and D (images)\n- Debounced auto-refresh incl. during search; preserve selection on refresh\n- Add --refresh-ms flag and [tui].refresh_ms config\n- Optional tray (feature ) with Pause/Images/QUIT; flake app \n- Doctor prints capture: managed/external/off\n\nchore(flake): add packages.ditox-tray and apps.tray; devShell includes GTK3/AppIndicator\n)
-                        .wrap(Wrap { trim: true })
-                        .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
-                        let col2 = Paragraph::new(
-                            "/ filter\ns select\nS clear selected\nTab favorites toggle\ni images toggle\nt apply #tag\nr refresh",
-                        )
-                        .wrap(Wrap { trim: true })
-                        .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
-                        let mut col3_text = if caps.unicode {
-                            String::from("⏎ copy | x delete | p fav/unfav\nq quit\n? close help")
-                        } else {
-                            String::from("Enter copy | x delete | p fav/unfav\nq quit\n? close help")
-                        };
-                        if has_more { col3_text.push_str("\nMore available…"); }
-                        let col3 = Paragraph::new(col3_text)
-                            .wrap(Wrap { trim: true })
-                            .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
-                        f.render_widget(col1, cols[0]);
-                        f.render_widget(col2, cols[1]);
-                        f.render_widget(col3, cols[2]);
-                    }
                 }
             })?;
         }
@@ -1072,7 +799,7 @@ More available…"); }
                                 match dc.request_page(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_rows),
+                                    Some(page_size),
                                     Some(0),
                                     None,
                                     tag_filter.clone(),
@@ -1130,7 +857,7 @@ More available…"); }
                                 match dc.request_page(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_rows),
+                                    Some(page_size),
                                     Some(0),
                                     None,
                                     tag_filter.clone(),
@@ -1188,7 +915,7 @@ More available…"); }
                                     let p = dc.request_page(
                                         images_mode,
                                         fav_filter,
-                                        Some(page_rows),
+                                        Some(page_size),
                                         Some(0),
                                         None,
                                         tag_filter.clone(),
@@ -1292,7 +1019,7 @@ More available…"); }
                         if !selected_ids.is_empty() {
                             ids.extend(selected_ids.iter().cloned());
                         } else if let Some(idx) = filtered
-                            .get(page_index.saturating_mul(page_rows) + selected)
+                            .get(page_index.saturating_mul(page_size) + selected)
                             .cloned()
                         {
                             if let Some(it) = items.get(idx) {
@@ -1332,7 +1059,7 @@ More available…"); }
                                 match fetch_page_from_daemon(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_rows),
+                                    Some(page_size),
                                     Some(0),
                                     None,
                                     tag_filter.clone(),
@@ -1362,8 +1089,8 @@ More available…"); }
                                 )?;
                             }
                             filtered = (0..items.len()).collect();
-                            if selected >= page_rows {
-                                selected = page_rows.saturating_sub(1);
+                            if selected >= page_size {
+                                selected = page_size.saturating_sub(1);
                             }
                         }
                     }
@@ -1404,7 +1131,7 @@ More available…"); }
                                 if let Ok(p) = fetch_page_from_daemon(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_rows),
+                                    Some(page_size),
                                     Some(0),
                                     None,
                                     tag_filter.clone(),
@@ -1422,8 +1149,8 @@ More available…"); }
                                 )?;
                             }
                             filtered = (0..items.len()).collect();
-                            if selected >= page_rows {
-                                selected = page_rows.saturating_sub(1);
+                            if selected >= page_size {
+                                selected = page_size.saturating_sub(1);
                             }
                         }
                     }
@@ -1463,7 +1190,7 @@ More available…"); }
                                         if let Ok(p) = fetch_page_from_daemon(
                                             images_mode,
                                             fav_filter,
-                                            Some(page_rows),
+                                            Some(page_size),
                                             Some(0),
                                             None,
                                             tag_filter.clone(),
@@ -1481,8 +1208,8 @@ More available…"); }
                                         )?;
                                     }
                                     filtered = (0..items.len()).collect();
-                                    if selected >= page_rows {
-                                        selected = page_rows.saturating_sub(1);
+                                    if selected >= page_size {
+                                        selected = page_size.saturating_sub(1);
                                     }
                                 }
                                 pending_delete_id = None;
@@ -1513,7 +1240,7 @@ More available…"); }
                                     if let Ok(p) = dc.request_page(
                                         images_mode,
                                         fav_filter,
-                                        Some(page_rows),
+                                        Some(page_size),
                                         Some(0),
                                         None,
                                         tag_filter.clone(),
@@ -1532,8 +1259,8 @@ More available…"); }
                                 )?;
                             }
                             filtered = (0..items.len()).collect();
-                            if selected >= page_rows {
-                                selected = page_rows.saturating_sub(1);
+                            if selected >= page_size {
+                                selected = page_size.saturating_sub(1);
                             }
                         }
                     }
@@ -1557,7 +1284,7 @@ More available…"); }
                                 match dc.request_page(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_rows),
+                                    Some(page_size),
                                     Some(0),
                                     None,
                                     tag_filter.clone(),
@@ -1616,7 +1343,7 @@ More available…"); }
                                         if let Ok(p) = dc.request_page(
                                             images_mode,
                                             fav_filter,
-                                            Some(page_rows),
+                                            Some(page_size),
                                             Some(0),
                                             None,
                                             tag_filter.clone(),
@@ -1660,7 +1387,7 @@ More available…"); }
                             selected -= 1;
                         } else if page_index > 0 {
                             page_index -= 1;
-                            selected = page_rows.saturating_sub(1);
+                            selected = page_size.saturating_sub(1);
                         }
                     }
                     KeyCode::Char('k') if mode == Mode::Normal => {
@@ -1668,13 +1395,13 @@ More available…"); }
                             selected -= 1;
                         } else if page_index > 0 {
                             page_index -= 1;
-                            selected = page_rows.saturating_sub(1);
+                            selected = page_size.saturating_sub(1);
                         }
                     }
                     KeyCode::Down => {
                         let total = filtered.len();
-                        let start = page_index.saturating_mul(page_rows);
-                        let end = (start + page_rows).min(total);
+                        let start = page_index.saturating_mul(page_size);
+                        let end = (start + page_size).min(total);
                         let page_len = end.saturating_sub(start);
                         if selected + 1 < page_len {
                             selected += 1;
@@ -1687,7 +1414,7 @@ More available…"); }
                                 if let Ok(p) = dc.request_page(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_rows),
+                                    Some(page_size),
                                     Some(items.len()),
                                     None,
                                     tag_filter.clone(),
@@ -1702,8 +1429,8 @@ More available…"); }
                     }
                     KeyCode::Char('j') if mode == Mode::Normal => {
                         let total = filtered.len();
-                        let start = page_index.saturating_mul(page_rows);
-                        let end = (start + page_rows).min(total);
+                        let start = page_index.saturating_mul(page_size);
+                        let end = (start + page_size).min(total);
                         let page_len = end.saturating_sub(start);
                         if selected + 1 < page_len {
                             selected += 1;
@@ -1716,7 +1443,7 @@ More available…"); }
                                 if let Ok(p) = dc.request_page(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_rows),
+                                    Some(page_size),
                                     Some(items.len()),
                                     None,
                                     tag_filter.clone(),
@@ -1731,7 +1458,7 @@ More available…"); }
                     }
                     KeyCode::Right | KeyCode::PageDown => {
                         let total = filtered.len();
-                        let start = (page_index + 1).saturating_mul(page_rows);
+                        let start = (page_index + 1).saturating_mul(page_size);
                         if start >= total && use_daemon && has_more {
                             // Fetch enough pages to cover the next page window
                             if let Some(dc) = daemon.as_mut() {
@@ -1739,7 +1466,7 @@ More available…"); }
                                     if let Ok(p) = dc.request_page(
                                         images_mode,
                                         fav_filter,
-                                        Some(page_rows),
+                                        Some(page_size),
                                         Some(items.len()),
                                         None,
                                         tag_filter.clone(),
@@ -1755,7 +1482,7 @@ More available…"); }
                             }
                         }
                         let total = filtered.len();
-                        let start2 = (page_index + 1).saturating_mul(page_rows);
+                        let start2 = (page_index + 1).saturating_mul(page_size);
                         if start2 < total {
                             page_index += 1;
                             selected = 0;
@@ -1835,7 +1562,7 @@ More available…"); }
                                 match fetch_page_from_daemon(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_rows),
+                                    Some(page_size),
                                     Some(0),
                                     None,
                                     tag_filter.clone(),
@@ -1867,7 +1594,7 @@ More available…"); }
                             query.clear();
                             continue;
                         }
-                        let start = page_index.saturating_mul(page_rows);
+                        let start = page_index.saturating_mul(page_size);
                         if let Some(idx) = filtered.get(start + selected).cloned() {
                             // perform copy and exit
                             match &items[idx] {
@@ -1939,7 +1666,7 @@ More available…"); }
                                         if let Ok(p) = dc.request_page(
                                             images_mode,
                                             fav_filter,
-                                            Some(page_rows),
+                                            Some(page_size),
                                             Some(0),
                                             None,
                                             tag_filter.clone(),
@@ -1954,7 +1681,7 @@ More available…"); }
                                     store,
                                     images_mode,
                                     fav_filter,
-                                    Some(page_rows),
+                                    Some(page_size),
                                     tag_filter.clone(),
                                 ) {
                                     items = v;
@@ -1989,7 +1716,7 @@ More available…"); }
                     if let Ok(p0) = dc.request_page(
                         images_mode,
                         fav_filter,
-                        Some(page_rows),
+                        Some(page_size),
                         Some(0),
                         if mode == Mode::Query && !query.is_empty() {
                             Some(query.clone())
@@ -2007,7 +1734,7 @@ More available…"); }
                         if let Ok(p) = dc.request_page(
                             images_mode,
                             fav_filter,
-                            Some(page_rows),
+                            Some(page_size),
                             Some(fetched.len()),
                             if mode == Mode::Query && !query.is_empty() {
                                 Some(query.clone())
@@ -2065,7 +1792,7 @@ More available…"); }
                 store,
                 images_mode,
                 fav_filter,
-                Some(page_rows),
+                Some(page_size),
                 tag_filter.clone(),
             ) {
                 items = v;
@@ -2094,9 +1821,7 @@ More available…"); }
 
     if draw {
         disable_raw_mode()?;
-        if used_alt_screen {
-            crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
-        }
+        crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
     }
     if let Some(e) = copy_error {
         eprintln!("{}", e);
@@ -2297,47 +2022,6 @@ fn rel_time_ns(ts_ns: i64) -> String {
         u8::from(date.month()),
         date.day()
     )
-}
-
-fn date_fmt(ts_ns: i64) -> String {
-    let dt = time::OffsetDateTime::from_unix_timestamp_nanos(ts_ns as i128)
-        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
-    let d = dt.date();
-    let dd = format!("{:02}", d.day());
-    let mm = format!("{:02}", u8::from(d.month()));
-    let yyyy = format!("{}", d.year());
-    let fmt = std::env::var("DITOX_TUI_DATE_FMT").unwrap_or_else(|_| "dd-mm-yyyy".to_string());
-    fmt.replace("dd", &dd)
-        .replace("mm", &mm)
-        .replace("yyyy", &yyyy)
-}
-
-fn fmt_auto_ns(ts_ns: i64) -> String {
-    // If within N days (default 3), show relative like `10m ago`; otherwise formatted date
-    let now_ns = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
-    let delta_ns = now_ns.saturating_sub(ts_ns as i128);
-    let sec = (delta_ns / 1_000_000_000) as i64;
-    let days_threshold: i64 = std::env::var("DITOX_TUI_AUTO_DAYS")
-        .ok()
-        .and_then(|s| s.parse::<i64>().ok())
-        .unwrap_or(3);
-    if sec < days_threshold * 24 * 3600 {
-        rel_time_ns(ts_ns)
-    } else {
-        date_fmt(ts_ns)
-    }
-}
-
-fn most_recent(created_ns: i64, last_used_ns: Option<i64>) -> (i64, &'static str) {
-    if let Some(lu) = last_used_ns {
-        if lu >= created_ns {
-            (lu, "last_used")
-        } else {
-            (created_ns, "created")
-        }
-    } else {
-        (created_ns, "created")
-    }
 }
 
 #[cfg(test)]
