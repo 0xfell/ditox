@@ -706,7 +706,8 @@ pub fn run_picker_with(
                 let total_known = last_known_total.or(if use_daemon { None } else { Some(total) });
                 let total_to_show = total_known.unwrap_or(loaded);
                 let total_pages_known = total_known.map(|tt| if tt == 0 { 1 } else { (tt - 1) / page_rows + 1 });
-                let page_count_str = total_pages_known.map(|tp| tp.to_string()).unwrap_or_else(|| "?".to_string());
+                let page_count = total_pages_known.unwrap_or(total_pages);
+                let page_count_str = page_count.to_string();
                 let favorites_str = if fav_filter { " — Favorites" } else { "" };
                 let tag_str = tag_filter.as_deref().filter(|s| !s.is_empty()).map(|t| format!(" — Tag: {}", t)).unwrap_or_default();
                 let remote_str = if remote_badge { " — Remote" } else { "" };
@@ -775,7 +776,7 @@ pub fn run_picker_with(
                         .replace("{total}", &total_to_show2.to_string());
                     let la = chunks[list_area_idx];
                     let pager_rect = ratatui::layout::Rect { x: la.x, y: la.y + la.height.saturating_sub(1), width: la.width, height: 1 };
-                    let pager = Paragraph::new(pager_text).alignment(Alignment::Right).style(Style::default().fg(tui_theme.muted_fg));
+                    let pager = Paragraph::new(pager_text).alignment(Alignment::Left).style(Style::default().fg(tui_theme.muted_fg));
                     f.render_widget(pager, pager_rect);
                 }
                 // Footer — simple hint (optional via layout)
