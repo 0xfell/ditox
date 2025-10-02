@@ -360,6 +360,8 @@ pub struct LayoutPack {
     pub border_search: Option<BorderType>,
     pub border_footer: Option<BorderType>,
     pub border_help: Option<BorderType>,
+    pub show_list_pager: Option<bool>,
+    pub pager_template: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -376,6 +378,8 @@ struct RawLayout {
     border_search: Option<String>,
     border_footer: Option<String>,
     border_help: Option<String>,
+    show_list_pager: Option<bool>,
+    pager_template: Option<String>,
 }
 
 pub fn load_layout() -> LayoutPack {
@@ -385,7 +389,7 @@ pub fn load_layout() -> LayoutPack {
     let raw = hint
         .as_deref()
         .and_then(load_layout_from_hint)
-        .unwrap_or(RawLayout { help: None, search_bar_position: None, list_line_height: None, item_template: None, meta_template: None, list_title_template: None, footer_template: None, help_template: None, border_list: None, border_search: None, border_footer: None, border_help: None });
+        .unwrap_or(RawLayout { help: None, search_bar_position: None, list_line_height: None, item_template: None, meta_template: None, list_title_template: None, footer_template: None, help_template: None, border_list: None, border_search: None, border_footer: None, border_help: None, show_list_pager: None, pager_template: None });
     let hf = raw
         .help
         .as_deref()
@@ -410,6 +414,8 @@ pub fn load_layout() -> LayoutPack {
         border_search: parse_border_type(raw.border_search.as_deref()),
         border_footer: parse_border_type(raw.border_footer.as_deref()),
         border_help: parse_border_type(raw.border_help.as_deref()),
+        show_list_pager: raw.show_list_pager,
+        pager_template: raw.pager_template,
     }
 }
 
@@ -421,7 +427,7 @@ fn load_layout_from_hint(hint: &str) -> Option<RawLayout> {
             .and_then(|s| toml::from_str(&s).ok())
     } else {
         match hint.to_ascii_lowercase().as_str() {
-            "default" => Some(RawLayout { help: None, search_bar_position: None, list_line_height: None, item_template: None, meta_template: None, list_title_template: None, footer_template: None, help_template: None, border_list: None, border_search: None, border_footer: None, border_help: None }),
+            "default" => Some(RawLayout { help: None, search_bar_position: None, list_line_height: None, item_template: None, meta_template: None, list_title_template: None, footer_template: None, help_template: None, border_list: None, border_search: None, border_footer: None, border_help: None, show_list_pager: None, pager_template: None }),
             name => {
                 let path = crate::config::config_dir()
                     .join("layouts")

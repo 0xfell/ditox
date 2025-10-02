@@ -4,7 +4,7 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
@@ -760,6 +760,24 @@ pub fn run_picker_with(
                         },
                     ),
                 );
+                // Optional compact pager at bottom-right of the list area (e.g., "1/14" or "11-20/245")
+                if layout.show_list_pager.unwrap_or(true) {
+                    let total_known2 = last_known_total.or(if use_daemon { None } else { Some(total) });
+                    let total_to_show2 = total_known2.unwrap_or(total);
+                    let first = if total == 0 { 0 } else { start + 1 };
+                    let last = end;
+                    let pager_tpl = layout.pager_template.as_deref().unwrap_or("{page}/{page_count}");
+                    let pager_text = pager_tpl
+                        .replace("{page}", &(page_index + 1).to_string())
+                        .replace("{page_count}", &page_count_str)
+                        .replace("{first}", &first.to_string())
+                        .replace("{last}", &last.to_string())
+                        .replace("{total}", &total_to_show2.to_string());
+                    let la = chunks[list_area_idx];
+                    let pager_rect = ratatui::layout::Rect { x: la.x, y: la.y + la.height.saturating_sub(1), width: la.width, height: 1 };
+                    let pager = Paragraph::new(pager_text).alignment(Alignment::Right).style(Style::default().fg(tui_theme.muted_fg));
+                    f.render_widget(pager, pager_rect);
+                }
                 // Footer — simple hint (optional via layout)
                 let thm2 = &tui_theme;
                 let mut footer_block = Block::default().title(Line::styled("Shortcuts", Style::default().fg(tui_theme.title_fg)));
