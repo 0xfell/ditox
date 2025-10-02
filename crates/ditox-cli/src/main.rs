@@ -10,13 +10,13 @@ use std::path::PathBuf;
 // config module is declared at the top; avoid duplicate re-declaration here
 mod copy_helpers;
 mod doctor;
-mod managed_daemon;
 mod lazy_store;
+mod managed_daemon;
 mod picker;
 mod theme;
-mod xfer;
 #[cfg(feature = "tray")]
 mod tray;
+mod xfer;
 
 #[derive(Parser)]
 #[command(name = "ditox", version, about = "Ditox clipboard CLI (scaffold)")]
@@ -610,11 +610,13 @@ fn main() -> Result<()> {
                 managed_daemon::DaemonMode::Off
             } else {
                 // Env override takes precedence
-                let env_mode = std::env::var("DITOX_DAEMON").ok().and_then(|s| match s.to_lowercase().as_str() {
-                    "managed" => Some(managed_daemon::DaemonMode::Managed),
-                    "external" => Some(managed_daemon::DaemonMode::External),
-                    "off" => Some(managed_daemon::DaemonMode::Off),
-                    _ => None,
+                let env_mode = std::env::var("DITOX_DAEMON").ok().and_then(|s| {
+                    match s.to_lowercase().as_str() {
+                        "managed" => Some(managed_daemon::DaemonMode::Managed),
+                        "external" => Some(managed_daemon::DaemonMode::External),
+                        "off" => Some(managed_daemon::DaemonMode::Off),
+                        _ => None,
+                    }
                 });
                 env_mode.unwrap_or(match daemon {
                     DaemonMode::Managed => managed_daemon::DaemonMode::Managed,
@@ -623,34 +625,57 @@ fn main() -> Result<()> {
                 })
             };
 
-            if matches!(effective_mode, managed_daemon::DaemonMode::Managed) {
-                if !managed_daemon::detect_external_clipd() {
-                    // Use same DB path policy as local picker
-                    let path = match &settings.storage {
-                        config::Storage::LocalSqlite { db_path } => {
-                            db_path.clone().unwrap_or_else(default_db_path)
-                        }
-                        _ => default_db_path(),
-                    };
-                    let watcher_store = lazy_store::LazyStore::local_sqlite(path, false);
-                    let sample = parse_duration(&std::env::var("DITOX_DAEMON_SAMPLE").unwrap_or(daemon_sample.clone()));
-                    let images_on = std::env::var("DITOX_DAEMON_IMAGES").ok().map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(daemon_images);
-                    let cfg = managed_daemon::DaemonConfig { sample, images: images_on, image_cap_bytes: Some(8*1024*1024) };
-                    if let Ok(h) = managed_daemon::start_managed(std::sync::Arc::new(watcher_store), cfg) {
-                        managed_guard = Some(h);
+            if matches!(effective_mode, managed_daemon::DaemonMode::Managed)
+                && !managed_daemon::detect_external_clipd()
+            {
+                // Use same DB path policy as local picker
+                let path = match &settings.storage {
+                    config::Storage::LocalSqlite { db_path } => {
+                        db_path.clone().unwrap_or_else(default_db_path)
                     }
+                    _ => default_db_path(),
+                };
+                let watcher_store = lazy_store::LazyStore::local_sqlite(path, false);
+                let sample = parse_duration(
+                    &std::env::var("DITOX_DAEMON_SAMPLE").unwrap_or(daemon_sample.clone()),
+                );
+                let images_on = std::env::var("DITOX_DAEMON_IMAGES")
+                    .ok()
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(daemon_images);
+                let cfg = managed_daemon::DaemonConfig {
+                    sample,
+                    images: images_on,
+                    image_cap_bytes: Some(8 * 1024 * 1024),
+                };
+                if let Ok(h) =
+                    managed_daemon::start_managed(std::sync::Arc::new(watcher_store), cfg)
+                {
+                    managed_guard = Some(h);
                 }
             }
             let cap_status = if matches!(effective_mode, managed_daemon::DaemonMode::Managed) {
                 if let Some(ref h) = managed_guard {
-                    Some(picker::CaptureStatus { mode: picker::CaptureMode::Managed, managed: Some(h.control()) })
+                    Some(picker::CaptureStatus {
+                        mode: picker::CaptureMode::Managed,
+                        managed: Some(h.control()),
+                    })
                 } else {
-                    Some(picker::CaptureStatus { mode: picker::CaptureMode::External, managed: None })
+                    Some(picker::CaptureStatus {
+                        mode: picker::CaptureMode::External,
+                        managed: None,
+                    })
                 }
             } else if matches!(effective_mode, managed_daemon::DaemonMode::External) {
-                Some(picker::CaptureStatus { mode: picker::CaptureMode::External, managed: None })
+                Some(picker::CaptureStatus {
+                    mode: picker::CaptureMode::External,
+                    managed: None,
+                })
             } else {
-                Some(picker::CaptureStatus { mode: picker::CaptureMode::Off, managed: None })
+                Some(picker::CaptureStatus {
+                    mode: picker::CaptureMode::Off,
+                    managed: None,
+                })
             };
 
             picker::run_picker_default(
@@ -664,7 +689,9 @@ fn main() -> Result<()> {
                 cap_status,
                 refresh_ms,
             )?;
-            if let Some(h) = managed_guard { h.stop(); }
+            if let Some(h) = managed_guard {
+                h.stop();
+            }
         }
         Commands::Search {
             query,

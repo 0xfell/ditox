@@ -18,14 +18,18 @@ pub fn run_tray() -> Result<()> {
     let store = LazyStore::local_sqlite(db_path, false);
     let mut maybe_handle = None;
     if !managed_daemon::detect_external_clipd() {
-        let cfg = DaemonConfig { sample: Duration::from_millis(200), images: true, image_cap_bytes: Some(8*1024*1024) };
+        let cfg = DaemonConfig {
+            sample: Duration::from_millis(200),
+            images: true,
+            image_cap_bytes: Some(8 * 1024 * 1024),
+        };
         if let Ok(h) = managed_daemon::start_managed(Arc::new(store), cfg) {
             maybe_handle = Some(h);
         }
     }
 
     // Build tray
-    use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem, MenuEvent};
+    use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     use tray_icon::TrayIconBuilder;
     let mut menu = Menu::new();
     let pause_item = MenuItem::new("Pause Capture", true, None);
@@ -49,8 +53,12 @@ pub fn run_tray() -> Result<()> {
         }
     }
     let icon_opt = tray_icon::Icon::from_rgba(rgba, w as u32, h as u32).ok();
-    let mut builder = TrayIconBuilder::new().with_menu(Box::new(menu.clone())).with_tooltip("Ditox");
-    if let Some(ic) = icon_opt { builder = builder.with_icon(ic); }
+    let mut builder = TrayIconBuilder::new()
+        .with_menu(Box::new(menu.clone()))
+        .with_tooltip("Ditox");
+    if let Some(ic) = icon_opt {
+        builder = builder.with_icon(ic);
+    }
     let _tray = builder.build()?;
 
     // Event loop: handle MenuEvent messages (non-blocking poll)
@@ -66,7 +74,11 @@ pub fn run_tray() -> Result<()> {
                     let c = h.control();
                     let now_paused = c.toggle_pause();
                     // set_text returns () on muda 0.13.x
-                    pause_item.set_text(if now_paused { "Resume Capture" } else { "Pause Capture" });
+                    pause_item.set_text(if now_paused {
+                        "Resume Capture"
+                    } else {
+                        "Pause Capture"
+                    });
                 }
             }
             if id == images_item.id() {

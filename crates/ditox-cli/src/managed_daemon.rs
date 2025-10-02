@@ -3,13 +3,16 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::config;
-use ditox_core::Store;
 use ditox_core::clipboard::Clipboard as _;
+use ditox_core::Store;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonMode {
@@ -76,7 +79,9 @@ fn managed_lock_path() -> PathBuf {
 
 fn try_create_lock() -> Result<File> {
     let path = managed_lock_path();
-    if let Some(dir) = path.parent() { let _ = fs::create_dir_all(dir); }
+    if let Some(dir) = path.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
     // Attempt exclusive create; if exists, check staleness
     match OpenOptions::new().write(true).create_new(true).open(&path) {
         Ok(mut f) => {
@@ -86,7 +91,9 @@ fn try_create_lock() -> Result<File> {
             Ok(f)
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            // Check alive
+            // Lock exists. On Linux we attempt a best-effort staleness check.
+            // On non-Linux, be conservative and refuse to start rather than
+            // risking two managed capturers running concurrently.
             let mut s = String::new();
             if let Ok(mut rf) = File::open(&path) {
                 let _ = rf.read_to_string(&mut s);
@@ -94,10 +101,20 @@ fn try_create_lock() -> Result<File> {
             let pid: Option<u32> = s
                 .lines()
                 .find_map(|l| l.strip_prefix("pid=")?.parse::<u32>().ok());
+            if cfg!(not(target_os = "linux")) {
+                // macOS/Windows: do not delete foreign lock; fail fast.
+                anyhow::bail!(
+                    "managed-daemon: another capturer active (lock held; non-Linux refuses to override)"
+                );
+            }
             let alive = pid.map(is_pid_alive).unwrap_or(false);
             if !alive {
                 let _ = fs::remove_file(&path);
-                return OpenOptions::new().write(true).create_new(true).open(&path).map_err(Into::into);
+                return OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .map_err(Into::into);
             }
             anyhow::bail!("managed-daemon: another capturer active (lock held)")
         }
@@ -111,12 +128,18 @@ fn is_pid_alive(pid: u32) -> bool {
     std::path::Path::new("/proc").join(pid.to_string()).exists()
 }
 #[cfg(not(target_os = "linux"))]
-fn is_pid_alive(_pid: u32) -> bool { false }
+fn is_pid_alive(_pid: u32) -> bool {
+    false
+}
 
 #[cfg(target_os = "linux")]
-fn clipboard() -> ditox_core::clipboard::ArboardClipboard { ditox_core::clipboard::ArboardClipboard::new() }
+fn clipboard() -> ditox_core::clipboard::ArboardClipboard {
+    ditox_core::clipboard::ArboardClipboard::new()
+}
 #[cfg(not(target_os = "linux"))]
-fn clipboard() -> ditox_core::clipboard::NoopClipboard { ditox_core::clipboard::NoopClipboard }
+fn clipboard() -> ditox_core::clipboard::NoopClipboard {
+    ditox_core::clipboard::NoopClipboard
+}
 
 pub fn start_managed<S>(store: Arc<S>, cfg: DaemonConfig) -> Result<ManagedHandle>
 where
@@ -138,24 +161,36 @@ where
         let sample = cfg.sample;
         let cap = cfg.image_cap_bytes;
         loop {
-            if stop2.load(Ordering::SeqCst) { break; }
+            if stop2.load(Ordering::SeqCst) {
+                break;
+            }
             if paused2.load(Ordering::SeqCst) {
                 std::thread::sleep(sample);
                 continue;
             }
             // Text path
             if let Ok(Some(mut text)) = cb.get_text() {
-                if text.ends_with('\n') { text.pop(); }
+                if text.ends_with('\n') {
+                    text.pop();
+                }
                 let mut lt = last_text.lock().unwrap();
                 if *lt != text {
                     // Try to find existing recent identical entry; else insert
-                    let found = match store.list(ditox_core::Query{ contains: None, favorites_only: false, limit: Some(50), tag: None, rank: false }) {
-                        Ok(v) => {
-                            v.iter().find(|c| c.text == text).map(|c| c.id.clone())
-                        }
+                    let found = match store.list(ditox_core::Query {
+                        contains: None,
+                        favorites_only: false,
+                        limit: Some(50),
+                        tag: None,
+                        rank: false,
+                    }) {
+                        Ok(v) => v.iter().find(|c| c.text == text).map(|c| c.id.clone()),
                         Err(_) => None,
                     };
-                    if let Some(id) = found { let _ = store.touch_last_used(&id); } else { let _ = store.add(&text); }
+                    if let Some(id) = found {
+                        let _ = store.touch_last_used(&id);
+                    } else {
+                        let _ = store.add(&text);
+                    }
                     *lt = text;
                 }
             }
@@ -163,13 +198,16 @@ where
             if images_on2.load(Ordering::SeqCst) {
                 if let Ok(Some(img)) = cb.get_image() {
                     let bytes = &img.bytes;
-                    if let Some(maxb) = cap { if bytes.len() > maxb { /* skip oversized */ } else {
-                        let mut li = last_img.lock().unwrap();
-                        if *li != *bytes {
-                            let _ = store.add_image_rgba(img.width, img.height, bytes);
-                            *li = bytes.clone();
+                    if let Some(maxb) = cap {
+                        if bytes.len() > maxb { /* skip oversized */
+                        } else {
+                            let mut li = last_img.lock().unwrap();
+                            if *li != *bytes {
+                                let _ = store.add_image_rgba(img.width, img.height, bytes);
+                                *li = bytes.clone();
+                            }
                         }
-                    }} else {
+                    } else {
                         let mut li = last_img.lock().unwrap();
                         if *li != *bytes {
                             let _ = store.add_image_rgba(img.width, img.height, bytes);
@@ -182,7 +220,14 @@ where
         }
     });
 
-    Ok(ManagedHandle { stop, join: Some(join), lock_path, paused, images_on, sample: cfg.sample })
+    Ok(ManagedHandle {
+        stop,
+        join: Some(join),
+        lock_path,
+        paused,
+        images_on,
+        sample: cfg.sample,
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -198,12 +243,18 @@ impl ManagedControl {
         self.paused.store(v, Ordering::SeqCst);
         v
     }
-    pub fn is_paused(&self) -> bool { self.paused.load(Ordering::SeqCst) }
-    pub fn images_on(&self) -> bool { self.images_on.load(Ordering::SeqCst) }
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+    pub fn images_on(&self) -> bool {
+        self.images_on.load(Ordering::SeqCst)
+    }
     pub fn toggle_images(&self) -> bool {
         let v = !self.images_on.load(Ordering::SeqCst);
         self.images_on.store(v, Ordering::SeqCst);
         v
     }
-    pub fn sample(&self) -> Duration { self.sample }
+    pub fn sample(&self) -> Duration {
+        self.sample
+    }
 }

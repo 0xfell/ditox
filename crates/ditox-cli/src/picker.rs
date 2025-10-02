@@ -10,16 +10,16 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Terminal;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
-use std::collections::{HashMap, HashSet};
 // no process or encoder imports needed here
 use crate::copy_helpers;
-use crate::theme;
 use crate::managed_daemon::ManagedControl;
+use crate::theme;
 use ditox_core::StoreImpl;
 use std::path::PathBuf;
 
@@ -168,7 +168,11 @@ enum Item {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum CaptureMode { Managed, External, Off }
+pub enum CaptureMode {
+    Managed,
+    External,
+    Off,
+}
 
 #[derive(Clone, Debug)]
 pub struct CaptureStatus {
@@ -176,6 +180,26 @@ pub struct CaptureStatus {
     pub managed: Option<ManagedControl>,
 }
 
+fn selected_id(
+    items: &[Item],
+    filtered: &[usize],
+    page_index: usize,
+    page_size: usize,
+    selected: usize,
+) -> Option<String> {
+    let total = filtered.len();
+    let start = page_index.saturating_mul(page_size);
+    if start + selected < total {
+        let idx = filtered[start + selected];
+        items.get(idx).map(|it| match it {
+            Item::Text { id, .. } | Item::Image { id, .. } => id.clone(),
+        })
+    } else {
+        None
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn run_picker_default(
     store: &dyn Store,
     favorites: bool,
@@ -342,7 +366,14 @@ pub fn run_picker_with(
 
     // Load initial dataset now
     let mut daemon: Option<DaemonClient> = None;
-    let cap = capture.clone().unwrap_or(CaptureStatus { mode: if use_daemon { CaptureMode::External } else { CaptureMode::Off }, managed: None });
+    let cap = capture.clone().unwrap_or(CaptureStatus {
+        mode: if use_daemon {
+            CaptureMode::External
+        } else {
+            CaptureMode::Off
+        },
+        managed: None,
+    });
     let mut last_known_total: Option<usize> = None;
     let mut pending_restore_id: Option<String> = None;
     // Track ids to highlight as "New" for a short time after appearance
@@ -483,7 +514,9 @@ pub fn run_picker_with(
             let now = Instant::now();
             let mut curr_ids: HashSet<String> = HashSet::new();
             for it in items.iter() {
-                let id = match it { Item::Text { id, .. } | Item::Image { id, .. } => id };
+                let id = match it {
+                    Item::Text { id, .. } | Item::Image { id, .. } => id,
+                };
                 if !last_ids.contains(id) {
                     new_until.insert(id.clone(), now + Duration::from_millis(new_badge_ms));
                 }
@@ -501,8 +534,13 @@ pub fn run_picker_with(
                 let mut pos: Option<usize> = None;
                 for (p, &i) in filtered.iter().enumerate() {
                     if let Some(it) = items.get(i) {
-                        let id = match it { Item::Text { id, .. } | Item::Image { id, .. } => id };
-                        if *id == tgt { pos = Some(p); break; }
+                        let id = match it {
+                            Item::Text { id, .. } | Item::Image { id, .. } => id,
+                        };
+                        if *id == tgt {
+                            pos = Some(p);
+                            break;
+                        }
                     }
                 }
                 if let Some(p) = pos {
@@ -1020,16 +1058,8 @@ More available…"); }
                     }
                     KeyCode::Tab => {
                         // preserve selection across reload
-                        pending_restore_id = (|| {
-                            let total = filtered.len();
-                            let start = page_index.saturating_mul(page_size);
-                            if start + selected < total {
-                                let idx = filtered[start + selected];
-                                items.get(idx).map(|it| match it {
-                                    Item::Text { id, .. } | Item::Image { id, .. } => id.clone(),
-                                })
-                            } else { None }
-                        })();
+                        pending_restore_id =
+                            selected_id(&items, &filtered, page_index, page_size, selected);
                         fav_filter = !fav_filter;
                         last_query.clear();
                         needs_refilter = true;
@@ -1084,16 +1114,10 @@ More available…"); }
                         }
                         filtered = (0..items.len()).collect();
                     }
-                    
+
                     KeyCode::Char('f') if mode == Mode::Normal => {
-                        pending_restore_id = (|| {
-                            let total = filtered.len();
-                            let start = page_index.saturating_mul(page_size);
-                            if start + selected < total {
-                                let idx = filtered[start + selected];
-                                items.get(idx).map(|it| match it { Item::Text { id, .. } | Item::Image { id, .. } => id.clone(), })
-                            } else { None }
-                        })();
+                        pending_restore_id =
+                            selected_id(&items, &filtered, page_index, page_size, selected);
                         fav_filter = !fav_filter;
                         last_query.clear();
                         needs_refilter = true;
@@ -1149,14 +1173,8 @@ More available…"); }
                         filtered = (0..items.len()).collect();
                     }
                     KeyCode::Char('i') if mode == Mode::Normal => {
-                        pending_restore_id = (|| {
-                            let total = filtered.len();
-                            let start = page_index.saturating_mul(page_size);
-                            if start + selected < total {
-                                let idx = filtered[start + selected];
-                                items.get(idx).map(|it| match it { Item::Text { id, .. } | Item::Image { id, .. } => id.clone(), })
-                            } else { None }
-                        })();
+                        pending_restore_id =
+                            selected_id(&items, &filtered, page_index, page_size, selected);
                         images_mode = !images_mode;
                         selected = 0;
                         page_index = 0;
@@ -1164,7 +1182,7 @@ More available…"); }
                         needs_refilter = true;
                         pending_delete_id = None;
                         pending_delete_until = None;
-                        let load_res: anyhow::Result<()> = (|| {
+                        let load_res: anyhow::Result<()> = {
                             if use_daemon {
                                 if let Some(dc) = daemon.as_mut() {
                                     let p = dc.request_page(
@@ -1200,7 +1218,7 @@ More available…"); }
                                 has_more = false;
                                 Ok(())
                             }
-                        })();
+                        };
                         match load_res {
                             Ok(()) => {
                                 filtered = (0..items.len()).collect();
@@ -1228,13 +1246,18 @@ More available…"); }
                     }
                     // Pause/resume capture (managed only) — Ctrl+P
                     KeyCode::Char('p')
-                        if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                        if k.modifiers
+                            .contains(crossterm::event::KeyModifiers::CONTROL)
                             && mode == Mode::Normal =>
                     {
                         if let Some(mc) = cap.managed.as_ref() {
                             let now_paused = mc.toggle_pause();
                             toast = Some((
-                                if now_paused { "Capture paused".into() } else { "Capture resumed".into() },
+                                if now_paused {
+                                    "Capture paused".into()
+                                } else {
+                                    "Capture resumed".into()
+                                },
                                 Instant::now() + Duration::from_millis(1200),
                             ));
                         } else {
@@ -1249,7 +1272,11 @@ More available…"); }
                         if let Some(mc) = cap.managed.as_ref() {
                             let on = mc.toggle_images();
                             toast = Some((
-                                if on { "Images capture: on".into() } else { "Images capture: off".into() },
+                                if on {
+                                    "Images capture: on".into()
+                                } else {
+                                    "Images capture: off".into()
+                                },
                                 Instant::now() + Duration::from_millis(1200),
                             ));
                         } else {
@@ -1520,14 +1547,8 @@ More available…"); }
                         last_query.clear();
                     }
                     KeyCode::Char('r') if mode == Mode::Normal => {
-                        pending_restore_id = (|| {
-                            let total = filtered.len();
-                            let start = page_index.saturating_mul(page_size);
-                            if start + selected < total {
-                                let idx = filtered[start + selected];
-                                items.get(idx).map(|it| match it { Item::Text { id, .. } | Item::Image { id, .. } => id.clone(), })
-                            } else { None }
-                        })();
+                        pending_restore_id =
+                            selected_id(&items, &filtered, page_index, page_size, selected);
                         last_query.clear();
                         needs_refilter = true;
                         page_index = 0;
@@ -1581,14 +1602,8 @@ More available…"); }
                     }
                     // Run migrations on DB (best-effort) and reload list
                     KeyCode::Char('m') | KeyCode::Char('M') => {
-                        pending_restore_id = (|| {
-                            let total = filtered.len();
-                            let start = page_index.saturating_mul(page_size);
-                            if start + selected < total {
-                                let idx = filtered[start + selected];
-                                items.get(idx).map(|it| match it { Item::Text { id, .. } | Item::Image { id, .. } => id.clone(), })
-                            } else { None }
-                        })();
+                        pending_restore_id =
+                            selected_id(&items, &filtered, page_index, page_size, selected);
                         match migrate_current_db() {
                             Ok(()) => {
                                 toast = Some((
@@ -1917,14 +1932,8 @@ More available…"); }
                                 tag_filter = Some(new_tag.clone());
                                 last_applied_tag = Some(new_tag);
                                 // reload items (preserve selection)
-                                pending_restore_id = (|| {
-                                    let total = filtered.len();
-                                    let start = page_index.saturating_mul(page_size);
-                                    if start + selected < total {
-                                        let idx = filtered[start + selected];
-                                        items.get(idx).map(|it| match it { Item::Text { id, .. } | Item::Image { id, .. } => id.clone(), })
-                                    } else { None }
-                                })();
+                                pending_restore_id =
+                                    selected_id(&items, &filtered, page_index, page_size, selected);
                                 if use_daemon {
                                     if let Some(dc) = daemon.as_mut() {
                                         if let Ok(p) = dc.request_page(
@@ -1982,7 +1991,11 @@ More available…"); }
                         fav_filter,
                         Some(page_rows),
                         Some(0),
-                        if mode == Mode::Query && !query.is_empty() { Some(query.clone()) } else { None },
+                        if mode == Mode::Query && !query.is_empty() {
+                            Some(query.clone())
+                        } else {
+                            None
+                        },
                         tag_filter.clone(),
                     ) {
                         last_known_total = p0.total;
@@ -1996,7 +2009,11 @@ More available…"); }
                             fav_filter,
                             Some(page_rows),
                             Some(fetched.len()),
-                            if mode == Mode::Query && !query.is_empty() { Some(query.clone()) } else { None },
+                            if mode == Mode::Query && !query.is_empty() {
+                                Some(query.clone())
+                            } else {
+                                None
+                            },
                             tag_filter.clone(),
                         ) {
                             more = p.more;
@@ -2008,16 +2025,8 @@ More available…"); }
                     }
                     if fetched.len() >= items.len() {
                         // remember current selection id so we can restore it
-                        pending_restore_id = (|| {
-                            let total = filtered.len();
-                            let start = page_index.saturating_mul(page_size);
-                            if start + selected < total {
-                                let idx = filtered[start + selected];
-                                items.get(idx).map(|it| match it {
-                                    Item::Text { id, .. } | Item::Image { id, .. } => id.clone(),
-                                })
-                            } else { None }
-                        })();
+                        pending_restore_id =
+                            selected_id(&items, &filtered, page_index, page_size, selected);
                         items = fetched;
                         has_more = more;
                         // trigger re-filtering when in query mode
@@ -2035,31 +2044,21 @@ More available…"); }
                         tag_filter.clone(),
                     ) {
                         // remember current selection id so we can restore it
-                        pending_restore_id = (|| {
-                            let total = filtered.len();
-                            let start = page_index.saturating_mul(page_size);
-                            if start + selected < total {
-                                let idx = filtered[start + selected];
-                                items.get(idx).map(|it| match it {
-                                    Item::Text { id, .. } | Item::Image { id, .. } => id.clone(),
-                                })
-                            } else { None }
-                        })();
+                        pending_restore_id =
+                            selected_id(&items, &filtered, page_index, page_size, selected);
                         items = v;
                         has_more = false;
                         // trigger re-filtering (applies fuzzy matching when in Query mode)
                         needs_refilter = true;
-                        let _ = (|| -> anyhow::Result<()> {
-                            let total = store.count(Query {
-                                contains: None,
-                                favorites_only: fav_filter,
-                                limit: None,
-                                tag: tag_filter.clone(),
-                                rank: false,
-                            })?;
+                        if let Ok(total) = store.count(Query {
+                            contains: None,
+                            favorites_only: fav_filter,
+                            limit: None,
+                            tag: tag_filter.clone(),
+                            rank: false,
+                        }) {
                             last_known_total = Some(total);
-                            Ok(())
-                        })();
+                        }
                     }
                 }
             } else if let Ok(v) = fetch_from_store(
@@ -2074,17 +2073,15 @@ More available…"); }
                 // trigger re-filtering (applies fuzzy matching when in Query mode)
                 needs_refilter = true;
                 // Update total via store count
-                let _ = (|| -> anyhow::Result<()> {
-                    let total = store.count(Query {
-                        contains: None,
-                        favorites_only: fav_filter,
-                        limit: None,
-                        tag: tag_filter.clone(),
-                        rank: false,
-                    })?;
+                if let Ok(total) = store.count(Query {
+                    contains: None,
+                    favorites_only: fav_filter,
+                    limit: None,
+                    tag: tag_filter.clone(),
+                    rank: false,
+                }) {
                     last_known_total = Some(total);
-                    Ok(())
-                })();
+                }
             }
             last_fetch = Instant::now();
         }
