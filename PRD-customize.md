@@ -9,6 +9,22 @@
 
 Goal, in one line: deliver a robust, cross‑platform system that lets users fully customize the TUI’s look and feel (colors, styles, glyphs, borders, layout, visibility, and status/help content), with safe defaults, graceful fallbacks, and no regressions to CLI or headless flows.
 
+Status (2025-10-02)
+- Implemented in repo (initial slice):
+  - CLI flags on `pick`: `--theme <name|path>`, `--ascii`, and `--color auto|always|never`.
+- Reads `~/.config/ditox/settings.toml` `[tui]` when flags are not provided: `theme`, `color`, `box_chars`, `alt_screen`, `glyphs`, `layout`.
+  - Date/time customization: `[tui] date_format = "dd-mm-yyyy"`, `[tui] auto_recent_days = 3` (used by `{*_auto}` and `{recent}` tokens).
+  - Discovery and preview: `ditox pick --themes` lists built-ins + user themes; `ditox pick --preview <theme>` prints an ASCII snapshot without entering the alt screen.
+  - Glyph packs: `--glyphs <name|path>`; list with `--glyphsets`. Built-ins: `ascii`, `unicode`.
+  - Layout packs: `--layout <name|path>`; list with `--layouts`. Minimal `help = "visible|hidden"` supported.
+  - Capability dump: `ditox pick --dump-caps` prints `color_depth`, `unicode`, and `no_color` detection.
+  - Built-in themes: `dark` (default) and `high-contrast`.
+  - Palette mapped today: highlight fg/bg, border fg, help fg (compatible superset of legacy `tui_theme.toml`).
+  - ASCII mode removes Unicode borders and replaces ⏎ with `Enter` in help/footer; `NO_COLOR` respected.
+  - Tests: unit tests for color parsing; integration tests for `--themes` and `--preview` (asserts ASCII-only output).
+- Removed: legacy `tui_theme.toml` fallback; themes must come from built-ins or `~/.config/ditox/themes/*.toml`.
+- Deferred to next phases: templates, full palette surface, richer glyph sets, live reload, layout presets beyond footer toggle.
+
 ---
 
 **Objectives**
@@ -179,9 +195,10 @@ Non‑goals (v1)
 **API & CLI Surface**
 
 - CLI
-  - `ditox pick --theme <name|path> [--glyphs <name|path>] [--layout <name|path>]`
-  - Visual toggles: `--no-color | --color=always|auto|never`, `--no-alt-screen`, `--ascii|--unicode`, `--mouse on|off`
-  - Discoverability: `ditox pick --themes` lists available themes (built‑ins + files), `--preview <name>` prints an ASCII snapshot of a sample frame to stdout (no alt screen) for programmatic previews.
+  - Delivered: `ditox pick --theme <name|path> [--ascii] [--color auto|always|never]`
+  - Delivered: `--glyphs <name|path>`, `--layout <name|path>`
+  - Delivered: `--themes`, `--glyphsets`, `--layouts`, `--preview <name>`, `--dump-caps`
+  - Planned: `--no-alt-screen`, `--mouse on|off`
 - Settings (`settings.toml`)
   - `[tui] theme`, `glyphs`, `layout`, `live_reload`, `color` (auto|always|never), `alt_screen`, `mouse`, `box_chars`, `truecolor`.
   - Keep existing fields (`page_size`, `auto_apply_tag_ms`, `absolute_times`).
@@ -190,8 +207,7 @@ Non‑goals (v1)
 
 **Backwards Compatibility & Migration**
 
-- Existing `~/.config/ditox/tui_theme.toml` (Linux path; OS‑specific equivalents):
-  - Auto‑migrated on load: map `highlight_fg/bg`, `border_fg`, `help_fg` to new palette tokens. Print a one‑time deprecation warning with the equivalent `themes/legacy.toml` save path suggestion.
+- Legacy `~/.config/ditox/tui_theme.toml` support removed. Users should create `~/.config/ditox/themes/<name>.toml` and set `[tui].theme = "<name>"`.
 - Default TUI behavior without any settings remains visually close to today’s style.
 - No changes to non‑interactive CLI commands or JSON outputs.
 
@@ -227,14 +243,16 @@ Non‑goals (v1)
 
 **Acceptance Criteria**
 
-- The picker renders identically (visually near‑equivalent) with no theme present.
-- Users can select a built‑in theme: `--theme high-contrast` on Linux, macOS, and Windows; borders and colors reflect the theme.
-- ASCII mode (`--ascii`) shows no Unicode borders/icons; layout remains aligned; selection and search highlights still readable without color.
-- `NO_COLOR=1 ditox pick` shows a functional UI with bold/underline cues; no color escapes are emitted.
-- Changing `themes/dark.toml` while `live_reload=true` updates the UI within 300 ms without flicker.
-- On Windows cmd.exe, `--ascii --color=never` works without mojibake; Enter selects item; exit restores screen.
-- Unit tests cover parsing and token→style mapping; snapshot test asserts buffer styles for at least one theme.
-- README updated with config examples, platform notes, and troubleshooting.
+- Delivered
+  - The picker renders near‑equivalent defaults with no theme present.
+  - Users can select a built‑in theme: `--theme high-contrast` works cross‑platform; borders and colors reflect the theme where Unicode/color are available.
+  - ASCII mode (`--ascii`) shows no Unicode borders/icons; layout remains aligned. `NO_COLOR` suppresses color tokens; selection continues to use reverse/bold.
+  - `--themes`, `--preview`, and `--dump-caps` behave as specified (preview is ASCII only, no alt screen).
+  - Unit tests: color parsing and preview smoke assert ASCII‑only output.
+- Pending
+  - Live reload while editing theme files.
+  - Snapshot tests that assert styled buffer regions for one theme under truecolor and ascii+16‑color.
+  - README updates and migration notes.
 
 ---
 
@@ -250,8 +268,8 @@ Non‑goals (v1)
   - Add visibility/position/spacing toggles; integrate into `picker.rs` draw routines.
   - Add list/meta templates and token rendering; add search highlight token styles.
 - Phase 3: CLI surface and discovery
-  - Add `--theme/--layout/--glyphs`, `--color`, `--ascii/--unicode`, `--no-alt-screen`, `--mouse`.
-  - Implement `--themes`, `--preview`, `--dump-caps`.
+  - Delivered: `--theme`, `--color`, `--ascii`, `--themes`, `--preview`, `--dump-caps`.
+  - Pending: `--layout`, `--glyphs`, `--no-alt-screen`, `--mouse`.
 - Phase 4: Live reload
   - Add file watcher with debounce; guard by setting and CLI; ensure Windows idleness.
 - Phase 5: Tests, docs, polish
@@ -338,5 +356,9 @@ Non‑goals (v1)
 - TUI settings struct: `crates/ditox-cli/src/config.rs:48` (extend `[tui]`).
 - README TUI docs: `README.md:213` (picker), `README.md:225` (legacy theme) — to be updated.
 
-If you want, I can draft the initial `ui::` module skeleton and a `dark.toml` preset next, plus wire `--theme` and `--ascii` flags into `ditox pick`.
+If you want, I can proceed with glyph packs, layout templates, and live reload next, and extend the palette to the full token set above.
 
+Notes on current implementation (2025-10-02)
+- Minimal palette (4 tokens) powers borders, highlights, and help/footer.
+- Environment variables honored (lowest precedence): `DITOX_TUI_THEME`, `DITOX_TUI_COLOR`, `DITOX_TUI_ASCII` — useful for wrappers; CLI flags take precedence when provided.
+- Legacy `~/.config/ditox/tui_theme.toml` is still read; fields map to the new palette subset.

@@ -69,6 +69,36 @@ enum Commands {
         /// Bypass daemon IPC and read DB directly
         #[arg(long)]
         no_daemon: bool,
+        /// Theme name (built-in) or file path
+        #[arg(long)]
+        theme: Option<String>,
+        /// Force ASCII mode (no Unicode borders/icons)
+        #[arg(long, default_value_t = false)]
+        ascii: bool,
+        /// Color output: auto|always|never
+        #[arg(long, value_enum, default_value_t = ColorWhen::Auto)]
+        color: ColorWhen,
+        /// List available themes and exit
+        #[arg(long, default_value_t = false)]
+        themes: bool,
+        /// Print an ASCII preview of a theme (no alt screen) and exit
+        #[arg(long)]
+        preview: Option<String>,
+        /// Dump detected terminal capabilities and exit
+        #[arg(long, default_value_t = false)]
+        dump_caps: bool,
+        /// Glyph pack name (built-in) or file path
+        #[arg(long)]
+        glyphs: Option<String>,
+        /// Layout pack name (built-in) or file path
+        #[arg(long)]
+        layout: Option<String>,
+        /// List available glyph packs and exit
+        #[arg(long, default_value_t = false)]
+        glyphsets: bool,
+        /// List available layouts and exit
+        #[arg(long, default_value_t = false)]
+        layouts: bool,
     },
     /// Sync commands
     Sync {
@@ -189,6 +219,13 @@ enum TagCmd {
     Add { id: String, tags: Vec<String> },
     /// Remove one or more tags from a clip
     Rm { id: String, tags: Vec<String> },
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum ColorWhen {
+    Auto,
+    Always,
+    Never,
 }
 
 fn main() -> Result<()> {
@@ -382,7 +419,130 @@ fn main() -> Result<()> {
             remote,
             tag,
             no_daemon,
+            theme,
+            ascii,
+            color,
+            themes,
+            preview,
+            dump_caps,
+            glyphs,
+            layout,
+            glyphsets,
+            layouts,
         } => {
+            // Utility modes that don't start the TUI
+            if themes {
+                for name in theme::available_themes() {
+                    println!("{}", name);
+                }
+                return Ok(());
+            }
+            if glyphsets {
+                for name in theme::available_glyph_packs() {
+                    println!("{}", name);
+                }
+                return Ok(());
+            }
+            if layouts {
+                for name in theme::available_layouts() {
+                    println!("{}", name);
+                }
+                return Ok(());
+            }
+            if dump_caps {
+                let caps = theme::detect_caps();
+                println!("color_depth: {}", caps.color_depth);
+                println!("unicode: {}", if caps.unicode { "yes" } else { "no" });
+                println!("no_color: {}", if caps.no_color { "yes" } else { "no" });
+                return Ok(());
+            }
+            if let Some(name) = &preview {
+                if let Some(t) = &theme {
+                    std::env::set_var("DITOX_TUI_THEME", t);
+                } else {
+                    std::env::set_var("DITOX_TUI_THEME", name);
+                }
+                match color {
+                    ColorWhen::Auto => std::env::set_var("DITOX_TUI_COLOR", "auto"),
+                    ColorWhen::Always => std::env::set_var("DITOX_TUI_COLOR", "always"),
+                    ColorWhen::Never => std::env::set_var("DITOX_TUI_COLOR", "never"),
+                }
+                if ascii {
+                    std::env::set_var("DITOX_TUI_ASCII", "1");
+                }
+                if let Some(g) = &glyphs {
+                    std::env::set_var("DITOX_TUI_GLYPHS", g);
+                }
+                if let Some(l) = &layout {
+                    std::env::set_var("DITOX_TUI_LAYOUT", l);
+                }
+                theme::print_ascii_preview(name);
+                return Ok(());
+            }
+            // Set env that the theme loader will read
+            if let Some(t) = &theme {
+                std::env::set_var("DITOX_TUI_THEME", t);
+            }
+            match color {
+                ColorWhen::Auto => std::env::set_var("DITOX_TUI_COLOR", "auto"),
+                ColorWhen::Always => std::env::set_var("DITOX_TUI_COLOR", "always"),
+                ColorWhen::Never => std::env::set_var("DITOX_TUI_COLOR", "never"),
+            }
+            if ascii {
+                std::env::set_var("DITOX_TUI_ASCII", "1");
+            }
+            if let Some(g) = &glyphs {
+                std::env::set_var("DITOX_TUI_GLYPHS", g);
+            }
+            if let Some(l) = &layout {
+                std::env::set_var("DITOX_TUI_LAYOUT", l);
+            }
+            // Apply settings defaults if CLI did not override
+            if std::env::var("DITOX_TUI_THEME").is_err() {
+                if let Some(t) = settings.tui.as_ref().and_then(|t| t.theme.clone()) {
+                    std::env::set_var("DITOX_TUI_THEME", t);
+                }
+            }
+            if std::env::var("DITOX_TUI_COLOR").is_err() {
+                if let Some(c) = settings.tui.as_ref().and_then(|t| t.color.clone()) {
+                    std::env::set_var("DITOX_TUI_COLOR", c);
+                }
+            }
+            if std::env::var("DITOX_TUI_ASCII").is_err()
+                && settings
+                    .tui
+                    .as_ref()
+                    .and_then(|t| t.box_chars.clone())
+                    .map(|v| v.eq_ignore_ascii_case("ascii"))
+                    .unwrap_or(false)
+            {
+                std::env::set_var("DITOX_TUI_ASCII", "1");
+            }
+            if std::env::var("DITOX_TUI_ALT_SCREEN").is_err() {
+                if let Some(on) = settings.tui.as_ref().and_then(|t| t.alt_screen) {
+                    std::env::set_var("DITOX_TUI_ALT_SCREEN", if on { "1" } else { "0" });
+                }
+            }
+            if std::env::var("DITOX_TUI_DATE_FMT").is_err() {
+                if let Some(fmt) = settings.tui.as_ref().and_then(|t| t.date_format.clone()) {
+                    std::env::set_var("DITOX_TUI_DATE_FMT", fmt);
+                }
+            }
+            if std::env::var("DITOX_TUI_AUTO_DAYS").is_err() {
+                if let Some(days) = settings.tui.as_ref().and_then(|t| t.auto_recent_days) {
+                    std::env::set_var("DITOX_TUI_AUTO_DAYS", days.to_string());
+                }
+            }
+            if std::env::var("DITOX_TUI_GLYPHS").is_err() {
+                if let Some(g) = settings.tui.as_ref().and_then(|t| t.glyphs.clone()) {
+                    std::env::set_var("DITOX_TUI_GLYPHS", g);
+                }
+            }
+            if std::env::var("DITOX_TUI_LAYOUT").is_err() {
+                if let Some(l) = settings.tui.as_ref().and_then(|t| t.layout.clone()) {
+                    std::env::set_var("DITOX_TUI_LAYOUT", l);
+                }
+            }
             // Build a lazy store so the first TUI frame appears instantly.
             // Policy:
             // - --remote forces Turso/libsql and disables daemon.
