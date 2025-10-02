@@ -595,28 +595,67 @@ pub fn run_picker_with(
 
                 // Use a closure to capture matcher from outer scope
                 // Provide a small wrapper to highlight fuzzy matches within a single line
-                fn highlight_line_fuzzy_local<'a>(matcher: &SkimMatcherV2, s: String, query: &str, th: &crate::theme::TuiTheme) -> Line<'a> {
-                    if query.is_empty() || query.starts_with('#') { return Line::from(s); }
-                    if let Some((_, idxs)) = matcher.fuzzy_indices(&s, query) {
-                        // Merge consecutive indices into ranges
-                        let mut ranges: Vec<(usize, usize)> = Vec::new();
-                        let mut it = idxs.into_iter().peekable();
-                        while let Some(start) = it.next() {
-                            let mut end = start + 1;
-                            while let Some(&next) = it.peek() {
-                                if next == end { end += 1; it.next(); } else { break; }
+                fn highlight_line_fuzzy_local<'a>(
+                    matcher: &SkimMatcherV2,
+                    s: String,
+                    query: &str,
+                    th: &crate::theme::TuiTheme,
+                ) -> Line<'a> {
+                    if query.is_empty() || query.starts_with('#') {
+                        return Line::from(s);
+                    }
+                    if let Some((_, idxs_char)) = matcher.fuzzy_indices(&s, query) {
+                        if idxs_char.is_empty() {
+                            return Line::from(s);
+                        }
+                        // Merge consecutive character indices into (start_char, end_char)
+                        let mut ranges_char: Vec<(usize, usize)> = Vec::new();
+                        let mut it = idxs_char.into_iter();
+                        let mut start = it.next().unwrap();
+                        let mut prev = start;
+                        for i in it {
+                            if i == prev + 1 {
+                                prev = i;
+                            } else {
+                                ranges_char.push((start, prev + 1));
+                                start = i;
+                                prev = i;
                             }
-                            ranges.push((start, end));
                         }
-                        // Build spans
+                        ranges_char.push((start, prev + 1));
+
+                        // Precompute map from character index -> byte offset for `s`
+                        let mut char_to_byte: Vec<usize> = Vec::with_capacity(s.len() + 1);
+                        for (b, _) in s.char_indices() {
+                            char_to_byte.push(b);
+                        }
+                        char_to_byte.push(s.len());
+
+                        // Build spans using byte-safe slicing
                         let mut out: Vec<Span> = Vec::new();
-                        let mut cursor = 0;
-                        for (a, b) in ranges {
-                            if cursor < a { out.push(Span::raw(s[cursor..a].to_string())); }
-                            out.push(Span::styled(s[a..b].to_string(), Style::default().fg(th.search_match_fg).bg(th.search_match_bg).add_modifier(Modifier::BOLD)));
-                            cursor = b;
+                        let mut cur_char = 0usize;
+                        for (a_char, b_char) in ranges_char {
+                            if cur_char < a_char {
+                                let ba = char_to_byte[cur_char];
+                                let bb = char_to_byte[a_char];
+                                out.push(Span::raw(s[ba..bb].to_string()));
+                            }
+                            let ba = char_to_byte[a_char];
+                            let bb = char_to_byte[b_char];
+                            out.push(Span::styled(
+                                s[ba..bb].to_string(),
+                                Style::default()
+                                    .fg(th.search_match_fg)
+                                    .bg(th.search_match_bg)
+                                    .add_modifier(Modifier::BOLD),
+                            ));
+                            cur_char = b_char;
                         }
-                        if cursor < s.len() { out.push(Span::raw(s[cursor..].to_string())); }
+                        if cur_char < char_to_byte.len() - 1 {
+                            let ba = char_to_byte[cur_char];
+                            let bb = *char_to_byte.last().unwrap();
+                            out.push(Span::raw(s[ba..bb].to_string()));
+                        }
                         Line::from(out)
                     } else {
                         Line::from(s)
