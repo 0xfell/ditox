@@ -496,9 +496,12 @@ pub fn run_picker_with(
                     let q_title = "Search — type to filter";
                     let mut q_block = Block::default().title(q_title);
                     if caps.unicode {
-                        q_block = q_block
-                            .borders(Borders::ALL)
-                            .border_style(Style::default().fg(tui_theme.border_fg));
+                        if let Some(bt) = layout.border_search.or(tui_theme.border_type) {
+                            q_block = q_block
+                                .borders(Borders::ALL)
+                                .border_type(bt)
+                                .border_style(Style::default().fg(tui_theme.border_fg));
+                        }
                     }
                     let q = Paragraph::new(query.as_str()).block(q_block);
                     let q_idx = if layout.search_bar_bottom { 2 } else { 0 };
@@ -687,35 +690,53 @@ pub fn run_picker_with(
                     })
                     .collect();
                 let thm = &tui_theme;
-                let mut title = if images_mode { String::from("Images") } else { String::from("Text") };
-                if fav_filter { title.push_str(" — Favorites"); }
-                if let Some(ref t) = tag_filter { if !t.is_empty() { title.push_str(&format!(" — Tag: {}", t)); } }
-                // Counts + page
+                // Compute title tokens
+                let mode_str = if images_mode { "Images" } else { "Text" };
                 let loaded = items.len();
                 let total_known = last_known_total.or(if use_daemon { None } else { Some(total) });
                 let total_to_show = total_known.unwrap_or(loaded);
-                let count_label = if fav_filter {
-                    format!(" — Total favorites {}", total_to_show)
-                } else {
-                    format!(" — Total entries {}", total_to_show)
-                };
                 let total_pages_known = total_known.map(|tt| if tt == 0 { 1 } else { (tt - 1) / page_size + 1 });
-                let page_label = match total_pages_known {
-                    Some(tp) => format!(" — Page {}/{} (page size {})", page_index + 1, tp, page_size),
-                    None => format!(" — Page {} (page size {})", page_index + 1, page_size),
+                let page_count_str = total_pages_known.map(|tp| tp.to_string()).unwrap_or_else(|| "?".to_string());
+                let favorites_str = if fav_filter { " — Favorites" } else { "" };
+                let tag_str = tag_filter.as_deref().filter(|s| !s.is_empty()).map(|t| format!(" — Tag: {}", t)).unwrap_or_default();
+                let remote_str = if remote_badge { " — Remote" } else { "" };
+                let title_text = if let Some(tpl) = &layout.list_title_template {
+                    tpl.replace("{mode}", mode_str)
+                        .replace("{favorites}", favorites_str)
+                        .replace("{tag}", &tag_str)
+                        .replace("{total}", &total_to_show.to_string())
+                        .replace("{page}", &(page_index + 1).to_string())
+                        .replace("{page_count}", &page_count_str)
+                        .replace("{page_size}", &page_size.to_string())
+                        .replace("{remote}", remote_str)
+                } else {
+                    let mut t = String::from(mode_str);
+                    if fav_filter { t.push_str(" — Favorites"); }
+                    if !tag_str.is_empty() { t.push_str(&tag_str); }
+                    let count_label = if fav_filter { format!(" — Total favorites {}", total_to_show) } else { format!(" — Total entries {}", total_to_show) };
+                    let page_label = match total_pages_known { Some(tp) => format!(" — Page {}/{} (page size {})", page_index + 1, tp, page_size), None => format!(" — Page {} (page size {})", page_index + 1, page_size) };
+                    t.push_str(&count_label);
+                    t.push_str(&page_label);
+                    if remote_badge { t.push_str(" — Remote"); }
+                    t
                 };
-                title.push_str(&count_label);
-                title.push_str(&page_label);
-                // Styled title with optional remote badge
-                let mut title_spans: Vec<Span> = vec![Span::styled(title.clone(), Style::default().fg(tui_theme.title_fg))];
+                // Styled title with optional remote badge (remote already in text if template used it)
+                let mut title_spans: Vec<Span> = vec![Span::styled(title_text.clone(), Style::default().fg(tui_theme.title_fg))];
                 if remote_badge {
-                    title_spans.push(Span::styled(" — Remote", Style::default().fg(tui_theme.badge_fg).bg(tui_theme.badge_bg)));
+                    if let Some(tpl) = &layout.list_title_template {
+                        if !tpl.contains("{remote}") {
+                            title_spans.push(Span::styled(" — Remote", Style::default().fg(tui_theme.badge_fg).bg(tui_theme.badge_bg)));
+                        }
+                    }
                 }
                 let mut list_block = Block::default().title(Line::from(title_spans));
                 if caps.unicode {
-                    list_block = list_block
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(thm.border_fg));
+                    if let Some(bt) = layout.border_list.or(tui_theme.border_type) {
+                        list_block = list_block
+                            .borders(Borders::ALL)
+                            .border_type(bt)
+                            .border_style(Style::default().fg(thm.border_fg));
+                    }
                 }
                 let list = List::new(list_items)
                     .block(list_block)
@@ -738,16 +759,26 @@ pub fn run_picker_with(
                 let thm2 = &tui_theme;
                 let mut footer_block = Block::default().title(Line::styled("Shortcuts", Style::default().fg(tui_theme.title_fg)));
                 if caps.unicode {
-                    footer_block = footer_block.borders(Borders::ALL).border_style(Style::default().fg(thm.border_fg));
+                    if let Some(bt) = layout.border_footer.or(tui_theme.border_type) {
+                        footer_block = footer_block.borders(Borders::ALL).border_type(bt).border_style(Style::default().fg(thm.border_fg));
+                    }
                 }
                 let footer_area_idx = if mode == Mode::Query { if layout.search_bar_bottom { 1 } else { 2 } } else { 1 };
-                let mut simple = format!(
-                    "{} copy | x delete | p fav/unfav | Tab favorites | ? more",
-                    glyphs.enter_label
-                );
-                if !selected_ids.is_empty() { simple.push_str(&format!(" | {} selected", selected_ids.len())); }
-                if has_more { simple.push_str(" | More available…"); }
-                if let Some((msg, until)) = &toast { if Instant::now() <= *until { simple.push_str(&format!("  — {}", msg)); } }
+                let more_hint = if has_more { " | More available…" } else { "" };
+                let selected_count = selected_ids.len().to_string();
+                let toast_text = if let Some((msg, until)) = &toast { if Instant::now() <= *until { format!("  — {}", msg) } else { String::new() } } else { String::new() };
+                let simple = if let Some(tpl) = &layout.footer_template {
+                    tpl.replace("{enter_label}", &glyphs.enter_label)
+                        .replace("{selected_count}", &selected_count)
+                        .replace("{more_hint}", more_hint)
+                        .replace("{toast}", &toast_text)
+                } else {
+                    let mut s = format!("{} copy | x delete | p fav/unfav | Tab favorites | ? more", glyphs.enter_label);
+                    if !selected_ids.is_empty() { s.push_str(&format!(" | {} selected", selected_ids.len())); }
+                    if has_more { s.push_str(" | More available…"); }
+                    if !toast_text.is_empty() { s.push_str(&toast_text); }
+                    s
+                };
                 if layout.help_footer {
                     let footer = Paragraph::new(simple)
                         .block(footer_block)
@@ -765,41 +796,51 @@ pub fn run_picker_with(
                         .title(Line::styled("Shortcuts — Help (? to close)", Style::default().fg(tui_theme.title_fg)))
                         .style(Style::default().bg(tui_theme.status_bg));
                     if caps.unicode {
-                        block = block
-                            .borders(Borders::ALL)
-                            .border_style(Style::default().fg(thm.border_fg));
+                        if let Some(bt) = layout.border_help.or(tui_theme.border_type) {
+                            block = block
+                                .borders(Borders::ALL)
+                                .border_type(bt)
+                                .border_style(Style::default().fg(thm.border_fg));
+                        }
                     }
                     f.render_widget(block.clone(), overlay);
-                    let cols = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints([
-                            Constraint::Percentage(34),
-                            Constraint::Percentage(33),
-                            Constraint::Percentage(33),
-                        ])
-                        .split(inner(overlay));
-                    let col1 = Paragraph::new(
-                        "↑/k up\n↓/j down\n→/l/PgDn next page\n←/h/PgUp prev page\nHome/g go to start\nEnd/G go to end",
-                    )
-                    .wrap(Wrap { trim: true })
-                    .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
-                    let col2 = Paragraph::new(
-                        "/ filter\ns select\nS clear selected\nTab favorites toggle\ni images toggle\nt apply #tag\nr refresh",
-                    )
-                    .wrap(Wrap { trim: true })
-                    .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
-                    let mut col3_text = if caps.unicode {
-                        String::from("⏎ copy | x delete | p fav/unfav\nq quit\n? close help")
+                    if let Some(tpl) = &layout.help_template {
+                        let help = Paragraph::new(tpl.as_str())
+                            .wrap(Wrap { trim: true })
+                            .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
+                        f.render_widget(help, inner(overlay));
                     } else {
-                        String::from("Enter copy | x delete | p fav/unfav\nq quit\n? close help")
-                    };
-                    if has_more { col3_text.push_str("\nMore available…"); }
-                    let col3 = Paragraph::new(col3_text)
+                        let cols = Layout::default()
+                            .direction(Direction::Horizontal)
+                            .constraints([
+                                Constraint::Percentage(34),
+                                Constraint::Percentage(33),
+                                Constraint::Percentage(33),
+                            ])
+                            .split(inner(overlay));
+                        let col1 = Paragraph::new(
+                            "↑/k up\n↓/j down\n→/l/PgDn next page\n←/h/PgUp prev page\nHome/g go to start\nEnd/G go to end",
+                        )
                         .wrap(Wrap { trim: true })
                         .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
-                    f.render_widget(col1, cols[0]);
-                    f.render_widget(col2, cols[1]);
-                    f.render_widget(col3, cols[2]);
+                        let col2 = Paragraph::new(
+                            "/ filter\ns select\nS clear selected\nTab favorites toggle\ni images toggle\nt apply #tag\nr refresh",
+                        )
+                        .wrap(Wrap { trim: true })
+                        .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
+                        let mut col3_text = if caps.unicode {
+                            String::from("⏎ copy | x delete | p fav/unfav\nq quit\n? close help")
+                        } else {
+                            String::from("Enter copy | x delete | p fav/unfav\nq quit\n? close help")
+                        };
+                        if has_more { col3_text.push_str("\nMore available…"); }
+                        let col3 = Paragraph::new(col3_text)
+                            .wrap(Wrap { trim: true })
+                            .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
+                        f.render_widget(col1, cols[0]);
+                        f.render_widget(col2, cols[1]);
+                        f.render_widget(col3, cols[2]);
+                    }
                 }
             })?;
         }

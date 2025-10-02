@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use ratatui::widgets::BorderType;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Caps {
@@ -57,6 +58,7 @@ pub struct TuiTheme {
     pub badge_bg: ratatui::style::Color,
     pub search_match_fg: ratatui::style::Color,
     pub search_match_bg: ratatui::style::Color,
+    pub border_type: Option<BorderType>,
 }
 
 fn default_highlight_fg() -> ratatui::style::Color {
@@ -94,6 +96,7 @@ struct RawTheme {
     badge_bg: Option<String>,
     search_match_fg: Option<String>,
     search_match_bg: Option<String>,
+    border_style: Option<String>,
 }
 
 pub fn load_tui_theme() -> TuiTheme {
@@ -125,6 +128,7 @@ pub fn load_tui_theme() -> TuiTheme {
         badge_bg: map(raw.badge_bg.clone(), default_badge_bg),
         search_match_fg: map(raw.search_match_fg.clone(), default_search_match_fg),
         search_match_bg: map(raw.search_match_bg.clone(), default_search_match_bg),
+        border_type: parse_border_type(raw.border_style.as_deref()),
     }
 }
 
@@ -165,6 +169,7 @@ fn builtin_theme_dark() -> RawTheme {
         badge_bg: Some("#ffd866".into()),
         search_match_fg: Some("black".into()),
         search_match_bg: Some("yellow".into()),
+        border_style: Some("plain".into()),
     }
 }
 
@@ -182,6 +187,7 @@ fn builtin_theme_high_contrast() -> RawTheme {
         badge_bg: Some("white".into()),
         search_match_fg: Some("black".into()),
         search_match_bg: Some("white".into()),
+        border_style: Some("plain".into()),
     }
 }
 
@@ -202,6 +208,17 @@ pub fn available_themes() -> Vec<String> {
     v.sort();
     v.dedup();
     v
+}
+
+fn parse_border_type(s: Option<&str>) -> Option<BorderType> {
+    match s.map(|v| v.trim().to_ascii_lowercase()) {
+        None => Some(BorderType::Plain),
+        Some(ref k) if k == "plain" => Some(BorderType::Plain),
+        Some(ref k) if k == "rounded" => Some(BorderType::Rounded),
+        Some(ref k) if k == "double" => Some(BorderType::Double),
+        Some(ref k) if k == "none" => None,
+        Some(_) => Some(BorderType::Plain),
+    }
 }
 
 // ======= Glyphs, Layouts, and ASCII preview =======
@@ -336,6 +353,13 @@ pub struct LayoutPack {
     pub list_line_height: u8,
     pub item_template: Option<String>,
     pub meta_template: Option<String>,
+    pub list_title_template: Option<String>,
+    pub footer_template: Option<String>,
+    pub help_template: Option<String>,
+    pub border_list: Option<BorderType>,
+    pub border_search: Option<BorderType>,
+    pub border_footer: Option<BorderType>,
+    pub border_help: Option<BorderType>,
 }
 
 #[derive(Deserialize)]
@@ -345,6 +369,13 @@ struct RawLayout {
     list_line_height: Option<u8>,
     item_template: Option<String>,
     meta_template: Option<String>,
+    list_title_template: Option<String>,
+    footer_template: Option<String>,
+    help_template: Option<String>,
+    border_list: Option<String>,
+    border_search: Option<String>,
+    border_footer: Option<String>,
+    border_help: Option<String>,
 }
 
 pub fn load_layout() -> LayoutPack {
@@ -354,7 +385,7 @@ pub fn load_layout() -> LayoutPack {
     let raw = hint
         .as_deref()
         .and_then(load_layout_from_hint)
-        .unwrap_or(RawLayout { help: None, search_bar_position: None, list_line_height: None, item_template: None, meta_template: None });
+        .unwrap_or(RawLayout { help: None, search_bar_position: None, list_line_height: None, item_template: None, meta_template: None, list_title_template: None, footer_template: None, help_template: None, border_list: None, border_search: None, border_footer: None, border_help: None });
     let hf = raw
         .help
         .as_deref()
@@ -366,7 +397,20 @@ pub fn load_layout() -> LayoutPack {
         .unwrap_or("top")
         .eq_ignore_ascii_case("bottom");
     let llh = raw.list_line_height.unwrap_or(2).clamp(1, 2);
-    LayoutPack { help_footer: hf, search_bar_bottom: sb, list_line_height: llh, item_template: raw.item_template, meta_template: raw.meta_template }
+    LayoutPack {
+        help_footer: hf,
+        search_bar_bottom: sb,
+        list_line_height: llh,
+        item_template: raw.item_template,
+        meta_template: raw.meta_template,
+        list_title_template: raw.list_title_template,
+        footer_template: raw.footer_template,
+        help_template: raw.help_template,
+        border_list: parse_border_type(raw.border_list.as_deref()),
+        border_search: parse_border_type(raw.border_search.as_deref()),
+        border_footer: parse_border_type(raw.border_footer.as_deref()),
+        border_help: parse_border_type(raw.border_help.as_deref()),
+    }
 }
 
 fn load_layout_from_hint(hint: &str) -> Option<RawLayout> {
@@ -377,7 +421,7 @@ fn load_layout_from_hint(hint: &str) -> Option<RawLayout> {
             .and_then(|s| toml::from_str(&s).ok())
     } else {
         match hint.to_ascii_lowercase().as_str() {
-            "default" => Some(RawLayout { help: None, search_bar_position: None, list_line_height: None, item_template: None, meta_template: None }),
+            "default" => Some(RawLayout { help: None, search_bar_position: None, list_line_height: None, item_template: None, meta_template: None, list_title_template: None, footer_template: None, help_template: None, border_list: None, border_search: None, border_footer: None, border_help: None }),
             name => {
                 let path = crate::config::config_dir()
                     .join("layouts")
