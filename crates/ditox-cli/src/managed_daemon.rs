@@ -150,7 +150,7 @@ where
                 if *lt != text {
                     // Try to find existing recent identical entry; else insert
                     let found = match store.list(ditox_core::Query{ contains: None, favorites_only: false, limit: Some(50), tag: None, rank: false }) {
-                        Ok(mut v) => {
+                        Ok(v) => {
                             v.iter().find(|c| c.text == text).map(|c| c.id.clone())
                         }
                         Err(_) => None,
