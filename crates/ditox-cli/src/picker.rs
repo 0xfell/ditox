@@ -799,7 +799,7 @@ pub fn run_picker_with(
                         .replace("{page}", &(page_index + 1).to_string())
                         .replace("{page_count}", &page_count_str)
                 } else {
-                    let mut s = format!("{} copy | x delete | p fav/unfav | Tab favorites | ? more — Page {}/{}", glyphs.enter_label, page_index + 1, page_count_str);
+                    let mut s = format!("{} copy | x delete | p fav/unfav | Tab favorites | ? more", glyphs.enter_label);
                     if !selected_ids.is_empty() { s.push_str(&format!(" | {} selected", selected_ids.len())); }
                     if has_more { s.push_str(" | More available…"); }
                     if !toast_text.is_empty() { s.push_str(&toast_text); }
