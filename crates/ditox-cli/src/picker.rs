@@ -15,6 +15,7 @@ use std::io;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
+use std::collections::{HashMap, HashSet};
 // no process or encoder imports needed here
 use crate::copy_helpers;
 use crate::theme;
@@ -344,6 +345,10 @@ pub fn run_picker_with(
     let cap = capture.clone().unwrap_or(CaptureStatus { mode: if use_daemon { CaptureMode::External } else { CaptureMode::Off }, managed: None });
     let mut last_known_total: Option<usize> = None;
     let mut pending_restore_id: Option<String> = None;
+    // Track ids to highlight as "New" for a short time after appearance
+    let mut last_ids: HashSet<String> = HashSet::new();
+    let mut new_until: HashMap<String, Instant> = HashMap::new();
+    let new_badge_ms: u64 = 2500;
     #[allow(unused_assignments)]
     let mut daemon_port: Option<u16> = None;
     if use_daemon {
@@ -474,6 +479,18 @@ pub fn run_picker_with(
                 };
             }
             last_query = query.clone();
+            // Update new-badge tracking
+            let now = Instant::now();
+            let mut curr_ids: HashSet<String> = HashSet::new();
+            for it in items.iter() {
+                let id = match it { Item::Text { id, .. } | Item::Image { id, .. } => id };
+                if !last_ids.contains(id) {
+                    new_until.insert(id.clone(), now + Duration::from_millis(new_badge_ms));
+                }
+                curr_ids.insert(id.clone());
+            }
+            last_ids = curr_ids;
+            new_until.retain(|_, &mut until| until > now);
             // Track tag typing timestamp when in tag mode
             if mode == Mode::Query && query.starts_with('#') {
                 last_tag_typed = Some(Instant::now());
@@ -568,6 +585,7 @@ pub fn run_picker_with(
                 let start = page_index.saturating_mul(page_rows);
                 let end = (start + page_rows).min(total);
                 let visible = &filtered[start..end];
+
 
                 fn highlight_line<'a>(s: String, query: &str, th: &crate::theme::TuiTheme) -> Line<'a> {
                     if query.is_empty() || query.starts_with('#') { return Line::from(s); }
@@ -712,6 +730,7 @@ pub fn run_picker_with(
                     }
                 }
 
+ 5e66a45 (feat(cli): preserve selection on manual filter changes and add 'New' badge\n\n- Keep cursor position across favorites/images/tag refreshes\n- Show a subtle 'New' badge for ~2.5s on recently added items\n- Debounce selection restore and prune badges automatically\n)
                 let list_items: Vec<ListItem> = visible
                     .iter()
                     .filter_map(|&i| items.get(i))
@@ -719,7 +738,9 @@ pub fn run_picker_with(
                         Item::Text {
                             id, favorite, text, created_at, last_used_at, ..
                         } => {
+
                             render_item_text(id, *favorite, text, *created_at, last_used_at, absolute_times, &selected_ids, &glyphs, &layout, &tui_theme, if mode == Mode::Query { &query } else { "" })
+ 5e66a45 (feat(cli): preserve selection on manual filter changes and add 'New' badge\n\n- Keep cursor position across favorites/images/tag refreshes\n- Show a subtle 'New' badge for ~2.5s on recently added items\n- Debounce selection restore and prune badges automatically\n)
                         }
                         Item::Image {
                             id,
@@ -738,7 +759,9 @@ pub fn run_picker_with(
                                     std::path::Path::new(p).file_name().and_then(|n| n.to_str())
                                 })
                                 .unwrap_or("");
+
                             render_item_image(id, *favorite, *width, *height, format, name, *created_at, last_used_at, absolute_times, &selected_ids, &glyphs, &layout, &tui_theme, if mode == Mode::Query { &query } else { "" })
+ 5e66a45 (feat(cli): preserve selection on manual filter changes and add 'New' badge\n\n- Keep cursor position across favorites/images/tag refreshes\n- Show a subtle 'New' badge for ~2.5s on recently added items\n- Debounce selection restore and prune badges automatically\n)
                         }
                     })
                     .collect();
@@ -996,6 +1019,17 @@ More available…"); }
                         last_key_ts = Some(Instant::now());
                     }
                     KeyCode::Tab => {
+                        // preserve selection across reload
+                        pending_restore_id = (|| {
+                            let total = filtered.len();
+                            let start = page_index.saturating_mul(page_size);
+                            if start + selected < total {
+                                let idx = filtered[start + selected];
+                                items.get(idx).map(|it| match it {
+                                    Item::Text { id, .. } | Item::Image { id, .. } => id.clone(),
+                                })
+                            } else { None }
+                        })();
                         fav_filter = !fav_filter;
                         last_query.clear();
                         needs_refilter = true;
@@ -1052,6 +1086,14 @@ More available…"); }
                     }
                     
                     KeyCode::Char('f') if mode == Mode::Normal => {
+                        pending_restore_id = (|| {
+                            let total = filtered.len();
+                            let start = page_index.saturating_mul(page_size);
+                            if start + selected < total {
+                                let idx = filtered[start + selected];
+                                items.get(idx).map(|it| match it { Item::Text { id, .. } | Item::Image { id, .. } => id.clone(), })
+                            } else { None }
+                        })();
                         fav_filter = !fav_filter;
                         last_query.clear();
                         needs_refilter = true;
@@ -1107,6 +1149,14 @@ More available…"); }
                         filtered = (0..items.len()).collect();
                     }
                     KeyCode::Char('i') if mode == Mode::Normal => {
+                        pending_restore_id = (|| {
+                            let total = filtered.len();
+                            let start = page_index.saturating_mul(page_size);
+                            if start + selected < total {
+                                let idx = filtered[start + selected];
+                                items.get(idx).map(|it| match it { Item::Text { id, .. } | Item::Image { id, .. } => id.clone(), })
+                            } else { None }
+                        })();
                         images_mode = !images_mode;
                         selected = 0;
                         page_index = 0;
@@ -1470,6 +1520,14 @@ More available…"); }
                         last_query.clear();
                     }
                     KeyCode::Char('r') if mode == Mode::Normal => {
+                        pending_restore_id = (|| {
+                            let total = filtered.len();
+                            let start = page_index.saturating_mul(page_size);
+                            if start + selected < total {
+                                let idx = filtered[start + selected];
+                                items.get(idx).map(|it| match it { Item::Text { id, .. } | Item::Image { id, .. } => id.clone(), })
+                            } else { None }
+                        })();
                         last_query.clear();
                         needs_refilter = true;
                         page_index = 0;
@@ -1523,6 +1581,14 @@ More available…"); }
                     }
                     // Run migrations on DB (best-effort) and reload list
                     KeyCode::Char('m') | KeyCode::Char('M') => {
+                        pending_restore_id = (|| {
+                            let total = filtered.len();
+                            let start = page_index.saturating_mul(page_size);
+                            if start + selected < total {
+                                let idx = filtered[start + selected];
+                                items.get(idx).map(|it| match it { Item::Text { id, .. } | Item::Image { id, .. } => id.clone(), })
+                            } else { None }
+                        })();
                         match migrate_current_db() {
                             Ok(()) => {
                                 toast = Some((
@@ -1850,7 +1916,15 @@ More available…"); }
                             if last_applied_tag.as_deref() != Some(&new_tag) {
                                 tag_filter = Some(new_tag.clone());
                                 last_applied_tag = Some(new_tag);
-                                // reload items
+                                // reload items (preserve selection)
+                                pending_restore_id = (|| {
+                                    let total = filtered.len();
+                                    let start = page_index.saturating_mul(page_size);
+                                    if start + selected < total {
+                                        let idx = filtered[start + selected];
+                                        items.get(idx).map(|it| match it { Item::Text { id, .. } | Item::Image { id, .. } => id.clone(), })
+                                    } else { None }
+                                })();
                                 if use_daemon {
                                     if let Some(dc) = daemon.as_mut() {
                                         if let Ok(p) = dc.request_page(
