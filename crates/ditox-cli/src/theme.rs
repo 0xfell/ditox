@@ -1,5 +1,5 @@
-use serde::Deserialize;
 use ratatui::widgets::BorderType;
+use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Caps {
@@ -73,14 +73,30 @@ fn default_border_fg() -> ratatui::style::Color {
 fn default_help_fg() -> ratatui::style::Color {
     ratatui::style::Color::Yellow
 }
-fn default_title_fg() -> ratatui::style::Color { ratatui::style::Color::Gray }
-fn default_muted_fg() -> ratatui::style::Color { ratatui::style::Color::Gray }
-fn default_status_fg() -> ratatui::style::Color { ratatui::style::Color::White }
-fn default_status_bg() -> ratatui::style::Color { ratatui::style::Color::Reset }
-fn default_badge_fg() -> ratatui::style::Color { ratatui::style::Color::Black }
-fn default_badge_bg() -> ratatui::style::Color { ratatui::style::Color::Yellow }
-fn default_search_match_fg() -> ratatui::style::Color { ratatui::style::Color::Black }
-fn default_search_match_bg() -> ratatui::style::Color { ratatui::style::Color::Yellow }
+fn default_title_fg() -> ratatui::style::Color {
+    ratatui::style::Color::Gray
+}
+fn default_muted_fg() -> ratatui::style::Color {
+    ratatui::style::Color::Gray
+}
+fn default_status_fg() -> ratatui::style::Color {
+    ratatui::style::Color::White
+}
+fn default_status_bg() -> ratatui::style::Color {
+    ratatui::style::Color::Reset
+}
+fn default_badge_fg() -> ratatui::style::Color {
+    ratatui::style::Color::Black
+}
+fn default_badge_bg() -> ratatui::style::Color {
+    ratatui::style::Color::Yellow
+}
+fn default_search_match_fg() -> ratatui::style::Color {
+    ratatui::style::Color::Black
+}
+fn default_search_match_bg() -> ratatui::style::Color {
+    ratatui::style::Color::Yellow
+}
 
 #[derive(Deserialize)]
 struct RawTheme {
@@ -389,7 +405,22 @@ pub fn load_layout() -> LayoutPack {
     let raw = hint
         .as_deref()
         .and_then(load_layout_from_hint)
-        .unwrap_or(RawLayout { help: None, search_bar_position: None, list_line_height: None, item_template: None, meta_template: None, list_title_template: None, footer_template: None, help_template: None, border_list: None, border_search: None, border_footer: None, border_help: None, show_list_pager: None, pager_template: None });
+        .unwrap_or(RawLayout {
+            help: None,
+            search_bar_position: None,
+            list_line_height: None,
+            item_template: None,
+            meta_template: None,
+            list_title_template: None,
+            footer_template: None,
+            help_template: None,
+            border_list: None,
+            border_search: None,
+            border_footer: None,
+            border_help: None,
+            show_list_pager: None,
+            pager_template: None,
+        });
     let hf = raw
         .help
         .as_deref()
@@ -427,7 +458,22 @@ fn load_layout_from_hint(hint: &str) -> Option<RawLayout> {
             .and_then(|s| toml::from_str(&s).ok())
     } else {
         match hint.to_ascii_lowercase().as_str() {
-            "default" => Some(RawLayout { help: None, search_bar_position: None, list_line_height: None, item_template: None, meta_template: None, list_title_template: None, footer_template: None, help_template: None, border_list: None, border_search: None, border_footer: None, border_help: None, show_list_pager: None, pager_template: None }),
+            "default" => Some(RawLayout {
+                help: None,
+                search_bar_position: None,
+                list_line_height: None,
+                item_template: None,
+                meta_template: None,
+                list_title_template: None,
+                footer_template: None,
+                help_template: None,
+                border_list: None,
+                border_search: None,
+                border_footer: None,
+                border_help: None,
+                show_list_pager: None,
+                pager_template: None,
+            }),
             name => {
                 let path = crate::config::config_dir()
                     .join("layouts")

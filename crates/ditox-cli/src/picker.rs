@@ -2045,7 +2045,9 @@ fn date_fmt(ts_ns: i64) -> String {
     let mm = format!("{:02}", u8::from(d.month()));
     let yyyy = format!("{}", d.year());
     let fmt = std::env::var("DITOX_TUI_DATE_FMT").unwrap_or_else(|_| "dd-mm-yyyy".to_string());
-    fmt.replace("dd", &dd).replace("mm", &mm).replace("yyyy", &yyyy)
+    fmt.replace("dd", &dd)
+        .replace("mm", &mm)
+        .replace("yyyy", &yyyy)
 }
 
 fn fmt_auto_ns(ts_ns: i64) -> String {
@@ -2066,7 +2068,11 @@ fn fmt_auto_ns(ts_ns: i64) -> String {
 
 fn most_recent(created_ns: i64, last_used_ns: Option<i64>) -> (i64, &'static str) {
     if let Some(lu) = last_used_ns {
-        if lu >= created_ns { (lu, "last_used") } else { (created_ns, "created") }
+        if lu >= created_ns {
+            (lu, "last_used")
+        } else {
+            (created_ns, "created")
+        }
     } else {
         (created_ns, "created")
     }
