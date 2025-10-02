@@ -298,6 +298,8 @@ pub fn run_picker_with(
         Query,
     }
     let mut mode = Mode::Normal;
+    // Dynamic page rows (items per page) based on viewport height; initialized from settings
+    let mut page_rows: usize = page_size;
     // when external filter changes (f/i/tag), we need to recompute filtered
     let mut needs_refilter = true;
 
@@ -331,7 +333,7 @@ pub fn run_picker_with(
             match dc.request_page(
                 images_mode,
                 fav_filter,
-                Some(page_size),
+                Some(page_rows),
                 Some(0),
                 None,
                 tag_filter.clone(),
@@ -346,7 +348,7 @@ pub fn run_picker_with(
                         store,
                         images_mode,
                         fav_filter,
-                        Some(page_size),
+                        Some(page_rows),
                         tag_filter.clone(),
                     )?;
                     has_more = false;
@@ -356,7 +358,7 @@ pub fn run_picker_with(
         } else if let Ok(p) = fetch_page_from_daemon(
             images_mode,
             fav_filter,
-            Some(page_size),
+            Some(page_rows),
             Some(0),
             None,
             tag_filter.clone(),
@@ -369,7 +371,7 @@ pub fn run_picker_with(
                 store,
                 images_mode,
                 fav_filter,
-                Some(page_size),
+                Some(page_rows),
                 tag_filter.clone(),
             )?;
             has_more = false;
@@ -379,7 +381,7 @@ pub fn run_picker_with(
             store,
             images_mode,
             fav_filter,
-            Some(page_size),
+            Some(page_rows),
             tag_filter.clone(),
         )?;
         has_more = false;
@@ -397,7 +399,7 @@ pub fn run_picker_with(
                     match dc.request_page(
                         images_mode,
                         fav_filter,
-                        Some(page_size),
+                        Some(page_rows),
                         Some(0),
                         if mode == Mode::Query && !query.is_empty() {
                             Some(query.clone())
@@ -508,12 +510,20 @@ pub fn run_picker_with(
                     f.render_widget(q, chunks[q_idx]);
                 }
 
+                // Compute dynamic rows-per-page from list area height and item height
+                let list_area_idx = if mode == Mode::Query {
+                    if layout.search_bar_bottom { 0 } else { 1 }
+                } else { 0 };
+                let list_area = chunks[list_area_idx];
+                let item_rows = layout.list_line_height.clamp(1, 2) as usize;
+                page_rows = std::cmp::max(1, (list_area.height as usize) / item_rows);
+
                 // Pagination window
                 let total = filtered.len();
-                let total_pages = if total == 0 { 1 } else { (total - 1) / page_size + 1 };
+                let total_pages = if total == 0 { 1 } else { (total - 1) / page_rows + 1 };
                 if page_index >= total_pages { page_index = total_pages.saturating_sub(1); }
-                let start = page_index.saturating_mul(page_size);
-                let end = (start + page_size).min(total);
+                let start = page_index.saturating_mul(page_rows);
+                let end = (start + page_rows).min(total);
                 let visible = &filtered[start..end];
 
                 fn highlight_line<'a>(s: String, query: &str, th: &crate::theme::TuiTheme) -> Line<'a> {
@@ -695,7 +705,7 @@ pub fn run_picker_with(
                 let loaded = items.len();
                 let total_known = last_known_total.or(if use_daemon { None } else { Some(total) });
                 let total_to_show = total_known.unwrap_or(loaded);
-                let total_pages_known = total_known.map(|tt| if tt == 0 { 1 } else { (tt - 1) / page_size + 1 });
+                let total_pages_known = total_known.map(|tt| if tt == 0 { 1 } else { (tt - 1) / page_rows + 1 });
                 let page_count_str = total_pages_known.map(|tp| tp.to_string()).unwrap_or_else(|| "?".to_string());
                 let favorites_str = if fav_filter { " — Favorites" } else { "" };
                 let tag_str = tag_filter.as_deref().filter(|s| !s.is_empty()).map(|t| format!(" — Tag: {}", t)).unwrap_or_default();
@@ -707,16 +717,14 @@ pub fn run_picker_with(
                         .replace("{total}", &total_to_show.to_string())
                         .replace("{page}", &(page_index + 1).to_string())
                         .replace("{page_count}", &page_count_str)
-                        .replace("{page_size}", &page_size.to_string())
+                        .replace("{page_size}", &page_rows.to_string())
                         .replace("{remote}", remote_str)
                 } else {
                     let mut t = String::from(mode_str);
                     if fav_filter { t.push_str(" — Favorites"); }
                     if !tag_str.is_empty() { t.push_str(&tag_str); }
                     let count_label = if fav_filter { format!(" — Total favorites {}", total_to_show) } else { format!(" — Total entries {}", total_to_show) };
-                    let page_label = match total_pages_known { Some(tp) => format!(" — Page {}/{} (page size {})", page_index + 1, tp, page_size), None => format!(" — Page {} (page size {})", page_index + 1, page_size) };
                     t.push_str(&count_label);
-                    t.push_str(&page_label);
                     if remote_badge { t.push_str(" — Remote"); }
                     t
                 };
@@ -741,9 +749,6 @@ pub fn run_picker_with(
                 let list = List::new(list_items)
                     .block(list_block)
                     .highlight_style(Style::default().fg(thm.highlight_fg).bg(thm.highlight_bg).add_modifier(Modifier::REVERSED));
-                let list_area_idx = if mode == Mode::Query {
-                    if layout.search_bar_bottom { 0 } else { 1 }
-                } else { 0 };
                 f.render_stateful_widget(
                     list,
                     chunks[list_area_idx],
@@ -772,8 +777,10 @@ pub fn run_picker_with(
                         .replace("{selected_count}", &selected_count)
                         .replace("{more_hint}", more_hint)
                         .replace("{toast}", &toast_text)
+                        .replace("{page}", &(page_index + 1).to_string())
+                        .replace("{page_count}", &page_count_str)
                 } else {
-                    let mut s = format!("{} copy | x delete | p fav/unfav | Tab favorites | ? more", glyphs.enter_label);
+                    let mut s = format!("{} copy | x delete | p fav/unfav | Tab favorites | ? more — Page {}/{}", glyphs.enter_label, page_index + 1, page_count_str);
                     if !selected_ids.is_empty() { s.push_str(&format!(" | {} selected", selected_ids.len())); }
                     if has_more { s.push_str(" | More available…"); }
                     if !toast_text.is_empty() { s.push_str(&toast_text); }
@@ -887,7 +894,7 @@ pub fn run_picker_with(
                                 match dc.request_page(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_size),
+                                    Some(page_rows),
                                     Some(0),
                                     None,
                                     tag_filter.clone(),
@@ -942,7 +949,7 @@ pub fn run_picker_with(
                                 match dc.request_page(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_size),
+                                    Some(page_rows),
                                     Some(0),
                                     None,
                                     tag_filter.clone(),
@@ -998,7 +1005,7 @@ pub fn run_picker_with(
                                     let p = dc.request_page(
                                         images_mode,
                                         fav_filter,
-                                        Some(page_size),
+                                        Some(page_rows),
                                         Some(0),
                                         None,
                                         tag_filter.clone(),
@@ -1060,7 +1067,7 @@ pub fn run_picker_with(
                         if !selected_ids.is_empty() {
                             ids.extend(selected_ids.iter().cloned());
                         } else if let Some(idx) = filtered
-                            .get(page_index.saturating_mul(page_size) + selected)
+                            .get(page_index.saturating_mul(page_rows) + selected)
                             .cloned()
                         {
                             if let Some(it) = items.get(idx) {
@@ -1100,7 +1107,7 @@ pub fn run_picker_with(
                                 match fetch_page_from_daemon(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_size),
+                                    Some(page_rows),
                                     Some(0),
                                     None,
                                     tag_filter.clone(),
@@ -1130,8 +1137,8 @@ pub fn run_picker_with(
                                 )?;
                             }
                             filtered = (0..items.len()).collect();
-                            if selected >= page_size {
-                                selected = page_size.saturating_sub(1);
+                            if selected >= page_rows {
+                                selected = page_rows.saturating_sub(1);
                             }
                         }
                     }
@@ -1172,7 +1179,7 @@ pub fn run_picker_with(
                                 if let Ok(p) = fetch_page_from_daemon(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_size),
+                                    Some(page_rows),
                                     Some(0),
                                     None,
                                     tag_filter.clone(),
@@ -1190,8 +1197,8 @@ pub fn run_picker_with(
                                 )?;
                             }
                             filtered = (0..items.len()).collect();
-                            if selected >= page_size {
-                                selected = page_size.saturating_sub(1);
+                            if selected >= page_rows {
+                                selected = page_rows.saturating_sub(1);
                             }
                         }
                     }
@@ -1231,7 +1238,7 @@ pub fn run_picker_with(
                                         if let Ok(p) = fetch_page_from_daemon(
                                             images_mode,
                                             fav_filter,
-                                            Some(page_size),
+                                            Some(page_rows),
                                             Some(0),
                                             None,
                                             tag_filter.clone(),
@@ -1249,8 +1256,8 @@ pub fn run_picker_with(
                                         )?;
                                     }
                                     filtered = (0..items.len()).collect();
-                                    if selected >= page_size {
-                                        selected = page_size.saturating_sub(1);
+                                    if selected >= page_rows {
+                                        selected = page_rows.saturating_sub(1);
                                     }
                                 }
                                 pending_delete_id = None;
@@ -1281,7 +1288,7 @@ pub fn run_picker_with(
                                     if let Ok(p) = dc.request_page(
                                         images_mode,
                                         fav_filter,
-                                        Some(page_size),
+                                        Some(page_rows),
                                         Some(0),
                                         None,
                                         tag_filter.clone(),
@@ -1300,8 +1307,8 @@ pub fn run_picker_with(
                                 )?;
                             }
                             filtered = (0..items.len()).collect();
-                            if selected >= page_size {
-                                selected = page_size.saturating_sub(1);
+                            if selected >= page_rows {
+                                selected = page_rows.saturating_sub(1);
                             }
                         }
                     }
@@ -1323,7 +1330,7 @@ pub fn run_picker_with(
                                 match dc.request_page(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_size),
+                                    Some(page_rows),
                                     Some(0),
                                     None,
                                     tag_filter.clone(),
@@ -1380,7 +1387,7 @@ pub fn run_picker_with(
                                         if let Ok(p) = dc.request_page(
                                             images_mode,
                                             fav_filter,
-                                            Some(page_size),
+                                            Some(page_rows),
                                             Some(0),
                                             None,
                                             tag_filter.clone(),
@@ -1423,7 +1430,7 @@ pub fn run_picker_with(
                             selected -= 1;
                         } else if page_index > 0 {
                             page_index -= 1;
-                            selected = page_size.saturating_sub(1);
+                            selected = page_rows.saturating_sub(1);
                         }
                     }
                     KeyCode::Char('k') if mode == Mode::Normal => {
@@ -1431,13 +1438,13 @@ pub fn run_picker_with(
                             selected -= 1;
                         } else if page_index > 0 {
                             page_index -= 1;
-                            selected = page_size.saturating_sub(1);
+                            selected = page_rows.saturating_sub(1);
                         }
                     }
                     KeyCode::Down => {
                         let total = filtered.len();
-                        let start = page_index.saturating_mul(page_size);
-                        let end = (start + page_size).min(total);
+                        let start = page_index.saturating_mul(page_rows);
+                        let end = (start + page_rows).min(total);
                         let page_len = end.saturating_sub(start);
                         if selected + 1 < page_len {
                             selected += 1;
@@ -1450,7 +1457,7 @@ pub fn run_picker_with(
                                 if let Ok(p) = dc.request_page(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_size),
+                                    Some(page_rows),
                                     Some(items.len()),
                                     None,
                                     tag_filter.clone(),
@@ -1465,8 +1472,8 @@ pub fn run_picker_with(
                     }
                     KeyCode::Char('j') if mode == Mode::Normal => {
                         let total = filtered.len();
-                        let start = page_index.saturating_mul(page_size);
-                        let end = (start + page_size).min(total);
+                        let start = page_index.saturating_mul(page_rows);
+                        let end = (start + page_rows).min(total);
                         let page_len = end.saturating_sub(start);
                         if selected + 1 < page_len {
                             selected += 1;
@@ -1479,7 +1486,7 @@ pub fn run_picker_with(
                                 if let Ok(p) = dc.request_page(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_size),
+                                    Some(page_rows),
                                     Some(items.len()),
                                     None,
                                     tag_filter.clone(),
@@ -1494,7 +1501,7 @@ pub fn run_picker_with(
                     }
                     KeyCode::Right | KeyCode::PageDown => {
                         let total = filtered.len();
-                        let start = (page_index + 1).saturating_mul(page_size);
+                        let start = (page_index + 1).saturating_mul(page_rows);
                         if start >= total && use_daemon && has_more {
                             // Fetch enough pages to cover the next page window
                             if let Some(dc) = daemon.as_mut() {
@@ -1502,7 +1509,7 @@ pub fn run_picker_with(
                                     if let Ok(p) = dc.request_page(
                                         images_mode,
                                         fav_filter,
-                                        Some(page_size),
+                                        Some(page_rows),
                                         Some(items.len()),
                                         None,
                                         tag_filter.clone(),
@@ -1518,7 +1525,7 @@ pub fn run_picker_with(
                             }
                         }
                         let total = filtered.len();
-                        let start2 = (page_index + 1).saturating_mul(page_size);
+                        let start2 = (page_index + 1).saturating_mul(page_rows);
                         if start2 < total {
                             page_index += 1;
                             selected = 0;
@@ -1598,7 +1605,7 @@ pub fn run_picker_with(
                                 match fetch_page_from_daemon(
                                     images_mode,
                                     fav_filter,
-                                    Some(page_size),
+                                    Some(page_rows),
                                     Some(0),
                                     None,
                                     tag_filter.clone(),
@@ -1630,7 +1637,7 @@ pub fn run_picker_with(
                             query.clear();
                             continue;
                         }
-                        let start = page_index.saturating_mul(page_size);
+                        let start = page_index.saturating_mul(page_rows);
                         if let Some(idx) = filtered.get(start + selected).cloned() {
                             // perform copy and exit
                             match &items[idx] {
@@ -1699,7 +1706,7 @@ pub fn run_picker_with(
                                         if let Ok(p) = dc.request_page(
                                             images_mode,
                                             fav_filter,
-                                            Some(page_size),
+                                            Some(page_rows),
                                             Some(0),
                                             None,
                                             tag_filter.clone(),
@@ -1714,7 +1721,7 @@ pub fn run_picker_with(
                                     store,
                                     images_mode,
                                     fav_filter,
-                                    Some(page_size),
+                                    Some(page_rows),
                                     tag_filter.clone(),
                                 ) {
                                     items = v;
@@ -1738,7 +1745,7 @@ pub fn run_picker_with(
                     if let Ok(p0) = dc.request_page(
                         images_mode,
                         fav_filter,
-                        Some(page_size),
+                        Some(page_rows),
                         Some(0),
                         None,
                         tag_filter.clone(),
@@ -1752,7 +1759,7 @@ pub fn run_picker_with(
                         if let Ok(p) = dc.request_page(
                             images_mode,
                             fav_filter,
-                            Some(page_size),
+                            Some(page_rows),
                             Some(fetched.len()),
                             None,
                             tag_filter.clone(),
@@ -1775,7 +1782,7 @@ pub fn run_picker_with(
                 store,
                 images_mode,
                 fav_filter,
-                Some(page_size),
+                Some(page_rows),
                 tag_filter.clone(),
             ) {
                 items = v;
