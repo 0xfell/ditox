@@ -60,6 +60,24 @@ pub struct Tui {
     pub auto_apply_tag_ms: Option<u64>,
     /// Show absolute timestamps in the picker (Created at • Last used)
     pub absolute_times: Option<bool>,
+    /// Preferred theme name (or absolute path to a theme file)
+    pub theme: Option<String>,
+    /// Color mode: auto|always|never
+    pub color: Option<String>,
+    /// Box drawing characters: unicode|ascii (ascii disables borders)
+    pub box_chars: Option<String>,
+    /// Whether to use the alternate screen
+    pub alt_screen: Option<bool>,
+    /// Enable file watching for theme reloads (not implemented; reserved)
+    pub live_reload: Option<bool>,
+    /// Date format for auto/absolute displays (tokens: dd, mm, yyyy). Example: "dd-mm-yyyy"
+    pub date_format: Option<String>,
+    /// Threshold in days for auto time to switch from relative to absolute date
+    pub auto_recent_days: Option<u32>,
+    /// Glyph pack name or file path
+    pub glyphs: Option<String>,
+    /// Layout pack name or file path
+    pub layout: Option<String>,
 }
 
 pub fn images_dir(settings: &Settings) -> std::path::PathBuf {
