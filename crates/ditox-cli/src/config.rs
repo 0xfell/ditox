@@ -8,6 +8,7 @@ pub struct Settings {
     pub max_storage_mb: Option<u64>,
     pub sync: Option<Sync>,
     pub images: Option<Images>,
+    pub daemon: Option<Daemon>,
     pub tui: Option<Tui>,
 }
 
@@ -53,6 +54,16 @@ pub struct Images {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Daemon {
+    /// "managed" | "external" | "off"
+    pub mode: Option<String>,
+    /// Sampling interval (e.g., "200ms", "1s")
+    pub sample: Option<String>,
+    /// Image capture on/off
+    pub images: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Tui {
     /// Page size (items per page); defaults to 10 when unset
     pub page_size: Option<usize>,
@@ -70,6 +81,8 @@ pub struct Tui {
     pub alt_screen: Option<bool>,
     /// Enable file watching for theme reloads (not implemented; reserved)
     pub live_reload: Option<bool>,
+    /// Debounced auto-refresh interval in milliseconds (default 1500)
+    pub refresh_ms: Option<u64>,
     /// Date format for auto/absolute displays (tokens: dd, mm, yyyy). Example: "dd-mm-yyyy"
     pub date_format: Option<String>,
     /// Threshold in days for auto time to switch from relative to absolute date
@@ -100,6 +113,23 @@ pub fn config_dir() -> PathBuf {
     } else {
         PathBuf::from("./.config/ditox")
     }
+}
+
+/// XDG state dir (Linux) or fallback next to config dir
+pub fn state_dir() -> PathBuf {
+    if let Ok(s) = std::env::var("XDG_STATE_HOME") {
+        if !s.trim().is_empty() {
+            return PathBuf::from(s).join("ditox");
+        }
+    }
+    // Fallback: ~/.local/state/ditox on Unix; otherwise use config dir
+    #[cfg(unix)]
+    {
+        if let Some(bd) = directories::BaseDirs::new() {
+            return bd.home_dir().join(".local/state/ditox");
+        }
+    }
+    config_dir().join("state")
 }
 
 pub fn settings_path() -> PathBuf {

@@ -18,8 +18,9 @@ use std::time::{Duration, Instant};
 // no process or encoder imports needed here
 use crate::copy_helpers;
 use crate::theme;
+use crate::managed_daemon;
 use ditox_core::StoreImpl;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config;
 use crate::preview;
@@ -74,7 +75,7 @@ impl DaemonClient {
         favorites: bool,
         limit: Option<usize>,
         offset: Option<usize>,
-        query: Option<String>,
+        _query: Option<String>,
         tag: Option<String>,
     ) -> anyhow::Result<Page<Item>> {
         let req = Request::List {
@@ -82,7 +83,8 @@ impl DaemonClient {
             favorites,
             limit,
             offset,
-            query,
+            // Always fetch unfiltered; filtering is applied client-side for consistent substring/fuzzy semantics.
+            query: None,
             tag,
         };
         let s = serde_json::to_string(&req)?;
@@ -261,6 +263,8 @@ pub fn run_picker_with(
     let glyphs = theme::load_glyphs();
     let layout = theme::load_layout();
     let caps = theme::detect_caps();
+    // Fuzzy is the only matching mode (clipse-like)
+    let match_fuzzy: bool = true;
     #[allow(unused_assignments)]
     let mut filtered: Vec<usize> = Vec::new();
     let mut last_query = String::new();
@@ -291,6 +295,10 @@ pub fn run_picker_with(
     let mut selected_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut show_help: bool = false;
     let mut last_fetch: Instant = Instant::now();
+    // Auto-refresh interval (ms): env overrides config; default 1500ms
+    let refresh_ms_env = std::env::var("DITOX_TUI_REFRESH_MS").ok().and_then(|v| v.parse::<u64>().ok());
+    let refresh_ms_cfg = settings.tui.as_ref().and_then(|t| t.refresh_ms).filter(|&v| v > 0);
+    let refresh_every_ms: u64 = refresh_ms_env.or(refresh_ms_cfg).unwrap_or(1500);
     // input mode: do not capture characters until '/' pressed
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Mode {
@@ -387,7 +395,7 @@ pub fn run_picker_with(
         has_more = false;
     }
     trace("data: initial page", t0);
-    filtered = (0..items.len()).collect();
+    filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
 
     loop {
         // recompute filtered when query changes or filter toggles
@@ -429,8 +437,6 @@ pub fn run_picker_with(
                         fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?;
                     has_more = false;
                 }
-                filtered = (0..items.len()).collect();
-            } else {
                 filtered = if mode != Mode::Query || query.trim().is_empty() {
                     (0..items.len()).collect()
                 } else {
@@ -447,6 +453,8 @@ pub fn run_picker_with(
                     scored.sort_by_key(|(s, _)| -*s);
                     scored.into_iter().map(|(_, i)| i).collect()
                 };
+            } else {
+                filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
             }
             last_query = query.clone();
             // Track tag typing timestamp when in tag mode
@@ -526,18 +534,35 @@ pub fn run_picker_with(
                 let end = (start + page_rows).min(total);
                 let visible = &filtered[start..end];
 
-                fn highlight_line<'a>(s: String, query: &str, th: &crate::theme::TuiTheme) -> Line<'a> {
+                fn ascii_lower_owned(input: &str) -> String {
+                    input.chars().map(|c| if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c }).collect()
+                }
+
+                // Use a closure to capture matcher from outer scope
+                // Provide a small wrapper to highlight fuzzy matches within a single line
+                fn highlight_line_fuzzy_local<'a>(matcher: &SkimMatcherV2, s: String, query: &str, th: &crate::theme::TuiTheme) -> Line<'a> {
                     if query.is_empty() || query.starts_with('#') { return Line::from(s); }
-                    let lc = s.to_lowercase();
-                    let qlc = query.to_lowercase();
-                    if let Some(idx) = lc.find(&qlc) {
-                        let end = idx + qlc.len();
-                        let (a,b,c) = (&s[..idx], &s[idx..end], &s[end..]);
-                        Line::from(vec![
-                            Span::raw(a.to_string()),
-                            Span::styled(b.to_string(), Style::default().fg(th.search_match_fg).bg(th.search_match_bg).add_modifier(Modifier::BOLD)),
-                            Span::raw(c.to_string()),
-                        ])
+                    if let Some((_, idxs)) = matcher.fuzzy_indices(&s, query) {
+                        // Merge consecutive indices into ranges
+                        let mut ranges: Vec<(usize, usize)> = Vec::new();
+                        let mut it = idxs.into_iter().peekable();
+                        while let Some(start) = it.next() {
+                            let mut end = start + 1;
+                            while let Some(&next) = it.peek() {
+                                if next == end { end += 1; it.next(); } else { break; }
+                            }
+                            ranges.push((start, end));
+                        }
+                        // Build spans
+                        let mut out: Vec<Span> = Vec::new();
+                        let mut cursor = 0;
+                        for (a, b) in ranges {
+                            if cursor < a { out.push(Span::raw(s[cursor..a].to_string())); }
+                            out.push(Span::styled(s[a..b].to_string(), Style::default().fg(th.search_match_fg).bg(th.search_match_bg).add_modifier(Modifier::BOLD)));
+                            cursor = b;
+                        }
+                        if cursor < s.len() { out.push(Span::raw(s[cursor..].to_string())); }
+                        Line::from(out)
                     } else {
                         Line::from(s)
                     }
@@ -546,24 +571,50 @@ pub fn run_picker_with(
                 fn render_item_text(
                     id: &str, favorite: bool, text: &str, created_at: i64, last_used_at: &Option<i64>,
                     absolute_times: bool, selected_ids: &std::collections::HashSet<String>, glyphs: &crate::theme::Glyphs,
-                    layout: &crate::theme::LayoutPack, th: &crate::theme::TuiTheme, query: &str,
+                    layout: &crate::theme::LayoutPack, th: &crate::theme::TuiTheme, query: &str, fuzzy: bool, m: &SkimMatcherV2,
                 ) -> ListItem<'static> {
                     let fav = if favorite { glyphs.favorite_on.as_str() } else { glyphs.favorite_off.as_str() };
                     let sel_mark = if selected_ids.contains(id) { glyphs.selected.as_str() } else { glyphs.unselected.as_str() };
                     let created_str = if absolute_times { fmt_abs_ns(created_at) } else { rel_time_ns(created_at) };
                     let last_str = if let Some(lu) = last_used_at { if absolute_times { fmt_abs_ns(*lu) } else { rel_time_ns(*lu) } } else { "never".into() };
+                    // Build preview; when substring query is active, center around first match for clarity
+                    let mut preview_src = preview(text);
+                    if !fuzzy && !query.is_empty() && !query.starts_with('#') {
+                        let tl = ascii_lower_owned(text);
+                        let ql = ascii_lower_owned(query);
+                        if let Some(byte_idx) = tl.find(&ql) {
+                            // Map byte_idx to char index
+                            let char_idx = text[..byte_idx].chars().count();
+                            let q_chars = query.chars().count();
+                            let total_chars = text.chars().count();
+                            let start_char = char_idx.saturating_sub(30);
+                            let end_char = (char_idx + q_chars + 50).min(total_chars);
+                            // Map char indices to byte offsets
+                            let mut it = text.char_indices();
+                            let start_byte = if start_char == 0 { 0 } else { it.nth(start_char - 1).map(|(i, c)| i + c.len_utf8()).unwrap_or(0) };
+                            let end_byte = if end_char >= total_chars { text.len() } else {
+                                let mut it2 = text.char_indices();
+                                it2.nth(end_char).map(|(i, _)| i).unwrap_or(text.len())
+                            };
+                            let mut seg = text[start_byte..end_byte].to_string();
+                            if start_byte > 0 { seg.insert(0, '…'); }
+                            if end_byte < text.len() { seg.push('…'); }
+                            preview_src = seg;
+                        }
+                    }
+
                     let line1 = if let Some(tpl) = &layout.item_template {
                         let mut s = tpl.clone();
                         let pairs = [
                             ("{favorite}", fav),
                             ("{selected}", sel_mark),
                             ("{kind}", glyphs.kind_text.as_str()),
-                            ("{preview}", &preview(text)),
+                            ("{preview}", &preview_src),
                         ];
                         for (k,v) in pairs { s = s.replace(k, v); }
                         s
                     } else {
-                        format!("{}{} {} {}", fav, sel_mark, glyphs.kind_text, preview(text))
+                        format!("{}{} {} {}", fav, sel_mark, glyphs.kind_text, preview_src)
                     };
                     let meta_s = if let Some(tpl) = &layout.meta_template {
                         let mut s = tpl.clone();
@@ -592,7 +643,7 @@ pub fn run_picker_with(
                     } else {
                         format!("Created at {} • Last used {}", created_str, last_str)
                     };
-                    let line1 = highlight_line(line1, query, th);
+                    let line1 = highlight_line_fuzzy_local(m, line1, query, th);
                     if layout.list_line_height == 1 {
                         ListItem::new(vec![line1])
                     } else {
@@ -607,7 +658,7 @@ pub fn run_picker_with(
                     id: &str, favorite: bool, width: u32, height: u32, format: &str, name: &str,
                     created_at: i64, last_used_at: &Option<i64>, absolute_times: bool,
                     selected_ids: &std::collections::HashSet<String>, glyphs: &crate::theme::Glyphs,
-                    layout: &crate::theme::LayoutPack, th: &crate::theme::TuiTheme, query: &str,
+                    layout: &crate::theme::LayoutPack, th: &crate::theme::TuiTheme, query: &str, m: &SkimMatcherV2,
                 ) -> ListItem<'static> {
                     let fav = if favorite { glyphs.favorite_on.as_str() } else { glyphs.favorite_off.as_str() };
                     let sel_mark = if selected_ids.contains(id) { glyphs.selected.as_str() } else { glyphs.unselected.as_str() };
@@ -658,7 +709,7 @@ pub fn run_picker_with(
                     } else {
                         format!("Created at {} • Last used {}", created_str, last_str)
                     };
-                    let line1 = highlight_line(line1, query, th);
+                    let line1 = highlight_line_fuzzy_local(m, line1, query, th);
                     if layout.list_line_height == 1 {
                         ListItem::new(vec![line1])
                     } else {
@@ -675,9 +726,21 @@ pub fn run_picker_with(
                     .map(|it| match it {
                         Item::Text {
                             id, favorite, text, created_at, last_used_at, ..
-                        } => {
-                            render_item_text(id, *favorite, text, *created_at, last_used_at, absolute_times, &selected_ids, &glyphs, &layout, &tui_theme, if mode == Mode::Query { &query } else { "" })
-                        }
+                        } => render_item_text(
+                            id,
+                            *favorite,
+                            text,
+                            *created_at,
+                            last_used_at,
+                            absolute_times,
+                            &selected_ids,
+                            &glyphs,
+                            &layout,
+                            &tui_theme,
+                            if mode == Mode::Query { &query } else { "" },
+                            match_fuzzy,
+                            &matcher,
+                        ),
                         Item::Image {
                             id,
                             favorite,
@@ -695,7 +758,23 @@ pub fn run_picker_with(
                                     std::path::Path::new(p).file_name().and_then(|n| n.to_str())
                                 })
                                 .unwrap_or("");
-                            render_item_image(id, *favorite, *width, *height, format, name, *created_at, last_used_at, absolute_times, &selected_ids, &glyphs, &layout, &tui_theme, if mode == Mode::Query { &query } else { "" })
+                            render_item_image(
+                                id,
+                                *favorite,
+                                *width,
+                                *height,
+                                format,
+                                name,
+                                *created_at,
+                                last_used_at,
+                                absolute_times,
+                                &selected_ids,
+                                &glyphs,
+                                &layout,
+                                &tui_theme,
+                                if mode == Mode::Query { &query } else { "" },
+                                &matcher,
+                            )
                         }
                     })
                     .collect();
@@ -729,12 +808,43 @@ pub fn run_picker_with(
                     if remote_badge { t.push_str(" — Remote"); }
                     t
                 };
-                // Styled title with optional remote badge (remote already in text if template used it)
-                let mut title_spans: Vec<Span> = vec![Span::styled(title_text.clone(), Style::default().fg(tui_theme.title_fg))];
+                // Build right-aligned status: Capture + Match mode
+                let capture_right = if let Some(ctrl) = managed_daemon::global_control() {
+                    let state = if ctrl.is_paused() { "off" } else { "on" };
+                    let ms = ctrl.sample_ms();
+                    let img = if ctrl.images_on() { ", img" } else { "" };
+                    format!("Capture: managed({},{}ms{})", state, ms, img)
+                } else if let Ok(mode) = std::env::var("DITOX_CAPTURE_STATUS") {
+                    match mode.as_str() {
+                        "external" => "Capture: external".to_string(),
+                        "off" => "Capture: off".to_string(),
+                        s if s.starts_with("managed") => "Capture: managed".to_string(),
+                        _ => format!("Capture: {}", mode),
+                    }
+                } else {
+                    "Capture: off".to_string()
+                };
+                let match_right = "Match: fuzzy";
+                let right_text = format!("{}  {}", capture_right, match_right);
+
+                // Compose left and right into title, padding spaces to align right side
+                let area_w = chunks[list_area_idx].width as usize;
+                let left_txt = title_text.clone();
+                let left_len = left_txt.chars().count();
+                let right_len = right_text.chars().count();
+                let pad = area_w.saturating_sub(left_len + right_len + 2);
+                let spaces = " ".repeat(pad);
+                let mut title_spans: Vec<Span> = Vec::new();
+                title_spans.push(Span::styled(left_txt, Style::default().fg(tui_theme.title_fg)));
+                title_spans.push(Span::raw(spaces));
+                title_spans.push(Span::styled(right_text, Style::default().fg(tui_theme.muted_fg)));
+                // Optional remote badge appended after left text when template didn't handle it
                 if remote_badge {
                     if let Some(tpl) = &layout.list_title_template {
                         if !tpl.contains("{remote}") {
-                            title_spans.push(Span::styled(" — Remote", Style::default().fg(tui_theme.badge_fg).bg(tui_theme.badge_bg)));
+                            // Insert a small gap before badge if possible
+                            title_spans.insert(1, Span::raw(" "));
+                            title_spans.insert(2, Span::styled("— Remote ", Style::default().fg(tui_theme.badge_fg).bg(tui_theme.badge_bg)));
                         }
                     }
                 }
@@ -889,6 +999,27 @@ pub fn run_picker_with(
                     KeyCode::Char('?') if mode == Mode::Normal => {
                         show_help = !show_help;
                     }
+                    // Managed capture controls (when available): Ctrl+P pause/resume, D toggle images capture
+                    KeyCode::Char('p')
+                        if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                    {
+                        if let Some(ctrl) = managed_daemon::global_control() {
+                            ctrl.toggle_pause();
+                            toast = Some((
+                                if ctrl.is_paused() { "Capture paused".into() } else { "Capture resumed".into() },
+                                Instant::now() + Duration::from_millis(1200),
+                            ));
+                        }
+                    }
+                    KeyCode::Char('D') if mode == Mode::Normal => {
+                        if let Some(ctrl) = managed_daemon::global_control() {
+                            ctrl.toggle_images();
+                            toast = Some((
+                                if ctrl.images_on() { "Images: on".into() } else { "Images: off".into() },
+                                Instant::now() + Duration::from_millis(900),
+                            ));
+                        }
+                    }
                     KeyCode::Char('/') => {
                         // Toggle search mode. Do not clear the query; when leaving
                         // search, results revert to unfiltered. When entering, apply
@@ -900,6 +1031,7 @@ pub fn run_picker_with(
                         last_query.clear();
                         needs_refilter = true;
                     }
+                    // Ctrl+F no longer toggles modes (fuzzy only)
                     KeyCode::Tab => {
                         fav_filter = !fav_filter;
                         last_query.clear();
@@ -953,7 +1085,7 @@ pub fn run_picker_with(
                                 tag_filter.clone(),
                             )?;
                         }
-                        filtered = (0..items.len()).collect();
+                        filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
                     }
                     KeyCode::Char('f') if mode == Mode::Normal => {
                         fav_filter = !fav_filter;
@@ -1008,7 +1140,7 @@ pub fn run_picker_with(
                                 tag_filter.clone(),
                             )?;
                         }
-                        filtered = (0..items.len()).collect();
+                        filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
                     }
                     KeyCode::Char('i') if mode == Mode::Normal => {
                         images_mode = !images_mode;
@@ -1057,7 +1189,7 @@ pub fn run_picker_with(
                         })();
                         match load_res {
                             Ok(()) => {
-                                filtered = (0..items.len()).collect();
+                                filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
                             }
                             Err(e) => {
                                 let msg = format!("{}", e);
@@ -1155,7 +1287,7 @@ pub fn run_picker_with(
                                     tag_filter.clone(),
                                 )?;
                             }
-                            filtered = (0..items.len()).collect();
+                            filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
                             if selected >= page_rows {
                                 selected = page_rows.saturating_sub(1);
                             }
@@ -1215,7 +1347,7 @@ pub fn run_picker_with(
                                     tag_filter.clone(),
                                 )?;
                             }
-                            filtered = (0..items.len()).collect();
+                            filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
                             if selected >= page_rows {
                                 selected = page_rows.saturating_sub(1);
                             }
@@ -1274,7 +1406,7 @@ pub fn run_picker_with(
                                             tag_filter.clone(),
                                         )?;
                                     }
-                                    filtered = (0..items.len()).collect();
+                                    filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
                                     if selected >= page_rows {
                                         selected = page_rows.saturating_sub(1);
                                     }
@@ -1325,7 +1457,7 @@ pub fn run_picker_with(
                                     tag_filter.clone(),
                                 )?;
                             }
-                            filtered = (0..items.len()).collect();
+                filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
                             if selected >= page_rows {
                                 selected = page_rows.saturating_sub(1);
                             }
@@ -1390,10 +1522,10 @@ pub fn run_picker_with(
                             )?;
                             has_more = false;
                         }
-                        filtered = (0..items.len()).collect();
+                        filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
                     }
                     // Run migrations on DB (best-effort) and reload list
-                    KeyCode::Char('m') | KeyCode::Char('M') => {
+                    KeyCode::Char('m') | KeyCode::Char('M') if mode == Mode::Normal => {
                         match migrate_current_db() {
                             Ok(()) => {
                                 toast = Some((
@@ -1425,7 +1557,7 @@ pub fn run_picker_with(
                                     items = v;
                                     has_more = false;
                                 }
-                                filtered = (0..items.len()).collect();
+                                filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
                             }
                             Err(e) => {
                                 toast = Some((
@@ -1484,7 +1616,7 @@ pub fn run_picker_with(
                                     has_more = p.more;
                                     items.extend(p.items);
                                     last_query.clear();
-                                    filtered = (0..items.len()).collect();
+                                    filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
                                 }
                             }
                         }
@@ -1513,7 +1645,7 @@ pub fn run_picker_with(
                                     has_more = p.more;
                                     items.extend(p.items);
                                     last_query.clear();
-                                    filtered = (0..items.len()).collect();
+                                    filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
                                 }
                             }
                         }
@@ -1536,7 +1668,7 @@ pub fn run_picker_with(
                                         has_more = p.more;
                                         items.extend(p.items);
                                         last_query.clear();
-                                        filtered = (0..items.len()).collect();
+                                        filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
                                     } else {
                                         break;
                                     }
@@ -1733,7 +1865,7 @@ pub fn run_picker_with(
                                             items = p.items;
                                             has_more = p.more;
                                             last_query.clear();
-                                            filtered = (0..items.len()).collect();
+                                            filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
                                         }
                                     }
                                 } else if let Ok(v) = fetch_from_store(
@@ -1746,7 +1878,7 @@ pub fn run_picker_with(
                                     items = v;
                                     has_more = false;
                                     last_query.clear();
-                                    filtered = (0..items.len()).collect();
+                                    filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
                                 }
                             }
                         }
@@ -1756,7 +1888,26 @@ pub fn run_picker_with(
         }
 
         // Periodic auto-reload when idle (no active query)
-        if last_fetch.elapsed() > Duration::from_millis(1500) && query.is_empty() {
+        if last_fetch.elapsed() > Duration::from_millis(refresh_every_ms) && query.is_empty() {
+            let fetched_from_store = |store: &dyn Store| -> anyhow::Result<(Vec<Item>, Option<usize>)> {
+                let v = fetch_from_store(
+                store,
+                images_mode,
+                fav_filter,
+                Some(page_rows),
+                tag_filter.clone(),
+            )?;
+                // Update total via store count
+                let total = store.count(Query {
+                    contains: None,
+                    favorites_only: fav_filter,
+                    limit: None,
+                    tag: tag_filter.clone(),
+                    rank: false,
+                })?;
+                Ok((v, Some(total)))
+            };
+
             if use_daemon {
                 let target_len = (page_index + 1) * page_size;
                 if let Some(dc) = daemon.as_mut() {
@@ -1794,32 +1945,24 @@ pub fn run_picker_with(
                         items = fetched;
                         has_more = more;
                         last_query.clear();
-                        filtered = (0..items.len()).collect();
+                        filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                    }
+                } else {
+                    // Managed mode (no external daemon): fall back to reading from the store
+                    if let Ok((v, total)) = fetched_from_store(store) {
+                        items = v;
+                        has_more = false;
+                        last_query.clear();
+                        filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                        last_known_total = total;
                     }
                 }
-            } else if let Ok(v) = fetch_from_store(
-                store,
-                images_mode,
-                fav_filter,
-                Some(page_rows),
-                tag_filter.clone(),
-            ) {
+            } else if let Ok((v, total)) = fetched_from_store(store) {
                 items = v;
                 has_more = false;
                 last_query.clear();
-                filtered = (0..items.len()).collect();
-                // Update total via store count
-                let _ = (|| -> anyhow::Result<()> {
-                    let total = store.count(Query {
-                        contains: None,
-                        favorites_only: fav_filter,
-                        limit: None,
-                        tag: tag_filter.clone(),
-                        rank: false,
-                    })?;
-                    last_known_total = Some(total);
-                    Ok(())
-                })();
+                filtered = build_filtered_indices(&items, if mode == Mode::Query { &query } else { "" }, match_fuzzy, &matcher);
+                last_known_total = total;
             }
             last_fetch = Instant::now();
         }
@@ -1850,7 +1993,7 @@ fn fetch_page_from_daemon(
     favorites: bool,
     limit: Option<usize>,
     offset: Option<usize>,
-    query: Option<String>,
+    _query: Option<String>,
     tag: Option<String>,
 ) -> Result<Page<Item>> {
     let info_path = config::config_dir().join("clipd.json");
@@ -1862,7 +2005,8 @@ fn fetch_page_from_daemon(
         favorites,
         limit,
         offset,
-        query,
+        // Always fetch unfiltered; filtering is applied client-side for consistent substring/fuzzy semantics.
+        query: None,
         tag,
     };
     let s = serde_json::to_string(&req)?;
@@ -1933,6 +2077,85 @@ fn fetch_from_store(
 }
 
 // (clipboard helpers moved to crate::copy_helpers)
+
+fn build_filtered_indices(
+    items: &[Item],
+    query: &str,
+    fuzzy: bool,
+    matcher: &SkimMatcherV2,
+) -> Vec<usize> {
+    let q = query.trim();
+    // Build initial indices (empty query => all items)
+    let indices: Vec<usize> = if q.is_empty() {
+        (0..items.len()).collect()
+    } else if fuzzy {
+        let mut scored: Vec<(i64, usize)> = Vec::new();
+        for (idx, it) in items.iter().enumerate() {
+            let hay = match it {
+                Item::Text { text, .. } => text.as_str(),
+                Item::Image { format, path, .. } => {
+                    let name = path
+                        .as_deref()
+                        .and_then(|p| Path::new(p).file_name().and_then(|n| n.to_str()))
+                        .unwrap_or("");
+                    if name.is_empty() { format.as_str() } else { name }
+                }
+            };
+            if let Some(s) = matcher.fuzzy_match(hay, q) { scored.push((s, idx)); }
+        }
+        scored.sort_by_key(|(s, _)| -*s);
+        scored.into_iter().map(|(_, i)| i).collect()
+    } else {
+        // ASCII-insensitive substring match (preserves byte positions)
+        let ql = q.chars().map(|c| if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c }).collect::<String>();
+        items
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, it)| {
+                let hay = match it {
+                    Item::Text { text, .. } => text.as_str(),
+                    Item::Image { format, path, .. } => {
+                        let name = path
+                            .as_deref()
+                            .and_then(|p| Path::new(p).file_name().and_then(|n| n.to_str()))
+                            .unwrap_or("");
+                        if name.is_empty() { format.as_str() } else { name }
+                    }
+                };
+                let hl: String = hay.chars().map(|c| if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c }).collect();
+                let m = hl.contains(&ql);
+                if m && std::env::var("DITOX_DEBUG_FILTER").ok().as_deref() == Some("1") {
+                    let snippet: String = hay.chars().take(160).collect();
+                    eprintln!("[filter] substring matched idx={} query='{}' text_starts='{}'", idx, q, snippet);
+                }
+                if m { Some(idx) } else { None }
+            })
+            .collect()
+    };
+    // Dedupe by normalized display key (first occurrence wins)
+    let mut seen = std::collections::HashSet::<String>::new();
+    let mut out = Vec::with_capacity(indices.len());
+    for i in indices {
+        let key = match &items[i] {
+            Item::Text { text, .. } => text.trim().to_lowercase(),
+            Item::Image { format, path, .. } => {
+                let name = path
+                    .as_deref()
+                    .and_then(|p| Path::new(p).file_name().and_then(|n| n.to_str()))
+                    .unwrap_or("");
+                if name.is_empty() {
+                    format.to_lowercase()
+                } else {
+                    format!("{}:{}", format.to_lowercase(), name.to_lowercase())
+                }
+            }
+        };
+        if seen.insert(key) {
+            out.push(i);
+        }
+    }
+    out
+}
 
 fn truncate_msg(s: &str, max: usize) -> String {
     if s.len() > max {

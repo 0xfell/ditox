@@ -13,6 +13,7 @@ mod doctor;
 mod lazy_store;
 mod picker;
 mod theme;
+mod managed_daemon;
 mod xfer;
 
 #[derive(Parser)]
@@ -31,7 +32,7 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     force_wl_copy: bool,
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
     /// Timestamp precision for printed times (sec/ms/us/ns)
     #[arg(long, value_enum, default_value_t = TsPrec::Ns)]
     ts_precision: TsPrec,
@@ -54,6 +55,7 @@ enum Commands {
         image_from_clipboard: bool,
     },
     /// Interactive picker (built-in TUI)
+    #[command(alias = "tui")]
     Pick {
         #[arg(long)]
         favorites: bool,
@@ -69,6 +71,15 @@ enum Commands {
         /// Bypass daemon IPC and read DB directly
         #[arg(long)]
         no_daemon: bool,
+        /// Managed daemon mode: managed|external|off (default managed)
+        #[arg(long, value_enum)]
+        daemon: Option<DaemonMode>,
+        /// Managed daemon sampling interval, e.g. 200ms, 1s
+        #[arg(long)]
+        daemon_sample: Option<String>,
+        /// Enable/disable managed daemon image capture
+        #[arg(long)]
+        daemon_images: Option<bool>,
         /// Theme name (built-in) or file path
         #[arg(long)]
         theme: Option<String>,
@@ -78,6 +89,9 @@ enum Commands {
         /// Color output: auto|always|never
         #[arg(long, value_enum, default_value_t = ColorWhen::Auto)]
         color: ColorWhen,
+        /// Draw in main screen buffer (no alt-screen)
+        #[arg(long, default_value_t = false)]
+        no_alt_screen: bool,
         /// List available themes and exit
         #[arg(long, default_value_t = false)]
         themes: bool,
@@ -228,19 +242,48 @@ enum ColorWhen {
     Never,
 }
 
+#[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
+enum DaemonMode {
+    Managed,
+    External,
+    Off,
+}
+
+// Fuzzy is the only matching mode (clipse-like)
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let settings = load_settings();
-    let store: Box<dyn Store> = match cli.command {
+    let store: Box<dyn Store> = match &cli.command {
         // For `pick`, avoid opening DBs up front; we pass a lazy store below.
-        Commands::Pick { .. } => Box::new(ditox_core::MemStore::new()),
+        Some(Commands::Pick { .. }) => Box::new(ditox_core::MemStore::new()),
         // Migrations are local-only by design; keep read-only local store here.
-        Commands::Migrate { .. } => build_store_readonly(&cli, &settings)?,
+        Some(Commands::Migrate { .. }) => build_store_readonly(&cli, &settings)?,
         // Others follow configured backend.
         _ => build_store(&cli, &settings)?,
     };
 
-    match cli.command {
+    match cli.command.unwrap_or(Commands::Pick {
+        favorites: false,
+        images: false,
+        remote: false,
+        tag: None,
+        no_daemon: false,
+        daemon: None,
+        daemon_sample: None,
+        daemon_images: None,
+        theme: None,
+        ascii: false,
+        color: ColorWhen::Auto,
+        no_alt_screen: false,
+        themes: false,
+        preview: None,
+        dump_caps: false,
+        glyphs: None,
+        layout: None,
+        glyphsets: false,
+        layouts: false,
+    }) {
         Commands::InitDb => {
             store.init()?;
             println!("database initialized (placeholder)");
@@ -419,17 +462,21 @@ fn main() -> Result<()> {
             remote,
             tag,
             no_daemon,
+            daemon,
+            daemon_sample,
+            daemon_images,
             theme,
             ascii,
             color,
+            no_alt_screen,
             themes,
             preview,
             dump_caps,
             glyphs,
             layout,
             glyphsets,
-            layouts,
-        } => {
+            layouts } => {
+            if no_alt_screen { std::env::set_var("DITOX_TUI_ALT_SCREEN", "0"); }
             // Utility modes that don't start the TUI
             if themes {
                 for name in theme::available_themes() {
@@ -497,6 +544,8 @@ fn main() -> Result<()> {
             if let Some(l) = &layout {
                 std::env::set_var("DITOX_TUI_LAYOUT", l);
             }
+            // Fuzzy is the only mode
+            std::env::set_var("DITOX_MATCH_MODE", "fuzzy");
             // Apply settings defaults if CLI did not override
             if std::env::var("DITOX_TUI_THEME").is_err() {
                 if let Some(t) = settings.tui.as_ref().and_then(|t| t.theme.clone()) {
@@ -547,18 +596,19 @@ fn main() -> Result<()> {
             // Policy:
             // - --remote forces Turso/libsql and disables daemon.
             // - Otherwise, use local SQLite for picker operations so daemon path and direct DB writes stay consistent.
+            use std::sync::Arc;
             let lazy = if remote {
                 #[cfg(feature = "libsql")]
                 {
                     match &settings.storage {
                         config::Storage::Turso { url, auth_token } => {
-                            lazy_store::LazyStore::remote_libsql(url.clone(), auth_token.clone())
+                            Arc::new(lazy_store::LazyStore::remote_libsql(url.clone(), auth_token.clone()))
                         }
                         _ => {
                             eprintln!(
                                 "remote backend not configured; falling back to local SQLite"
                             );
-                            lazy_store::LazyStore::local_sqlite(default_db_path(), false)
+                            Arc::new(lazy_store::LazyStore::local_sqlite(default_db_path(), false))
                         }
                     }
                 }
@@ -567,7 +617,7 @@ fn main() -> Result<()> {
                     eprintln!(
                         "built without 'libsql' feature; --remote unavailable — using local SQLite"
                     );
-                    lazy_store::LazyStore::local_sqlite(default_db_path(), false)
+                    Arc::new(lazy_store::LazyStore::local_sqlite(default_db_path(), false))
                 }
             } else {
                 // Local store (matches clipd’s DB) — use configured path when present
@@ -577,12 +627,75 @@ fn main() -> Result<()> {
                     }
                     config::Storage::Turso { .. } => default_db_path(),
                 };
-                lazy_store::LazyStore::local_sqlite(path, false)
+                Arc::new(lazy_store::LazyStore::local_sqlite(path, false))
             };
             // If --remote, bypass daemon even if running
             let bypass_daemon = no_daemon || remote;
+            // Managed daemon determination
+            let env_mode = std::env::var("DITOX_DAEMON").ok();
+            let cfg_mode = settings
+                .daemon
+                .as_ref()
+                .and_then(|d| d.mode.clone())
+                .and_then(|m| match m.to_ascii_lowercase().as_str() {
+                    "managed" => Some(DaemonMode::Managed),
+                    "external" => Some(DaemonMode::External),
+                    "off" => Some(DaemonMode::Off),
+                    _ => None,
+                });
+            let mut mode = daemon
+                .or_else(|| env_mode.as_deref().and_then(|m| match m {
+                    "managed" => Some(DaemonMode::Managed),
+                    "external" => Some(DaemonMode::External),
+                    "off" => Some(DaemonMode::Off),
+                    _ => None,
+                }))
+                .or(cfg_mode)
+                .unwrap_or(DaemonMode::Managed);
+            if bypass_daemon { mode = DaemonMode::Off; }
+            let sample_str = daemon_sample
+                .or_else(|| std::env::var("DITOX_DAEMON_SAMPLE").ok())
+                .or_else(|| settings.daemon.as_ref().and_then(|d| d.sample.clone()))
+                .unwrap_or_else(|| "200ms".into());
+            let sample_ms = parse_sample_ms(&sample_str).unwrap_or(200);
+            let images_on = daemon_images
+                .or_else(|| {
+                    std::env::var("DITOX_DAEMON_IMAGES").ok().and_then(|v| match v.as_str() {
+                        "1" | "true" | "on" => Some(true),
+                        "0" | "false" | "off" => Some(false),
+                        _ => None,
+                    })
+                })
+                .or_else(|| settings.daemon.as_ref().and_then(|d| d.images))
+                .unwrap_or(true);
+
+            let mut managed_handle: Option<crate::managed_daemon::ManagedHandle> = None;
+            if !remote {
+                match mode {
+                    DaemonMode::Managed => {
+                        if crate::managed_daemon::detect_external_clipd() {
+                            std::env::set_var("DITOX_CAPTURE_STATUS", "external");
+                        } else {
+                            match crate::managed_daemon::start_managed(lazy.clone(), crate::managed_daemon::DaemonConfig { sample_ms, images: images_on }) {
+                                Ok(h) => {
+                                    let ctrl = h.control();
+                                    crate::managed_daemon::set_global_control(ctrl);
+                                    managed_handle = Some(h);
+                                    std::env::set_var("DITOX_CAPTURE_STATUS", format!("managed(active,{}ms,images:{})", sample_ms, images_on));
+                                }
+                                Err(_) => {
+                                    std::env::set_var("DITOX_CAPTURE_STATUS", "off");
+                                }
+                            }
+                        }
+                    }
+                    DaemonMode::External => { std::env::set_var("DITOX_CAPTURE_STATUS", "external"); }
+                    DaemonMode::Off => { std::env::set_var("DITOX_CAPTURE_STATUS", "off"); }
+                }
+            }
+
             picker::run_picker_default(
-                &lazy,
+                &*lazy,
                 favorites,
                 images,
                 tag,
@@ -590,6 +703,8 @@ fn main() -> Result<()> {
                 cli.force_wl_copy,
                 remote,
             )?;
+            // Drop handle after TUI exits to stop managed daemon and clean lock
+            drop(managed_handle);
         }
         Commands::Search {
             query,
@@ -769,6 +884,13 @@ fn main() -> Result<()> {
                 );
             } else {
                 println!("clipd: not running");
+            }
+            // Managed capture lock presence
+            let lp = crate::config::state_dir().join("managed-daemon.lock");
+            if lp.exists() {
+                println!("managed: lock present ({})", lp.display());
+            } else {
+                println!("managed: off");
             }
         }
         Commands::Thumbs => {
@@ -1061,18 +1183,27 @@ fn fmt_ts_prec(ts: &time::OffsetDateTime, p: TsPrec) -> String {
 }
 
 fn build_store(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>> {
-    // Prefer explicit `--store mem` when requested.
-    if matches!(cli.store, StoreKind::Mem) {
-        return Ok(Box::new(ditox_core::MemStore::new()));
+    // CLI flag precedence: mem/sqlite flags override settings.backend
+    match cli.store {
+        StoreKind::Mem => return Ok(Box::new(ditox_core::MemStore::new())),
+        StoreKind::Sqlite => {
+            // fall through to local sqlite path resolution below
+        }
     }
 
-    // When configured for Turso and built with the libsql feature, use the remote store
-    // so interactive commands (e.g., `pick`, `list`, `search`) operate directly on the
-    // remote database. Images remain unsupported in the remote backend.
+    // No explicit sqlite flag: respect settings. If configured for Turso and built with libsql,
+    // use the remote store. Images remain unsupported in the remote backend.
     #[cfg(feature = "libsql")]
     if let config::Storage::Turso { url, auth_token } = &settings.storage {
-        let s = ditox_core::libsql_backend::LibsqlStore::new(url, auth_token.as_deref())?;
-        return Ok(Box::new(s));
+        // Only use remote for commands that are explicitly remote-centric (e.g., sync)
+        // All other commands default to local SQLite unless the command itself opts into remote
+        match &cli.command {
+            Some(Commands::Sync { .. }) => {
+                let s = ditox_core::libsql_backend::LibsqlStore::new(url, auth_token.as_deref())?;
+                return Ok(Box::new(s));
+            }
+            _ => { /* fall through to local sqlite */ }
+        }
     }
 
     // Fallback to local SQLite store.
@@ -1090,9 +1221,9 @@ fn build_store(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>>
 }
 
 fn build_store_readonly(cli: &Cli, settings: &config::Settings) -> Result<Box<dyn Store>> {
-    // Always return local stores (or mem) for read-only operations as well.
-    Ok(match cli.store {
-        StoreKind::Mem => Box::new(ditox_core::MemStore::new()),
+    // CLI flag precedence: honor mem/sqlite explicitly; otherwise, fallback to settings.
+    match cli.store {
+        StoreKind::Mem => Ok(Box::new(ditox_core::MemStore::new())),
         StoreKind::Sqlite => {
             let path = cli
                 .db
@@ -1104,9 +1235,9 @@ fn build_store_readonly(cli: &Cli, settings: &config::Settings) -> Result<Box<dy
                 .unwrap_or_else(default_db_path);
             std::fs::create_dir_all(path.parent().unwrap())?;
             let s = ditox_core::StoreImpl::new_with(path, false)?;
-            Box::new(s)
+            Ok(Box::new(s))
         }
-    })
+    }
 }
 
 fn default_db_path() -> PathBuf {
@@ -1167,3 +1298,17 @@ fn parse_human_duration(s: &str) -> Result<time::Duration> {
 }
 mod config;
 use config::load_settings;
+
+fn parse_sample_ms(s: &str) -> Result<u64> {
+    // Accept numbers with optional unit: ms|s. Default to ms if no unit.
+    let s = s.trim();
+    if s.is_empty() { return Ok(200); }
+    let (num, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
+    let n: u64 = num.parse().unwrap_or(200);
+    let ms = match unit.trim() {
+        "s" => n.saturating_mul(1000),
+        "ms" | "" => n,
+        _ => n,
+    };
+    Ok(ms)
+}
