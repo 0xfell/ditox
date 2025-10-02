@@ -2,12 +2,15 @@
 
 - Doc: standalone-cli-PRD.md
 - Owner: 0xfell
-- Status: Draft (v0.1)
+- Status: Draft (as of 2025-10-02)
 - Target release: v1.1.0 (scope can be split if needed)
+- Platforms: Linux primary (X11/Wayland via `arboard`); other OS builds run without capture
 
 ## Summary
 
 Ship a “standalone” Ditox experience where the `ditox` CLI/TUI runs with an embedded clipboard watcher (daemon) while the TUI is open. Users install and run only `ditox-cli`; it will capture clipboard changes in the background for the lifetime of the TUI session. The separate `ditox-clipd` binary remains available for long‑running, headless use, but regular users no longer need to manage a daemon explicitly.
+
+Invocation policy: when `ditox` is invoked with no subcommand or arguments, launch the TUI (picker). Subcommands like `list`, `search`, etc., are unaffected. Keep `ditox pick` and add `ditox tui` as a synonym for clarity.
 
 ## Goals
 
@@ -17,6 +20,7 @@ Ship a “standalone” Ditox experience where the `ditox` CLI/TUI runs with an 
 - Sensible defaults on Linux (X11/Wayland) with `arboard`.
 - Safe coexistence with the external daemon: if `ditox-clipd` is already running, do not double‑capture.
 - Keep power‑user paths intact (systemd timers, headless daemon, remote backends).
+- Zero migrations required: no DB schema changes for MVP.
 
 ## Non‑Goals (Initial)
 
@@ -24,12 +28,19 @@ Ship a “standalone” Ditox experience where the `ditox` CLI/TUI runs with an 
 - Implementing Windows/macOS native clipboard watchers (current adapters remain no‑op or limited).
 - Cross‑process IPC beyond what’s required to detect an existing daemon.
 
+## Terminology
+
+- Managed/embedded daemon: in‑process clipboard watcher owned by the `ditox` TUI session.
+- External daemon: the separate `ditox-clipd` process (systemd/headless).
+- Off/view‑only: no capture; the TUI acts as a read‑only viewer.
+
 ## User Stories / UX
 
 - As a first‑time user, I run `ditox` and immediately see history populate as I copy text/images in other apps. When I quit the TUI, background capture stops.
 - As an existing user with `ditox-clipd` running (e.g., via systemd), launching `ditox` uses the existing history; no duplicate captures or lock errors occur.
 - As a privacy‑conscious user, I can start the TUI with capture disabled (`--daemon=off`) or pause/resume capture from inside the TUI.
 - As a power user, I can still run `ditox-clipd` headless for continuous capture and use the TUI only as a viewer.
+- As a script author, `ditox` with a subcommand behaves exactly as before (no surprise TUI launch).
 
 ## CLI Surface (Proposed)
 
@@ -46,12 +57,14 @@ Defaults target simplicity. Flags are additive and remain backward compatible.
         - `--daemon-sample <dur>` sampling interval (default: `200ms`).
         - `--daemon-images <on|off>` (default: `on`).
         - `--no-auto-migrate` (mirrors existing, passthrough to store).
+        - `--no-alt-screen` (quality‑of‑life; renders in place, helps tmux/screen).
     - TUI hotkeys (visible in help):
         - `p`: pause/resume capture.
         - `D`: toggle image capture on/off for session.
+        - `?`: help overlay; shows current capture mode and toggles.
 
 - `ditox doctor`
-    - Reports “Managed Daemon: active|paused|off”, backend (X11/Wayland), sample interval, lock owner (pid), and conflict detection (external daemon present: yes/no).
+    - Reports “Managed: active|paused|off”, backend (X11/Wayland), sample interval, lock owner (pid), capture mode (`managed|external|off`), DB path, and conflict detection (external daemon present: yes/no).
 
 - `ditox daemon …` (existing external daemon remains; docs point casual users to just `ditox`).
 
@@ -70,6 +83,11 @@ Defaults target simplicity. Flags are additive and remain backward compatible.
         - persists entries via the store; supports images behind feature gate.
     4. When TUI exits, task shuts down gracefully.
 
+Assumptions & constraints
+- Linux target first; non‑Linux builds compile but watcher is a no‑op for MVP.
+- Polling is acceptable for MVP; event‑driven hooks may be explored later.
+- No DB schema changes; reuse `Store` and image blob layout.
+
 ### Process/Task Model
 
 - Single OS process, multiple async tasks:
@@ -85,6 +103,10 @@ Defaults target simplicity. Flags are additive and remain backward compatible.
     - File lock in XDG state dir (e.g., `~/.local/state/ditox/managed-daemon.lock`) containing pid + start time.
     - If lock exists and pid alive → assume external/other capture active; do not start embedded watcher.
     - If stale lock → clean up and continue.
+
+Lifecycle state machine (managed mode)
+- States: `inactive` → `starting` → `active` ↔ `paused` → `stopping` → `inactive`.
+- Triggers: TUI enter/exit; pause/resume hotkey; external daemon detected (transition to `inactive` with status `external`).
 
 ### Clipboard Backends
 
@@ -105,11 +127,20 @@ Defaults target simplicity. Flags are additive and remain backward compatible.
  images = true`
 - CLI flags override config, config overrides defaults.
 
+Config precedence
+- Flags > env vars > config file > built‑in defaults.
+- Environment (new): `DITOX_DAEMON`, `DITOX_DAEMON_SAMPLE`, `DITOX_DAEMON_IMAGES`.
+
 ### Compatibility & Coexistence
 
 - If `ditox-clipd` runs (systemd, user session), `ditox` detects it via pid/lock and does not spawn an embedded watcher.
 - If both start simultaneously (race), file lock resolves to a single active capturer.
 - The `ditox-clipd` crate remains published for headless use; we may later convert its internals into a library crate to share code (see Migration).
+
+Edge cases
+- DB path not writable → surface error in footer; allow TUI read‑only; `doctor` explains remediation.
+- Lock path not writable (e.g., custom XDG) → disable managed mode with a warning; continue in `external|off`.
+- Wayland/X11 mismatch or missing helpers → show non‑fatal warning; capture may be limited.
 
 ## Migration / Refactor Plan
 
@@ -122,6 +153,7 @@ Phase 1 (MVP)
 - Add managed daemon to CLI TUI with defaults above.
 - Add locking, sampling, image toggle, and pause/resume in TUI.
 - Update `doctor` and docs.
+    - Add explicit “managed/external/off” section; print lock path and owner PID.
 
 Phase 2 (Consolidation)
 
@@ -136,18 +168,22 @@ Phase 3 (Optional)
 - No secret logging; redact clip contents in logs and tests.
 - Keep “incognito” toggle (do not persist) as a future enhancement.
 - Respect image data handling and storage budget as today.
+ - Telemetry: none. No network calls unless remote sync is explicitly configured (feature‑gated).
 
 ## Performance Targets
 
 - CPU: < 1% on idle with 200ms sampling on typical Linux desktop.
 - Memory: < 50 MiB for TUI + watcher combined in steady state.
 - DB I/O: avoid excessive writes via dedup + backoff for bursty changes.
+ - Startup: TUI open ≤ 150 ms over baseline on a typical dev laptop.
 
 ## Failure Modes & Handling
 
 - Clipboard backend unavailable → surface non‑fatal warning in TUI status bar and `doctor`.
 - DB locked/busy → retry with exponential backoff; drop frames rather than freeze UI.
 - External daemon detected → do not start managed watcher; show status “External daemon active”.
+ - Lock contention with unknown PID → if PID not alive, remove stale lock; else disable managed mode and show guidance.
+ - Unhandled runtime error in watcher → stop watcher, mark status `error`, leave TUI usable.
 
 ## Testing
 
@@ -155,17 +191,29 @@ Phase 3 (Optional)
 - CLI tests (assert_cmd) for mode negotiation and lock behavior.
 - Doctor output assertions.
 - Manual smoke on X11 and Wayland (GitHub Actions can’t capture clipboard; rely on local CI matrix guidance).
+ - Non‑Linux builds: ensure TUI launches, status shows `off|external`, and no watcher work happens.
+
+QA checklist (CI + local)
+- `cargo fmt --all`, `cargo clippy --all-targets -- -D warnings`, `cargo test --all`.
+- Linux Wayland/X11 manual: pause/resume, images on/off, dedupe, and exit cleanup.
+- Run with external `ditox-clipd` active: verify no double capture.
+- Run under `NO_COLOR`, small terminal width, and ASCII mode: UI remains legible.
 
 ## Documentation
 
 - README: simplify Quick Start — “Run `ditox` and start copying; no separate daemon required.”
 - Update help for new flags and TUI shortcuts.
 - Keep a section for advanced users describing the external daemon.
+ - Add a “Troubleshooting managed mode” section (locks, DB path, Wayland helpers).
 
 ## Rollout
 
 - Ship as a minor release v1.1.0 (behavioral change but backward compatible).
 - Keep `ditox-clipd` crate published. After Phase 2, mark it as “optional for power users” in docs.
+
+Backout plan
+- If issues arise, default `--daemon` to `external` via a minor patch release; keep flags available for opt‑in managed mode.
+- Revert `ditox` (no‑args) to print help instead of launching the TUI, if needed.
 
 ## Open Questions
 
@@ -173,6 +221,7 @@ Phase 3 (Optional)
 2. Do we want a keybind to toggle between `external` and `managed` live? (Likely no for MVP.)
 3. Should we support `--detach` to keep capture after TUI exit? (Out of MVP, possibly Phase 3.)
 4. Where to host the shared daemon code long‑term: inside `ditox-core` or a new `clipd-lib` crate? (Proposal: `clipd-lib`.)
+5. Should `ditox` (no args) launching the TUI be gated behind a config flag initially to reduce surprises? (Default ON in v1.1.0 unless feedback suggests otherwise.)
 
 ## Acceptance Criteria
 
@@ -181,6 +230,8 @@ Phase 3 (Optional)
 - If an external daemon is running, `ditox` does not start an embedded watcher and clearly indicates “External daemon active”.
 - `doctor` shows correct managed daemon status and environment details.
 - No regression to list/search/copy/image flows; tests pass; CI green.
+ - `ditox` with subcommands behaves exactly as before; no interactive mode is entered when a subcommand is present.
+ - Lock file is cleaned on exit and stale locks are recovered on next start.
 
 # Ditox Standalone TUI and Managed Capture — Implementation Notes
 
@@ -240,6 +291,7 @@ File: `crates/ditox-cli/src/main.rs`
     - `--daemon-images {true|false}`
     - `--no-daemon` (bypass daemon IPC)
     - `--refresh-ms <u64>` (debounced auto‑refresh interval, overrides config)
+    - `--no-alt-screen` (draw in main screen buffer)
 - Backend and filters
     - `--remote` (force libsql/Turso; disables daemon)
     - `--tag <string>` (filter by tag)
@@ -330,6 +382,7 @@ File: `crates/ditox-cli/src/managed_daemon.rs`
 - Controls exposed through `ManagedControl`:
     - `toggle_pause()`, `is_paused()`, `toggle_images()`, `images_on()`, `sample()`.
 - External detection: `config/clipd.json` with TCP connect confirmation.
+ - Observability: emit `trace!` with timings (no content); TUI footer shows succinct status.
 
 ## Optional Tray (feature `tray`)
 
@@ -338,6 +391,7 @@ File: `crates/ditox-cli/src/tray.rs`
 - Menu entries: Pause/Resume, Images on/off, Quit.
 - Hooks into `ManagedControl` if managed capture is active.
 - Small icon builder, optional PNG fallback.
+ - Not part of the MVP default build; behind feature flag to keep dependencies out of CI by default.
 
 ## Backend Policy (Picker)
 
@@ -347,11 +401,13 @@ File: `crates/ditox-cli/src/tray.rs`
 - Daemon start policy:
     - `--daemon` + no external clipd detected → start embedded daemon.
     - Environment override: `DITOX_DAEMON={managed|external|off}`.
+ - No args policy: `ditox` with no subcommand launches the TUI; any provided subcommand runs headless as today.
 
 ## Diagnostics
 
 - Doctor (`ditox config` / `ditox doctor`): prints capture status and clipboard checks.
 - Errors from TUI copy operations are deferred and printed after exit.
+ - `ditox doctor` includes the lock path, PID, backend, and notes if status is managed/external/off.
 
 ## CI/Policy Notes
 
@@ -360,6 +416,7 @@ File: `crates/ditox-cli/src/tray.rs`
     - RUSTSEC‑2024‑0412/0413/0415/0416/0418/0419/0420, and glib VariantStrIter unsoundness (RUSTSEC‑2024‑0429),
     - `proc-macro-error` unmaintained (RUSTSEC‑2024‑0370).
 - These are ignored because tray is optional and only used for desktop UI; CLI/core paths are unaffected.
+ - Default CI build excludes `tray`; enable it in a dedicated job if/when we wire the tray.
 
 ## Re‑Implementation Checklist
 
@@ -379,6 +436,7 @@ File: `crates/ditox-cli/src/tray.rs`
     - Use theme colors for: title, list highlight, borders, footer, help overlay, match highlights.
     - If `layout.*_template` exists, expand placeholders; else render defaults.
     - Optional pager at bottom‑right of list area using `pager_template`.
+    - Respect ASCII/no‑color fallbacks; avoid wide glyphs when `--ascii`.
 6. Keybindings
     - Implement bindings listed above; ensure help overlay and footer reflect them.
 7. Backend policy
@@ -401,7 +459,3 @@ File: `crates/ditox-cli/src/tray.rs`
 
 - Managed lock refusal on macOS/Windows is deliberate to avoid multiple capture threads touching the same SQLite DB.
 - If you want parity with Linux, add a platform‑specific liveness probe (e.g., `kill(pid, 0)` via nix or `OpenProcess` on Windows) and update `is_pid_alive` accordingly.
-
----
-
-If you want, I can re‑land any specific section of this spec directly in code with minimal, reviewable commits.
