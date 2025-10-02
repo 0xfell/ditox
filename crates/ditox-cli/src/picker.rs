@@ -75,7 +75,7 @@ impl DaemonClient {
         favorites: bool,
         limit: Option<usize>,
         offset: Option<usize>,
-        _query: Option<String>,
+        query: Option<String>,
         tag: Option<String>,
     ) -> anyhow::Result<Page<Item>> {
         let req = Request::List {
@@ -83,8 +83,9 @@ impl DaemonClient {
             favorites,
             limit,
             offset,
-            // Always fetch unfiltered; filtering is applied client-side for consistent substring/fuzzy semantics.
-            query: None,
+            // Pass query through for server-side filtering to avoid
+            // paging bias when datasets are large.
+            query,
             tag,
         };
         let s = serde_json::to_string(&req)?;
@@ -349,7 +350,11 @@ pub fn run_picker_with(
                 fav_filter,
                 Some(page_rows),
                 Some(0),
-                None,
+                if mode == Mode::Query && !query.is_empty() {
+                    Some(query.clone())
+                } else {
+                    None
+                },
                 tag_filter.clone(),
             ) {
                 Ok(p) => {
@@ -363,6 +368,11 @@ pub fn run_picker_with(
                         images_mode,
                         fav_filter,
                         Some(page_rows),
+                        if mode == Mode::Query && !query.is_empty() {
+                            Some(query.clone())
+                        } else {
+                            None
+                        },
                         tag_filter.clone(),
                     )?;
                     has_more = false;
@@ -374,7 +384,11 @@ pub fn run_picker_with(
             fav_filter,
             Some(page_rows),
             Some(0),
-            None,
+            if mode == Mode::Query && !query.is_empty() {
+                Some(query.clone())
+            } else {
+                None
+            },
             tag_filter.clone(),
         ) {
             items = p.items;
@@ -386,6 +400,11 @@ pub fn run_picker_with(
                 images_mode,
                 fav_filter,
                 Some(page_rows),
+                if mode == Mode::Query && !query.is_empty() {
+                    Some(query.clone())
+                } else {
+                    None
+                },
                 tag_filter.clone(),
             )?;
             has_more = false;
@@ -396,6 +415,11 @@ pub fn run_picker_with(
             images_mode,
             fav_filter,
             Some(page_rows),
+            if mode == Mode::Query && !query.is_empty() {
+                Some(query.clone())
+            } else {
+                None
+            },
             tag_filter.clone(),
         )?;
         has_more = false;
@@ -437,6 +461,11 @@ pub fn run_picker_with(
                                 images_mode,
                                 fav_filter,
                                 None,
+                                if mode == Mode::Query && !query.is_empty() {
+                                    Some(query.clone())
+                                } else {
+                                    None
+                                },
                                 tag_filter.clone(),
                             )?;
                             has_more = false;
@@ -444,8 +473,18 @@ pub fn run_picker_with(
                         }
                     }
                 } else {
-                    items =
-                        fetch_from_store(store, images_mode, fav_filter, None, tag_filter.clone())?;
+                    items = fetch_from_store(
+                        store,
+                        images_mode,
+                        fav_filter,
+                        None,
+                        if mode == Mode::Query && !query.is_empty() {
+                            Some(query.clone())
+                        } else {
+                            None
+                        },
+                        tag_filter.clone(),
+                    )?;
                     has_more = false;
                 }
                 filtered = if mode != Mode::Query || query.trim().is_empty() {
@@ -1072,7 +1111,11 @@ pub fn run_picker_with(
                                     fav_filter,
                                     Some(page_rows),
                                     Some(0),
-                                    None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 ) {
                                     Ok(p) => {
@@ -1085,6 +1128,11 @@ pub fn run_picker_with(
                                             images_mode,
                                             fav_filter,
                                             None,
+                                            if mode == Mode::Query && !query.is_empty() {
+                                                Some(query.clone())
+                                            } else {
+                                                None
+                                            },
                                             tag_filter.clone(),
                                         )?;
                                         has_more = false;
@@ -1097,6 +1145,11 @@ pub fn run_picker_with(
                                     images_mode,
                                     fav_filter,
                                     None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 )?;
                                 has_more = false;
@@ -1107,6 +1160,11 @@ pub fn run_picker_with(
                                 images_mode,
                                 fav_filter,
                                 None,
+                                if mode == Mode::Query && !query.is_empty() {
+                                    Some(query.clone())
+                                } else {
+                                    None
+                                },
                                 tag_filter.clone(),
                             )?;
                         }
@@ -1132,7 +1190,11 @@ pub fn run_picker_with(
                                     fav_filter,
                                     Some(page_rows),
                                     Some(0),
-                                    None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 ) {
                                     Ok(p) => {
@@ -1145,6 +1207,11 @@ pub fn run_picker_with(
                                             images_mode,
                                             fav_filter,
                                             None,
+                                            if mode == Mode::Query && !query.is_empty() {
+                                                Some(query.clone())
+                                            } else {
+                                                None
+                                            },
                                             tag_filter.clone(),
                                         )?;
                                         has_more = false;
@@ -1157,6 +1224,11 @@ pub fn run_picker_with(
                                     images_mode,
                                     fav_filter,
                                     None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 )?;
                                 has_more = false;
@@ -1167,6 +1239,11 @@ pub fn run_picker_with(
                                 images_mode,
                                 fav_filter,
                                 None,
+                                if mode == Mode::Query && !query.is_empty() {
+                                    Some(query.clone())
+                                } else {
+                                    None
+                                },
                                 tag_filter.clone(),
                             )?;
                         }
@@ -1193,7 +1270,11 @@ pub fn run_picker_with(
                                         fav_filter,
                                         Some(page_rows),
                                         Some(0),
-                                        None,
+                                        if mode == Mode::Query && !query.is_empty() {
+                                            Some(query.clone())
+                                        } else {
+                                            None
+                                        },
                                         tag_filter.clone(),
                                     )?;
                                     items = p.items;
@@ -1205,6 +1286,11 @@ pub fn run_picker_with(
                                         images_mode,
                                         fav_filter,
                                         None,
+                                        if mode == Mode::Query && !query.is_empty() {
+                                            Some(query.clone())
+                                        } else {
+                                            None
+                                        },
                                         tag_filter.clone(),
                                     )?;
                                     has_more = false;
@@ -1216,6 +1302,11 @@ pub fn run_picker_with(
                                     images_mode,
                                     fav_filter,
                                     None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 )?;
                                 has_more = false;
@@ -1300,7 +1391,11 @@ pub fn run_picker_with(
                                     fav_filter,
                                     Some(page_rows),
                                     Some(0),
-                                    None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 ) {
                                     Ok(p) => {
@@ -1313,6 +1408,11 @@ pub fn run_picker_with(
                                             images_mode,
                                             fav_filter,
                                             None,
+                                            if mode == Mode::Query && !query.is_empty() {
+                                                Some(query.clone())
+                                            } else {
+                                                None
+                                            },
                                             tag_filter.clone(),
                                         )?;
                                         has_more = false;
@@ -1324,6 +1424,11 @@ pub fn run_picker_with(
                                     images_mode,
                                     fav_filter,
                                     None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 )?;
                             }
@@ -1377,7 +1482,11 @@ pub fn run_picker_with(
                                     fav_filter,
                                     Some(page_rows),
                                     Some(0),
-                                    None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 ) {
                                     items = p.items;
@@ -1389,6 +1498,11 @@ pub fn run_picker_with(
                                     images_mode,
                                     fav_filter,
                                     None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 )?;
                             }
@@ -1441,7 +1555,11 @@ pub fn run_picker_with(
                                             fav_filter,
                                             Some(page_rows),
                                             Some(0),
-                                            None,
+                                            if mode == Mode::Query && !query.is_empty() {
+                                                Some(query.clone())
+                                            } else {
+                                                None
+                                            },
                                             tag_filter.clone(),
                                         ) {
                                             items = p.items;
@@ -1453,6 +1571,11 @@ pub fn run_picker_with(
                                             images_mode,
                                             fav_filter,
                                             None,
+                                            if mode == Mode::Query && !query.is_empty() {
+                                                Some(query.clone())
+                                            } else {
+                                                None
+                                            },
                                             tag_filter.clone(),
                                         )?;
                                     }
@@ -1496,7 +1619,11 @@ pub fn run_picker_with(
                                         fav_filter,
                                         Some(page_rows),
                                         Some(0),
-                                        None,
+                                        if mode == Mode::Query && !query.is_empty() {
+                                            Some(query.clone())
+                                        } else {
+                                            None
+                                        },
                                         tag_filter.clone(),
                                     ) {
                                         items = p.items;
@@ -1509,6 +1636,11 @@ pub fn run_picker_with(
                                     images_mode,
                                     fav_filter,
                                     None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 )?;
                             }
@@ -1543,7 +1675,11 @@ pub fn run_picker_with(
                                     fav_filter,
                                     Some(page_rows),
                                     Some(0),
-                                    None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 ) {
                                     Ok(p) => {
@@ -1556,6 +1692,11 @@ pub fn run_picker_with(
                                             images_mode,
                                             fav_filter,
                                             None,
+                                            if mode == Mode::Query && !query.is_empty() {
+                                                Some(query.clone())
+                                            } else {
+                                                None
+                                            },
                                             tag_filter.clone(),
                                         )?;
                                         has_more = false;
@@ -1568,6 +1709,11 @@ pub fn run_picker_with(
                                     images_mode,
                                     fav_filter,
                                     None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 )?;
                                 has_more = false;
@@ -1578,6 +1724,11 @@ pub fn run_picker_with(
                                 images_mode,
                                 fav_filter,
                                 None,
+                                if mode == Mode::Query && !query.is_empty() {
+                                    Some(query.clone())
+                                } else {
+                                    None
+                                },
                                 tag_filter.clone(),
                             )?;
                             has_more = false;
@@ -1605,7 +1756,11 @@ pub fn run_picker_with(
                                             fav_filter,
                                             Some(page_rows),
                                             Some(0),
-                                            None,
+                                            if mode == Mode::Query && !query.is_empty() {
+                                                Some(query.clone())
+                                            } else {
+                                                None
+                                            },
                                             tag_filter.clone(),
                                         ) {
                                             items = p.items;
@@ -1617,6 +1772,11 @@ pub fn run_picker_with(
                                     images_mode,
                                     fav_filter,
                                     None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 ) {
                                     items = v;
@@ -1680,7 +1840,11 @@ pub fn run_picker_with(
                                     fav_filter,
                                     Some(page_rows),
                                     Some(items.len()),
-                                    None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 ) {
                                     has_more = p.more;
@@ -1714,7 +1878,11 @@ pub fn run_picker_with(
                                     fav_filter,
                                     Some(page_rows),
                                     Some(items.len()),
-                                    None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 ) {
                                     has_more = p.more;
@@ -1742,7 +1910,11 @@ pub fn run_picker_with(
                                         fav_filter,
                                         Some(page_rows),
                                         Some(items.len()),
-                                        None,
+                                        if mode == Mode::Query && !query.is_empty() {
+                                            Some(query.clone())
+                                        } else {
+                                            None
+                                        },
                                         tag_filter.clone(),
                                     ) {
                                         has_more = p.more;
@@ -1843,7 +2015,11 @@ pub fn run_picker_with(
                                     fav_filter,
                                     Some(page_rows),
                                     Some(0),
-                                    None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 ) {
                                     Ok(p) => {
@@ -1856,6 +2032,11 @@ pub fn run_picker_with(
                                             images_mode,
                                             fav_filter,
                                             None,
+                                            if mode == Mode::Query && !query.is_empty() {
+                                                Some(query.clone())
+                                            } else {
+                                                None
+                                            },
                                             tag_filter.clone(),
                                         )?;
                                         has_more = false;
@@ -1867,6 +2048,11 @@ pub fn run_picker_with(
                                     images_mode,
                                     fav_filter,
                                     None,
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 )?;
                             }
@@ -1944,7 +2130,11 @@ pub fn run_picker_with(
                                             fav_filter,
                                             Some(page_rows),
                                             Some(0),
-                                            None,
+                                            if mode == Mode::Query && !query.is_empty() {
+                                                Some(query.clone())
+                                            } else {
+                                                None
+                                            },
                                             tag_filter.clone(),
                                         ) {
                                             items = p.items;
@@ -1963,6 +2153,11 @@ pub fn run_picker_with(
                                     images_mode,
                                     fav_filter,
                                     Some(page_rows),
+                                    if mode == Mode::Query && !query.is_empty() {
+                                        Some(query.clone())
+                                    } else {
+                                        None
+                                    },
                                     tag_filter.clone(),
                                 ) {
                                     items = v;
@@ -1991,11 +2186,20 @@ pub fn run_picker_with(
                         images_mode,
                         fav_filter,
                         Some(page_rows),
+                        if mode == Mode::Query && !query.is_empty() {
+                            Some(query.clone())
+                        } else {
+                            None
+                        },
                         tag_filter.clone(),
                     )?;
                     // Update total via store count
                     let total = store.count(Query {
-                        contains: None,
+                        contains: if mode == Mode::Query && !query.is_empty() {
+                            Some(query.clone())
+                        } else {
+                            None
+                        },
                         favorites_only: fav_filter,
                         limit: None,
                         tag: tag_filter.clone(),
@@ -2013,7 +2217,11 @@ pub fn run_picker_with(
                         fav_filter,
                         Some(page_rows),
                         Some(0),
-                        None,
+                        if mode == Mode::Query && !query.is_empty() {
+                            Some(query.clone())
+                        } else {
+                            None
+                        },
                         tag_filter.clone(),
                     ) {
                         last_known_total = p0.total;
@@ -2027,7 +2235,11 @@ pub fn run_picker_with(
                             fav_filter,
                             Some(page_rows),
                             Some(fetched.len()),
-                            None,
+                            if mode == Mode::Query && !query.is_empty() {
+                                Some(query.clone())
+                            } else {
+                                None
+                            },
                             tag_filter.clone(),
                         ) {
                             more = p.more;
@@ -2104,7 +2316,7 @@ fn fetch_page_from_daemon(
     favorites: bool,
     limit: Option<usize>,
     offset: Option<usize>,
-    _query: Option<String>,
+    query: Option<String>,
     tag: Option<String>,
 ) -> Result<Page<Item>> {
     let info_path = config::config_dir().join("clipd.json");
@@ -2116,8 +2328,8 @@ fn fetch_page_from_daemon(
         favorites,
         limit,
         offset,
-        // Always fetch unfiltered; filtering is applied client-side for consistent substring/fuzzy semantics.
-        query: None,
+        // Pass query to backend for server-side filtering.
+        query,
         tag,
     };
     let s = serde_json::to_string(&req)?;
@@ -2143,11 +2355,12 @@ fn fetch_from_store(
     images: bool,
     favorites: bool,
     limit: Option<usize>,
+    query: Option<String>,
     tag: Option<String>,
 ) -> Result<Vec<Item>> {
     if images {
         let items = store.list_images(Query {
-            contains: None,
+            contains: query,
             favorites_only: favorites,
             limit,
             tag,
@@ -2168,7 +2381,7 @@ fn fetch_from_store(
             .collect())
     } else {
         let items = store.list(Query {
-            contains: None,
+            contains: query,
             favorites_only: favorites,
             limit,
             tag,

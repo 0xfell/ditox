@@ -1,6 +1,8 @@
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{sleep, JoinHandle};
@@ -10,7 +12,9 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::config;
-use ditox_core::{clipboard::Clipboard as _, Store};
+#[cfg(target_os = "linux")]
+use ditox_core::clipboard::Clipboard as _;
+use ditox_core::Store;
 
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
