@@ -1109,10 +1109,11 @@ pub fn run_picker_with(
                         )
                         .wrap(Wrap { trim: true })
                         .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
+                        // Keep each action on its own line to avoid wrapping in narrow panes
                         let mut col3_text = if caps.unicode {
-                            String::from("⏎ copy | x delete | p fav/unfav\nq quit\n? close help")
+                            String::from("⏎ copy\nx delete\np fav/unfav\nq quit\n? close help")
                         } else {
-                            String::from("Enter copy | x delete | p fav/unfav\nq quit\n? close help")
+                            String::from("Enter copy\nx delete\np fav/unfav\nq quit\n? close help")
                         };
                         if has_more { col3_text.push_str("\nMore available…"); }
                         let col3 = Paragraph::new(col3_text)
