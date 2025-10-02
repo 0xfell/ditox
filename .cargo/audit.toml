@@ -3,11 +3,26 @@
 # Rationale: Transitive via `ratatui` and no patched replacement yet; upstream
 # suggests `pastey` but it cannot be transparently substituted for transitive deps.
 # We revisit quarterly or when ratatui migrates.
-ignore = ["RUSTSEC-2024-0436"]
+ignore = [
+    # paste: unmaintained (via ratatui)
+    "RUSTSEC-2024-0436",
+    # gtk-rs GTK3 family: unmaintained — only used behind optional `tray` feature via `tray-icon`/`muda`.
+    "RUSTSEC-2024-0412", # gdk unmaintained
+    "RUSTSEC-2024-0413", # atk unmaintained
+    "RUSTSEC-2024-0415", # gtk unmaintained
+    "RUSTSEC-2024-0416", # atk-sys unmaintained
+    "RUSTSEC-2024-0418", # gdk-sys unmaintained
+    "RUSTSEC-2024-0419", # gtk3-macros unmaintained
+    "RUSTSEC-2024-0420", # gtk-sys unmaintained
+    # glib unsound VariantStrIter (fixed in >= 0.20) — also only through optional tray deps.
+    "RUSTSEC-2024-0429",
+    # proc-macro-error unmaintained — via gtk3-macros path
+    "RUSTSEC-2024-0370",
+]
 
 # Treat unmaintained as warnings; we still fail on warnings in CI, but the
 # above specific advisory is ignored to avoid blocking.
-informational_warnings = ["unmaintained"]
+informational_warnings = ["unmaintained", "yanked"]
 
 [database]
 url = "https://github.com/RustSec/advisory-db.git"
