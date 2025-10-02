@@ -78,6 +78,10 @@ pub struct Tui {
     pub glyphs: Option<String>,
     /// Layout pack name or file path
     pub layout: Option<String>,
+    /// Debounced auto-refresh interval in milliseconds (default: 1500)
+    pub refresh_ms: Option<u64>,
+    /// Play a short sound when new items arrive (default: false)
+    pub sound_on_new: Option<bool>,
 }
 
 pub fn images_dir(settings: &Settings) -> std::path::PathBuf {
@@ -100,6 +104,16 @@ pub fn config_dir() -> PathBuf {
     } else {
         PathBuf::from("./.config/ditox")
     }
+}
+
+pub fn state_dir() -> PathBuf {
+    // Prefer XDG state dir when available; fall back to config dir
+    if let Some(bd) = directories::BaseDirs::new() {
+        if let Some(sd) = bd.state_dir() {
+            return sd.join("ditox");
+        }
+    }
+    config_dir()
 }
 
 pub fn settings_path() -> PathBuf {

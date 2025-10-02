@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 // no process or encoder imports needed here
 use crate::copy_helpers;
 use crate::theme;
+use crate::managed_daemon::ManagedControl;
 use ditox_core::StoreImpl;
 use std::path::PathBuf;
 
@@ -165,6 +166,15 @@ enum Item {
     },
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CaptureMode { Managed, External, Off }
+
+#[derive(Clone, Debug)]
+pub struct CaptureStatus {
+    pub mode: CaptureMode,
+    pub managed: Option<ManagedControl>,
+}
+
 pub fn run_picker_default(
     store: &dyn Store,
     favorites: bool,
@@ -173,6 +183,9 @@ pub fn run_picker_default(
     no_daemon: bool,
     force_wl_copy: bool,
     remote_badge: bool,
+    capture: Option<CaptureStatus>,
+    // optional override for auto-refresh interval (ms)
+    refresh_ms_override: Option<u64>,
 ) -> Result<()> {
     let mut es = RealEventSource;
     let _ = run_picker_with(
@@ -185,6 +198,8 @@ pub fn run_picker_default(
         true,
         force_wl_copy,
         remote_badge,
+        capture,
+        refresh_ms_override,
     )?;
     Ok(())
 }
@@ -204,6 +219,7 @@ impl EventSource for RealEventSource {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub fn run_picker_with(
     store: &dyn Store,
     favorites: bool,
@@ -214,6 +230,8 @@ pub fn run_picker_with(
     draw: bool,
     force_wl_copy: bool,
     remote_badge: bool,
+    capture: Option<CaptureStatus>,
+    refresh_ms_override: Option<u64>,
 ) -> Result<Option<String>> {
     let t0 = Instant::now();
     let use_daemon = !no_daemon;
@@ -287,10 +305,15 @@ pub fn run_picker_with(
         .as_ref()
         .and_then(|t| t.absolute_times)
         .unwrap_or(true);
+    let refresh_ms: u64 = refresh_ms_override
+        .or_else(|| settings.tui.as_ref().and_then(|t| t.refresh_ms))
+        .unwrap_or(1500);
+    let typing_quiet_ms: u64 = 250;
     let mut page_index: usize = 0; // 0-based page
     let mut selected_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut show_help: bool = false;
     let mut last_fetch: Instant = Instant::now();
+    let mut last_key_ts: Option<Instant> = None;
     // input mode: do not capture characters until '/' pressed
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Mode {
@@ -318,7 +341,9 @@ pub fn run_picker_with(
 
     // Load initial dataset now
     let mut daemon: Option<DaemonClient> = None;
+    let cap = capture.clone().unwrap_or(CaptureStatus { mode: if use_daemon { CaptureMode::External } else { CaptureMode::Off }, managed: None });
     let mut last_known_total: Option<usize> = None;
+    let mut pending_restore_id: Option<String> = None;
     #[allow(unused_assignments)]
     let mut daemon_port: Option<u16> = None;
     if use_daemon {
@@ -453,9 +478,27 @@ pub fn run_picker_with(
             if mode == Mode::Query && query.starts_with('#') {
                 last_tag_typed = Some(Instant::now());
             }
-            // Reset selection to top when filter/search changes
-            page_index = 0;
-            selected = 0;
+            // Reset selection when filters truly changed. When auto-refresh
+            // requested a re-filter, try to restore previous selection by id.
+            if let Some(tgt) = pending_restore_id.take() {
+                let mut pos: Option<usize> = None;
+                for (p, &i) in filtered.iter().enumerate() {
+                    if let Some(it) = items.get(i) {
+                        let id = match it { Item::Text { id, .. } | Item::Image { id, .. } => id };
+                        if *id == tgt { pos = Some(p); break; }
+                    }
+                }
+                if let Some(p) = pos {
+                    page_index = p / page_size;
+                    selected = p % page_size;
+                } else {
+                    page_index = 0;
+                    selected = 0;
+                }
+            } else {
+                page_index = 0;
+                selected = 0;
+            }
         }
         if selected >= filtered.len() {
             selected = filtered.len().saturating_sub(1);
@@ -781,16 +824,33 @@ pub fn run_picker_with(
                 }
                 // Footer — simple hint (optional via layout)
                 let thm2 = &tui_theme;
+                let thm2 = &tui_theme;
                 let mut footer_block = Block::default().title(Line::styled("Shortcuts", Style::default().fg(tui_theme.title_fg)));
                 if caps.unicode {
                     if let Some(bt) = layout.border_footer.or(tui_theme.border_type) {
-                        footer_block = footer_block.borders(Borders::ALL).border_type(bt).border_style(Style::default().fg(thm.border_fg));
+                        footer_block = footer_block
+                            .borders(Borders::ALL)
+                            .border_type(bt)
+                            .border_style(Style::default().fg(thm.border_fg));
                     }
                 }
                 let footer_area_idx = if mode == Mode::Query { if layout.search_bar_bottom { 1 } else { 2 } } else { 1 };
                 let more_hint = if has_more { " | More available…" } else { "" };
                 let selected_count = selected_ids.len().to_string();
-                let toast_text = if let Some((msg, until)) = &toast { if Instant::now() <= *until { format!("  — {}", msg) } else { String::new() } } else { String::new() };
+                let toast_text = if let Some((msg, until)) = &toast {
+                    if Instant::now() <= *until { format!("  — {}", msg) } else { String::new() }
+                } else { String::new() };
+                // Capture status summary
+                let cap_str = match cap.mode {
+                    CaptureMode::Managed => {
+                        let paused = cap.managed.as_ref().map(|m| m.is_paused()).unwrap_or(false);
+                        let img_on = cap.managed.as_ref().map(|m| m.images_on()).unwrap_or(true);
+                        let ms = cap.managed.as_ref().map(|m| m.sample().as_millis()).unwrap_or(0);
+                        format!("managed ({}ms, images:{}, {})", ms, if img_on {"on"} else {"off"}, if paused {"paused"} else {"active"})
+                    }
+                    CaptureMode::External => "external".into(),
+                    CaptureMode::Off => "off".into(),
+                };
                 let simple = if let Some(tpl) = &layout.footer_template {
                     tpl.replace("{enter_label}", &glyphs.enter_label)
                         .replace("{selected_count}", &selected_count)
@@ -799,12 +859,13 @@ pub fn run_picker_with(
                         .replace("{page}", &(page_index + 1).to_string())
                         .replace("{page_count}", &page_count_str)
                 } else {
-                    let mut s = format!("{} copy | x delete | p fav/unfav | Tab favorites | ? more", glyphs.enter_label);
+                    let mut s = format!("{} copy | x delete | p fav/unfav | Tab favorites | D images (managed) | Ctrl+P pause (managed) | ? more", glyphs.enter_label);
                     if !selected_ids.is_empty() { s.push_str(&format!(" | {} selected", selected_ids.len())); }
                     if has_more { s.push_str(" | More available…"); }
                     if !toast_text.is_empty() { s.push_str(&toast_text); }
                     s
                 };
+                let simple = format!("{} | capture: {}", simple, cap_str);
                 if layout.help_footer {
                     let footer = Paragraph::new(simple)
                         .block(footer_block)
@@ -812,6 +873,7 @@ pub fn run_picker_with(
                         .wrap(Wrap { trim: true });
                     f.render_widget(footer, chunks[footer_area_idx]);
                 }
+9d55e (feat(cli): embedded managed capture, TUI status, hotkeys, and search auto-refresh\n\n- Add managed daemon inside picker with lockfile + pause/images controls\n- Show capture status in footer; bind Ctrl+P (pause) and D (images)\n- Debounced auto-refresh incl. during search; preserve selection on refresh\n- Add --refresh-ms flag and [tui].refresh_ms config\n- Optional tray (feature ) with Pause/Images/QUIT; flake app \n- Doctor prints capture: managed/external/off\n\nchore(flake): add packages.ditox-tray and apps.tray; devShell includes GTK3/AppIndicator\n)
 
                 // Expanded help as centered modal overlay
                 if show_help {
@@ -830,23 +892,55 @@ pub fn run_picker_with(
                         }
                     }
                     f.render_widget(block.clone(), overlay);
-                    if let Some(tpl) = &layout.help_template {
-                        let help = Paragraph::new(tpl.as_str())
-                            .wrap(Wrap { trim: true })
-                            .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
-                        f.render_widget(help, inner(overlay));
+                    let cols = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([
+                            Constraint::Percentage(34),
+                            Constraint::Percentage(33),
+                            Constraint::Percentage(33),
+                        ])
+                        .split(inner(overlay));
+                    let col1 = Paragraph::new(
+                        "↑/k up
+↓/j down
+→/l/PgDn next page
+←/h/PgUp prev page
+Home/g go to start
+End/G go to end",
+                    )
+                    .wrap(Wrap { trim: true })
+                    .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
+                    let col2 = Paragraph::new(
+                        "/ filter
+s select
+S clear selected
+Tab favorites toggle
+i images view toggle
+D images capture toggle (managed)
+Ctrl+P pause/resume capture (managed)
+t apply #tag
+r refresh",
+                    )
+                    .wrap(Wrap { trim: true })
+                    .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
+                    let mut col3_text = if caps.unicode {
+                        String::from("⏎ copy | x delete | p fav/unfav
+q quit
+? close help")
                     } else {
-                        let cols = Layout::default()
-                            .direction(Direction::Horizontal)
-                            .constraints([
-                                Constraint::Percentage(34),
-                                Constraint::Percentage(33),
-                                Constraint::Percentage(33),
-                            ])
-                            .split(inner(overlay));
-                        let col1 = Paragraph::new(
-                            "↑/k up\n↓/j down\n→/l/PgDn next page\n←/h/PgUp prev page\nHome/g go to start\nEnd/G go to end",
-                        )
+                        String::from("Enter copy | x delete | p fav/unfav
+q quit
+? close help")
+                    };
+                    if has_more { col3_text.push_str("
+More available…"); }
+                    let col3 = Paragraph::new(col3_text)
+                        .wrap(Wrap { trim: true })
+                        .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
+                    f.render_widget(col1, cols[0]);
+                    f.render_widget(col2, cols[1]);
+                    f.render_widget(col3, cols[2]);
+9d55e (feat(cli): embedded managed capture, TUI status, hotkeys, and search auto-refresh\n\n- Add managed daemon inside picker with lockfile + pause/images controls\n- Show capture status in footer; bind Ctrl+P (pause) and D (images)\n- Debounced auto-refresh incl. during search; preserve selection on refresh\n- Add --refresh-ms flag and [tui].refresh_ms config\n- Optional tray (feature ) with Pause/Images/QUIT; flake app \n- Doctor prints capture: managed/external/off\n\nchore(flake): add packages.ditox-tray and apps.tray; devShell includes GTK3/AppIndicator\n)
                         .wrap(Wrap { trim: true })
                         .style(Style::default().fg(thm2.help_fg).bg(tui_theme.status_bg));
                         let col2 = Paragraph::new(
@@ -899,6 +993,7 @@ pub fn run_picker_with(
                         };
                         last_query.clear();
                         needs_refilter = true;
+                        last_key_ts = Some(Instant::now());
                     }
                     KeyCode::Tab => {
                         fav_filter = !fav_filter;
@@ -955,6 +1050,7 @@ pub fn run_picker_with(
                         }
                         filtered = (0..items.len()).collect();
                     }
+                    
                     KeyCode::Char('f') if mode == Mode::Normal => {
                         fav_filter = !fav_filter;
                         last_query.clear();
@@ -1078,6 +1174,39 @@ pub fn run_picker_with(
                                     ));
                                 }
                             }
+                        }
+                    }
+                    // Pause/resume capture (managed only) — Ctrl+P
+                    KeyCode::Char('p')
+                        if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                            && mode == Mode::Normal =>
+                    {
+                        if let Some(mc) = cap.managed.as_ref() {
+                            let now_paused = mc.toggle_pause();
+                            toast = Some((
+                                if now_paused { "Capture paused".into() } else { "Capture resumed".into() },
+                                Instant::now() + Duration::from_millis(1200),
+                            ));
+                        } else {
+                            toast = Some((
+                                "Pause requires managed capture".into(),
+                                Instant::now() + Duration::from_millis(1500),
+                            ));
+                        }
+                    }
+                    // Toggle managed images on/off (Shift+D)
+                    KeyCode::Char('D') if mode == Mode::Normal => {
+                        if let Some(mc) = cap.managed.as_ref() {
+                            let on = mc.toggle_images();
+                            toast = Some((
+                                if on { "Images capture: on".into() } else { "Images capture: off".into() },
+                                Instant::now() + Duration::from_millis(1200),
+                            ));
+                        } else {
+                            toast = Some((
+                                "Images capture toggle requires managed mode".into(),
+                                Instant::now() + Duration::from_millis(1500),
+                            ));
                         }
                     }
                     // Toggle favorite on current item or selection
@@ -1442,6 +1571,7 @@ pub fn run_picker_with(
                     KeyCode::Backspace => {
                         if mode == Mode::Query {
                             query.pop();
+                            last_key_ts = Some(Instant::now());
                         }
                     }
                     KeyCode::Up => {
@@ -1701,6 +1831,7 @@ pub fn run_picker_with(
                             if query.starts_with('#') {
                                 last_tag_typed = Some(Instant::now());
                             }
+                            last_key_ts = Some(Instant::now());
                         }
                     }
                     _ => {}
@@ -1755,9 +1886,20 @@ pub fn run_picker_with(
             }
         }
 
-        // Periodic auto-reload when idle (no active query)
-        if last_fetch.elapsed() > Duration::from_millis(1500) && query.is_empty() {
+        // Periodic auto-reload (debounced; default 1500ms). When in Query mode with a non-empty
+        // query, we refresh the backing data and then re-run filtering (fuzzy) by
+        // setting `needs_refilter = true`.
+        if last_fetch.elapsed() > Duration::from_millis(refresh_ms) {
+            if mode == Mode::Query {
+                if let Some(ts) = last_key_ts {
+                    if ts.elapsed() < Duration::from_millis(typing_quiet_ms) {
+                        // Skip this cycle while user is actively typing
+                        continue;
+                    }
+                }
+            }
             if use_daemon {
+                let mut refreshed = false;
                 let target_len = (page_index + 1) * page_size;
                 if let Some(dc) = daemon.as_mut() {
                     // Always refresh total from head page to keep counts up to date
@@ -1766,7 +1908,7 @@ pub fn run_picker_with(
                         fav_filter,
                         Some(page_rows),
                         Some(0),
-                        None,
+                        if mode == Mode::Query && !query.is_empty() { Some(query.clone()) } else { None },
                         tag_filter.clone(),
                     ) {
                         last_known_total = p0.total;
@@ -1780,7 +1922,7 @@ pub fn run_picker_with(
                             fav_filter,
                             Some(page_rows),
                             Some(fetched.len()),
-                            None,
+                            if mode == Mode::Query && !query.is_empty() { Some(query.clone()) } else { None },
                             tag_filter.clone(),
                         ) {
                             more = p.more;
@@ -1791,10 +1933,59 @@ pub fn run_picker_with(
                         }
                     }
                     if fetched.len() >= items.len() {
+                        // remember current selection id so we can restore it
+                        pending_restore_id = (|| {
+                            let total = filtered.len();
+                            let start = page_index.saturating_mul(page_size);
+                            if start + selected < total {
+                                let idx = filtered[start + selected];
+                                items.get(idx).map(|it| match it {
+                                    Item::Text { id, .. } | Item::Image { id, .. } => id.clone(),
+                                })
+                            } else { None }
+                        })();
                         items = fetched;
                         has_more = more;
-                        last_query.clear();
-                        filtered = (0..items.len()).collect();
+                        // trigger re-filtering when in query mode
+                        needs_refilter = true;
+                        refreshed = true;
+                    }
+                }
+                // Fallback: when no external daemon is connected, refresh directly from the store
+                if !refreshed {
+                    if let Ok(v) = fetch_from_store(
+                        store,
+                        images_mode,
+                        fav_filter,
+                        Some(page_size),
+                        tag_filter.clone(),
+                    ) {
+                        // remember current selection id so we can restore it
+                        pending_restore_id = (|| {
+                            let total = filtered.len();
+                            let start = page_index.saturating_mul(page_size);
+                            if start + selected < total {
+                                let idx = filtered[start + selected];
+                                items.get(idx).map(|it| match it {
+                                    Item::Text { id, .. } | Item::Image { id, .. } => id.clone(),
+                                })
+                            } else { None }
+                        })();
+                        items = v;
+                        has_more = false;
+                        // trigger re-filtering (applies fuzzy matching when in Query mode)
+                        needs_refilter = true;
+                        let _ = (|| -> anyhow::Result<()> {
+                            let total = store.count(Query {
+                                contains: None,
+                                favorites_only: fav_filter,
+                                limit: None,
+                                tag: tag_filter.clone(),
+                                rank: false,
+                            })?;
+                            last_known_total = Some(total);
+                            Ok(())
+                        })();
                     }
                 }
             } else if let Ok(v) = fetch_from_store(
@@ -1806,8 +1997,8 @@ pub fn run_picker_with(
             ) {
                 items = v;
                 has_more = false;
-                last_query.clear();
-                filtered = (0..items.len()).collect();
+                // trigger re-filtering (applies fuzzy matching when in Query mode)
+                needs_refilter = true;
                 // Update total via store count
                 let _ = (|| -> anyhow::Result<()> {
                     let total = store.count(Query {
@@ -2125,7 +2316,7 @@ mod tests {
         }));
         let mut es = FakeEvents { events: q };
         let selected = run_picker_with(
-            &store, false, false, None, true, &mut es, false, false, false,
+            &store, false, false, None, true, &mut es, false, false, false, None, None,
         )
         .unwrap();
         assert_eq!(selected.as_deref(), Some(c1.id.as_str()));
@@ -2152,7 +2343,7 @@ mod tests {
         let mut es = FakeEvents { events: q };
 
         let picked = run_picker_with(
-            &store, true, false, None, true, &mut es, false, false, false,
+            &store, true, false, None, true, &mut es, false, false, false, None, None,
         )
         .unwrap();
         // Should select the only item available in favorites-only mode
@@ -2182,7 +2373,7 @@ mod tests {
         }));
         let mut es2 = FakeEvents { events: q2 };
         let picked2 = run_picker_with(
-            &store, false, false, None, true, &mut es2, false, false, false,
+            &store, false, false, None, true, &mut es2, false, false, false, None, None,
         )
         .unwrap();
         assert_eq!(picked2.as_deref(), Some(b.id.as_str()));

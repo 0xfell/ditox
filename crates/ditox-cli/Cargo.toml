@@ -12,6 +12,7 @@ readme = "README.md"
 # Default build includes libsql so one binary supports both local + remote at runtime
 default = ["libsql"]
 libsql = ["ditox-core/libsql", "dep:libsql", "dep:tokio"]
+tray = ["dep:tray-icon"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -33,6 +34,7 @@ fuzzy-matcher = "0.3"
 sha2 = "0.10"
 hex = "0.4"
 once_cell = "1"
+tray-icon = { version = "0.13", optional = true }
 
 [dev-dependencies]
 assert_cmd = "2"

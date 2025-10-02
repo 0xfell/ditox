@@ -10,10 +10,13 @@ use std::path::PathBuf;
 // config module is declared at the top; avoid duplicate re-declaration here
 mod copy_helpers;
 mod doctor;
+mod managed_daemon;
 mod lazy_store;
 mod picker;
 mod theme;
 mod xfer;
+#[cfg(feature = "tray")]
+mod tray;
 
 #[derive(Parser)]
 #[command(name = "ditox", version, about = "Ditox clipboard CLI (scaffold)")]
@@ -60,6 +63,15 @@ enum Commands {
         /// Pick images instead of text entries
         #[arg(long)]
         images: bool,
+        /// Capture mode for the session (managed=embedded, external=clipd, off=view-only)
+        #[arg(long, value_enum, default_value_t = DaemonMode::Managed)]
+        daemon: DaemonMode,
+        /// Sampling interval for managed daemon (e.g., 200ms, 1s)
+        #[arg(long, default_value = "200ms")]
+        daemon_sample: String,
+        /// Capture images in managed daemon
+        #[arg(long, default_value_t = true)]
+        daemon_images: bool,
         /// Force using the remote (Turso/libsql) backend directly
         #[arg(long, default_value_t = false)]
         remote: bool,
@@ -99,6 +111,9 @@ enum Commands {
         /// List available layouts and exit
         #[arg(long, default_value_t = false)]
         layouts: bool,
+        /// Auto-refresh interval in milliseconds (overrides config)
+        #[arg(long)]
+        refresh_ms: Option<u64>,
     },
     /// Sync commands
     Sync {
@@ -189,6 +204,9 @@ enum Commands {
         #[arg(long)]
         backup: bool,
     },
+    /// System tray icon (managed capture controls)
+    #[cfg(feature = "tray")]
+    Tray,
     /// Print effective configuration and paths
     Config {
         #[arg(long)]
@@ -416,6 +434,9 @@ fn main() -> Result<()> {
         Commands::Pick {
             favorites,
             images,
+            daemon,
+            daemon_sample,
+            daemon_images,
             remote,
             tag,
             no_daemon,
@@ -429,6 +450,7 @@ fn main() -> Result<()> {
             layout,
             glyphsets,
             layouts,
+            refresh_ms,
         } => {
             // Utility modes that don't start the TUI
             if themes {
@@ -581,6 +603,56 @@ fn main() -> Result<()> {
             };
             // If --remote, bypass daemon even if running
             let bypass_daemon = no_daemon || remote;
+
+            // Managed daemon: start if requested and no external daemon detected
+            let mut managed_guard: Option<managed_daemon::ManagedHandle> = None;
+            let effective_mode = if bypass_daemon {
+                managed_daemon::DaemonMode::Off
+            } else {
+                // Env override takes precedence
+                let env_mode = std::env::var("DITOX_DAEMON").ok().and_then(|s| match s.to_lowercase().as_str() {
+                    "managed" => Some(managed_daemon::DaemonMode::Managed),
+                    "external" => Some(managed_daemon::DaemonMode::External),
+                    "off" => Some(managed_daemon::DaemonMode::Off),
+                    _ => None,
+                });
+                env_mode.unwrap_or(match daemon {
+                    DaemonMode::Managed => managed_daemon::DaemonMode::Managed,
+                    DaemonMode::External => managed_daemon::DaemonMode::External,
+                    DaemonMode::Off => managed_daemon::DaemonMode::Off,
+                })
+            };
+
+            if matches!(effective_mode, managed_daemon::DaemonMode::Managed) {
+                if !managed_daemon::detect_external_clipd() {
+                    // Use same DB path policy as local picker
+                    let path = match &settings.storage {
+                        config::Storage::LocalSqlite { db_path } => {
+                            db_path.clone().unwrap_or_else(default_db_path)
+                        }
+                        _ => default_db_path(),
+                    };
+                    let watcher_store = lazy_store::LazyStore::local_sqlite(path, false);
+                    let sample = parse_duration(&std::env::var("DITOX_DAEMON_SAMPLE").unwrap_or(daemon_sample.clone()));
+                    let images_on = std::env::var("DITOX_DAEMON_IMAGES").ok().map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(daemon_images);
+                    let cfg = managed_daemon::DaemonConfig { sample, images: images_on, image_cap_bytes: Some(8*1024*1024) };
+                    if let Ok(h) = managed_daemon::start_managed(std::sync::Arc::new(watcher_store), cfg) {
+                        managed_guard = Some(h);
+                    }
+                }
+            }
+            let cap_status = if matches!(effective_mode, managed_daemon::DaemonMode::Managed) {
+                if let Some(ref h) = managed_guard {
+                    Some(picker::CaptureStatus { mode: picker::CaptureMode::Managed, managed: Some(h.control()) })
+                } else {
+                    Some(picker::CaptureStatus { mode: picker::CaptureMode::External, managed: None })
+                }
+            } else if matches!(effective_mode, managed_daemon::DaemonMode::External) {
+                Some(picker::CaptureStatus { mode: picker::CaptureMode::External, managed: None })
+            } else {
+                Some(picker::CaptureStatus { mode: picker::CaptureMode::Off, managed: None })
+            };
+
             picker::run_picker_default(
                 &lazy,
                 favorites,
@@ -589,7 +661,10 @@ fn main() -> Result<()> {
                 bypass_daemon,
                 cli.force_wl_copy,
                 remote,
+                cap_status,
+                refresh_ms,
             )?;
+            if let Some(h) = managed_guard { h.stop(); }
         }
         Commands::Search {
             query,
@@ -759,16 +834,17 @@ fn main() -> Result<()> {
                 "search (fts or like): {}",
                 if has_fts { "ok" } else { "failed" }
             );
-            // Daemon check
+            // Capture status
             let clipd_info = config::config_dir().join("clipd.json");
+            let managed_lock = config::state_dir().join("managed-daemon.lock");
             if let Ok(s) = std::fs::read_to_string(&clipd_info) {
                 let v: serde_json::Value = serde_json::from_str(&s).unwrap_or_default();
-                println!(
-                    "clipd: present (port={})",
-                    v.get("port").and_then(|p| p.as_u64()).unwrap_or(0)
-                );
+                let port = v.get("port").and_then(|p| p.as_u64()).unwrap_or(0);
+                println!("capture: external (clipd) port={}", port);
+            } else if managed_lock.exists() {
+                println!("capture: managed (lock present)");
             } else {
-                println!("clipd: not running");
+                println!("capture: off");
             }
         }
         Commands::Thumbs => {
@@ -944,6 +1020,10 @@ fn main() -> Result<()> {
                 }
             }
         }
+        #[cfg(feature = "tray")]
+        Commands::Tray => {
+            tray::run_tray()?;
+        }
         Commands::Config { json } => {
             let cfg_dir = config::config_dir();
             let settings_path = cfg_dir.join("settings.toml");
@@ -1009,6 +1089,31 @@ pub fn preview(s: &str) -> String {
     } else {
         s
     }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug, ValueEnum)]
+pub enum DaemonMode {
+    Managed,
+    External,
+    Off,
+}
+
+fn parse_duration(s: &str) -> std::time::Duration {
+    let st = s.trim().to_lowercase();
+    if let Some(ms) = st.strip_suffix("ms") {
+        if let Ok(v) = ms.trim().parse::<u64>() {
+            return std::time::Duration::from_millis(v);
+        }
+    }
+    if let Some(sec) = st.strip_suffix('s') {
+        if let Ok(v) = sec.trim().parse::<u64>() {
+            return std::time::Duration::from_secs(v);
+        }
+    }
+    if let Ok(v) = st.parse::<u64>() {
+        return std::time::Duration::from_millis(v);
+    }
+    std::time::Duration::from_millis(200)
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
