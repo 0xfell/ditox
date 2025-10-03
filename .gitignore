@@ -12,3 +12,6 @@ result-*
 \n+# Nix build symlinks
 result
 result-*
+
+# Worktree files
+.worktree
