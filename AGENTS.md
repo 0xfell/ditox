@@ -52,25 +52,25 @@
 
 ## Git Worktrees
 
-- Location: use `./.worktrees/` for all task‑specific checkouts. Ensure it exists with `mkdir -p ./.worktrees` before creating any worktree.
+- Location: use `./.worktree/` for all task‑specific checkouts. Ensure it exists with `mkdir -p ./.worktree` before creating any worktree.
 - Branch naming: derive from the task type and a short, kebab‑case slug of the request. Use Conventional Commit types for the prefix:
     - Features: `feat/<slug>` (default if unspecified)
     - Fixes: `fix/<slug>`
     - Docs: `docs/<slug>`
     - Refactors/Chores/Perf/Tests: `refactor/<slug>` or `chore/<slug>` or `perf/<slug>` or `test/<slug>` as appropriate
-- Worktree directory name: mirror the branch name but replace `/` with `__` to avoid nested folders; e.g., branch `feat/image-deduping` → dir `./.worktrees/feat__image-deduping`.
-- Create a new worktree from `origin/main`:
+- Worktree directory name: mirror the branch name but replace `/` with `__` to avoid nested folders; e.g., branch `feat/image-deduping` → dir `./.worktree/feat__image-deduping`.
+- Create a new worktree from `origin/master`:
     - `git fetch origin`
-    - `BRANCH="feat/<slug>"; DIR=".worktrees/${BRANCH//\//__}"`
-    - `git worktree add -b "$BRANCH" "$DIR" origin/main`
+    - `BRANCH="feat/<slug>"; DIR=".worktree/${BRANCH//\//__}"`
+    - `git worktree add -b "$BRANCH" "$DIR" origin/master`
 - Use the worktree:
     - `cd "$DIR"`
-    - Implement changes; run builds/tests here, not in the main checkout.
+    - Implement changes; run builds/tests here, not in the master checkout.
 - Push and open PR:
     - `git push -u origin "$BRANCH"`
-    - Open a PR from `$BRANCH` into `main` (follow Conventional Commits in commit messages).
-- Keep in sync with `main` while working:
-    - `git fetch origin && git rebase origin/main` (inside the worktree). Avoid merge commits in feature branches.
+    - Open a PR from `$BRANCH` into `master` (follow Conventional Commits in commit messages).
+- Keep in sync with `master` while working:
+    - `git fetch origin && git rebase origin/master` (inside the worktree). Avoid merge commits in feature branches.
 - Clean up after merge:
     - `cd -` (leave the worktree dir)
     - `git worktree remove "$DIR"` (use `--force` only if necessary)
@@ -79,8 +79,8 @@
     - `git worktree prune`
 - Rules of thumb:
     - One worktree per user‑visible task/feature; name slugs short and specific (e.g., `qr-decode`, `fts-search`, `migrate-status-ui`).
-    - Do not commit directly to `main`; always work in a worktree branch and open a PR.
-    - Never place other Git repos under `./.worktrees/`; it is exclusively for worktrees.
+    - Do not commit directly to `master`; always work in a worktree branch and open a PR.
+    - Never place other Git repos under `./.worktree/`; it is exclusively for worktrees.
     - If you must switch tasks, create a new branch/worktree rather than reusing an existing one.
 
 Note: Avoid `cargo clippy -q -p ditox-cli -- -D` (can hang). Prefer `cargo clippy --all-targets -- -D warnings`.
