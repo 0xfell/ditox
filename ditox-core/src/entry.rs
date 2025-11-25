@@ -1,0 +1,220 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EntryType {
+    Text,
+    Image,
+}
+
+impl EntryType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EntryType::Text => "text",
+            EntryType::Image => "image",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "text" => Some(EntryType::Text),
+            "image" => Some(EntryType::Image),
+            _ => None,
+        }
+    }
+
+    pub fn short(&self) -> &'static str {
+        match self {
+            EntryType::Text => "txt",
+            EntryType::Image => "img",
+        }
+    }
+
+    /// Returns a single-character icon for the entry type
+    pub fn icon(&self) -> &'static str {
+        match self {
+            EntryType::Text => "T",
+            EntryType::Image => "I",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Entry {
+    pub id: String,
+    pub entry_type: EntryType,
+    pub content: String,
+    pub hash: String,
+    pub byte_size: usize,
+    pub created_at: DateTime<Utc>,
+    pub last_used: DateTime<Utc>,
+    pub favorite: bool,
+    /// Optional user annotation/note for this entry
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    /// Optional collection ID for organization
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collection_id: Option<String>,
+}
+
+impl Entry {
+    pub fn new_text(content: String) -> Self {
+        let hash = Self::compute_hash(content.as_bytes());
+        let byte_size = content.len();
+        let now = Utc::now();
+
+        Self {
+            id: Uuid::new_v4().to_string(),
+            entry_type: EntryType::Text,
+            content,
+            hash,
+            byte_size,
+            created_at: now,
+            last_used: now,
+            favorite: false,
+            notes: None,
+            collection_id: None,
+        }
+    }
+
+    pub fn new_image(path: String, size: usize, hash: String) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4().to_string(),
+            entry_type: EntryType::Image,
+            content: path,
+            hash,
+            byte_size: size,
+            created_at: now,
+            last_used: now,
+            favorite: false,
+            notes: None,
+            collection_id: None,
+        }
+    }
+
+    pub fn compute_hash(content: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(content);
+        let result = hasher.finalize();
+        hex::encode(result)
+    }
+
+    pub fn preview(&self, max_len: usize) -> String {
+        match self.entry_type {
+            EntryType::Text => {
+                let cleaned: String = self
+                    .content
+                    .chars()
+                    .filter(|c| !c.is_control() || c.is_whitespace())
+                    .map(|c| if c.is_whitespace() { ' ' } else { c })
+                    .collect();
+                let trimmed = cleaned.trim();
+                // Use char count, not byte length, to handle UTF-8 properly
+                let char_count = trimmed.chars().count();
+                if char_count > max_len {
+                    let truncated: String = trimmed
+                        .chars()
+                        .take(max_len.saturating_sub(3))
+                        .collect();
+                    format!("{}...", truncated)
+                } else {
+                    trimmed.to_string()
+                }
+            }
+            EntryType::Image => {
+                let path = std::path::Path::new(&self.content);
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("image")
+                    .to_string()
+            }
+        }
+    }
+
+    /// Returns content sanitized for safe TUI display.
+    /// Strips ANSI escape sequences and non-printable control characters.
+    pub fn sanitized_content(&self) -> String {
+        // Strip ANSI escape sequences: ESC [ ... (ending with letter)
+        let without_ansi = strip_ansi_escapes(&self.content);
+
+        // Filter out control characters except newline, tab, carriage return
+        without_ansi
+            .chars()
+            .filter(|c| !c.is_control() || matches!(c, '\n' | '\t' | '\r'))
+            .collect()
+    }
+
+    pub fn relative_time(&self) -> String {
+        let now = Utc::now();
+        let duration = now.signed_duration_since(self.created_at);
+
+        if duration.num_seconds() < 60 {
+            "now".to_string()
+        } else if duration.num_minutes() < 60 {
+            format!("{}m", duration.num_minutes())
+        } else if duration.num_hours() < 24 {
+            format!("{}h", duration.num_hours())
+        } else if duration.num_days() < 7 {
+            format!("{}d", duration.num_days())
+        } else {
+            format!("{}w", duration.num_weeks())
+        }
+    }
+
+    /// Detect and return the content type of this entry
+    #[allow(dead_code)]
+    pub fn detected_content_type(&self) -> crate::content_type::ContentType {
+        match self.entry_type {
+            EntryType::Text => crate::content_type::detect(&self.content),
+            EntryType::Image => crate::content_type::ContentType::Text, // Images are handled separately
+        }
+    }
+
+    /// Get a short label for the detected content type
+    #[allow(dead_code)]
+    pub fn content_type_label(&self) -> &'static str {
+        match self.entry_type {
+            EntryType::Text => self.detected_content_type().label(),
+            EntryType::Image => "img",
+        }
+    }
+}
+
+/// Strips ANSI escape sequences from a string.
+fn strip_ansi_escapes(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // ESC character - start of escape sequence
+            if chars.peek() == Some(&'[') {
+                chars.next(); // consume '['
+                // Skip until we hit a letter (end of CSI sequence)
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else if chars.peek() == Some(&']') {
+                // OSC sequence (ESC ] ... ST or BEL)
+                chars.next(); // consume ']'
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next == '\x07' || next == '\\' {
+                        break;
+                    }
+                }
+            }
+            // Skip other escape sequences
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
+}
