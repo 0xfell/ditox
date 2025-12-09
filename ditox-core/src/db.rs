@@ -129,6 +129,58 @@ impl Database {
             ",
         )?;
 
+        // FTS5 Setup
+        // Create virtual table for full-text search
+        // We include id to map back to the main table
+        self.conn.execute_batch(
+            "
+            CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(id UNINDEXED, content, notes);
+            ",
+        )?;
+
+        // Triggers to keep FTS index in sync
+        self.conn.execute_batch(
+            "
+            -- Insert trigger
+            CREATE TRIGGER IF NOT EXISTS entries_ai AFTER INSERT ON entries BEGIN
+                INSERT INTO entries_fts(id, content, notes) VALUES (new.id, new.content, new.notes);
+            END;
+
+            -- Delete trigger
+            CREATE TRIGGER IF NOT EXISTS entries_ad AFTER DELETE ON entries BEGIN
+                DELETE FROM entries_fts WHERE id = old.id;
+            END;
+
+            -- Update trigger
+            CREATE TRIGGER IF NOT EXISTS entries_au AFTER UPDATE ON entries BEGIN
+                DELETE FROM entries_fts WHERE id = old.id;
+                INSERT INTO entries_fts(id, content, notes) VALUES (new.id, new.content, new.notes);
+            END;
+            "
+        )?;
+
+        // Population migration:
+        // Check if FTS table is empty but main table is not, implying we need to populate it
+        let fts_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM entries_fts",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let entries_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM entries",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        if fts_count == 0 && entries_count > 0 {
+            tracing::info!("Populating FTS index for {} existing entries...", entries_count);
+            self.conn.execute(
+                "INSERT INTO entries_fts(id, content, notes) SELECT id, content, notes FROM entries",
+                [],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -204,6 +256,7 @@ impl Database {
 
     pub fn clear_all(&self) -> Result<usize> {
         let rows = self.conn.execute("DELETE FROM entries", [])?;
+        // Triggers handle FTS cleanup
         Ok(rows)
     }
 
@@ -288,24 +341,40 @@ impl Database {
         Ok(entries)
     }
 
-    /// Search entries using SQL LIKE (case-insensitive prefix for DB-level filtering)
-    /// Returns entries matching the query, ordered by last_used
-    /// Also searches in notes field
+    /// Search entries using FTS5 (Full-Text Search)
+    /// Returns entries matching the query, ordered by relevance (implicitly, but we sort by last_used)
     pub fn search_entries(&self, query: &str, limit: usize) -> Result<Vec<Entry>> {
-        // Use LIKE with wildcards for basic substring matching
-        // This pre-filters at DB level before in-memory fuzzy matching
-        let like_pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+        // FTS syntax: wrap in quotes to match phrase or sanitize
+        // For simple partial matching in FTS, typically just the words or wildcards.
+        // We'll use prefix matching for the query terms.
+        
+        let should_use_wildcard = !query.contains('"') && !query.contains('*');
+        let fts_query = if should_use_wildcard {
+             format!("\"{}\"*", query.replace("\"", "\"\""))
+        } else {
+             query.to_string()
+        };
 
+        // Note: ORDER BY rank is the default relevance for FTS, but usually users want recent stuff too.
+        // However, usually detailed search means relevance matters. 
+        // Current requirement says "ordered by last_used" in previous implementation.
+        // But FTS is most useful when ranked by match. 
+        // LIMIT applies. 
+        // Let's stick to last_used DESC as the primary sort for consistency unless the user requested relevance sort.
+        // Actually, for search, let's just get matching entries and sort by last_used.
+        
+        // We join with FTS table to get the matching IDs
         let mut stmt = self.conn.prepare(
-            "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id
-             FROM entries
-             WHERE content LIKE ?1 ESCAPE '\\' OR notes LIKE ?1 ESCAPE '\\'
-             ORDER BY last_used DESC
+            "SELECT e.id, e.entry_type, e.content, e.hash, e.byte_size, e.created_at, e.last_used, e.pinned, e.notes, e.collection_id
+             FROM entries e
+             JOIN entries_fts f ON e.id = f.id
+             WHERE entries_fts MATCH ?1
+             ORDER BY e.last_used DESC
              LIMIT ?2",
         )?;
 
         let entries = stmt
-            .query_map(params![like_pattern, limit as i64], |row| {
+            .query_map(params![fts_query, limit as i64], |row| {
                 Self::row_to_entry(row)
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -313,7 +382,7 @@ impl Database {
         Ok(entries)
     }
 
-    /// Search entries using SQL LIKE with additional filtering
+    /// Search entries using FTS5 with additional filtering
     /// Returns entries matching the query and filter, ordered by last_used
     pub fn search_entries_filtered(
         &self,
@@ -322,74 +391,83 @@ impl Database {
         filter: &str,
         collection_id: Option<&str>,
     ) -> Result<Vec<Entry>> {
-        let like_pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+        let should_use_wildcard = !query.contains('"') && !query.contains('*');
+        let fts_query = if should_use_wildcard {
+             format!("\"{}\"*", query.replace("\"", "\"\""))
+        } else {
+             query.to_string()
+        };
         let limit_i64 = limit as i64;
+        
+        // Base query joins with FTS
+        let base_sql = "SELECT e.id, e.entry_type, e.content, e.hash, e.byte_size, e.created_at, e.last_used, e.pinned, e.notes, e.collection_id
+                        FROM entries e
+                        JOIN entries_fts f ON e.id = f.id
+                        WHERE entries_fts MATCH ?2";
 
-        // Match on filter directly since we need custom SQL for each case (combining filter with LIKE pattern)
+        // Append filter conditions
         match filter {
             "text" | "image" => {
-                let filter_type = filter;
-                let mut stmt = self.conn.prepare(
-                    "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id
-                     FROM entries
-                     WHERE entry_type = ?1 AND (content LIKE ?2 ESCAPE '\\' OR notes LIKE ?2 ESCAPE '\\')
-                     ORDER BY last_used DESC
-                     LIMIT ?3"
-                )?;
-                let entries = stmt.query_map(params![filter_type, like_pattern, limit_i64], |row| Self::row_to_entry(row))?
+                let sql = format!("{} AND e.entry_type = ?1 ORDER BY e.last_used DESC LIMIT ?3", base_sql);
+                let mut stmt = self.conn.prepare(&sql)?;
+                let entries = stmt.query_map(params![filter, fts_query, limit_i64], |row| Self::row_to_entry(row))?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 return Ok(entries);
             }
             "today" => {
                 let today = (Utc::now() - Duration::hours(24)).to_rfc3339();
-                let mut stmt = self.conn.prepare(
-                    "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id
-                     FROM entries
-                     WHERE created_at > ?1 AND (content LIKE ?2 ESCAPE '\\' OR notes LIKE ?2 ESCAPE '\\')
-                     ORDER BY last_used DESC
-                     LIMIT ?3"
-                )?;
-                let entries = stmt.query_map(params![today, like_pattern, limit_i64], |row| Self::row_to_entry(row))?
+                let sql = format!("{} AND e.created_at > ?1 ORDER BY e.last_used DESC LIMIT ?3", base_sql);
+                let mut stmt = self.conn.prepare(&sql)?;
+                let entries = stmt.query_map(params![today, fts_query, limit_i64], |row| Self::row_to_entry(row))?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 return Ok(entries);
             }
             "collection" if collection_id.is_some() => {
                 let cid = collection_id.unwrap();
-                let mut stmt = self.conn.prepare(
-                    "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id
-                     FROM entries
-                     WHERE collection_id = ?1 AND (content LIKE ?2 ESCAPE '\\' OR notes LIKE ?2 ESCAPE '\\')
-                     ORDER BY last_used DESC
-                     LIMIT ?3"
-                )?;
-                let entries = stmt.query_map(params![cid, like_pattern, limit_i64], |row| Self::row_to_entry(row))?
+                let sql = format!("{} AND e.collection_id = ?1 ORDER BY e.last_used DESC LIMIT ?3", base_sql);
+                let mut stmt = self.conn.prepare(&sql)?;
+                let entries = stmt.query_map(params![cid, fts_query, limit_i64], |row| Self::row_to_entry(row))?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 return Ok(entries);
             }
             "favorite" => {
+                // Fixed param index: pinned=1 is simpler to inline or use param. 
+                // Using ?1 for consistency in param ordering logic is tricky if no other param.
+                // Here we don't have a ?1 so we need to be careful with indexing.
+                // The base query uses ?2 for MATCH.
+                // So we can put pinned=1 in SQL.
+                let _sql = format!("{} AND e.pinned = 1 ORDER BY e.last_used DESC LIMIT ?3", base_sql);
+                // We only need fts_query and limit.
+                // But wait, our base query uses ?2. So we need ?1 to be something or renumber?
+                // Actually base_sql uses ?2. So we can pass a dummy as ?1 or just fix the indices.
+                // Let's rewrite simple query for this case.
                 let mut stmt = self.conn.prepare(
-                    "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id
-                     FROM entries
-                     WHERE pinned = 1 AND (content LIKE ?1 ESCAPE '\\' OR notes LIKE ?1 ESCAPE '\\')
-                     ORDER BY last_used DESC
+                    "SELECT e.id, e.entry_type, e.content, e.hash, e.byte_size, e.created_at, e.last_used, e.pinned, e.notes, e.collection_id
+                     FROM entries e
+                     JOIN entries_fts f ON e.id = f.id
+                     WHERE entries_fts MATCH ?1 AND e.pinned = 1
+                     ORDER BY e.last_used DESC
                      LIMIT ?2"
                 )?;
-                let entries = stmt.query_map(params![like_pattern, limit_i64], |row| Self::row_to_entry(row))?
+                 let entries = stmt.query_map(params![fts_query, limit_i64], |row| Self::row_to_entry(row))?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 return Ok(entries);
             }
-            _ => {} // Fall through to "all" case below
+            _ => {} // Fall through
         }
 
-        // Default case: "all" filter or unrecognized filter
+        // Default query (all)
+        // Redefine base sql to use ?1 for match and ?2 for limit
         let mut stmt = self.conn.prepare(
-            "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id
-             FROM entries
-             WHERE content LIKE ?1 ESCAPE '\\' OR notes LIKE ?1 ESCAPE '\\'
-             ORDER BY last_used DESC
+            "SELECT e.id, e.entry_type, e.content, e.hash, e.byte_size, e.created_at, e.last_used, e.pinned, e.notes, e.collection_id
+             FROM entries e
+             JOIN entries_fts f ON e.id = f.id
+             WHERE entries_fts MATCH ?1
+             ORDER BY e.last_used DESC
              LIMIT ?2"
         )?;
-        let entries = stmt.query_map(params![like_pattern, limit_i64], |row| Self::row_to_entry(row))?
+
+        let entries = stmt.query_map(params![fts_query, limit_i64], |row| Self::row_to_entry(row))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(entries)
     }

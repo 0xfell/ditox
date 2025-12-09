@@ -955,6 +955,8 @@ pub enum Message {
 
     // Search
     SearchChanged(String),
+    PerformSearch(String),
+    SearchCompleted(std::result::Result<Vec<Entry>, String>),
 
     // Navigation
     MoveUp,
@@ -1020,7 +1022,7 @@ pub enum Message {
 }
 
 pub struct DitoxApp {
-    db: Database,
+    db: Arc<Mutex<Database>>,
     config: Config,
     search_query: String,
     selected_index: usize,
@@ -1044,6 +1046,7 @@ pub struct DitoxApp {
     image_cache: HashMap<String, iced_image::Handle>,
     /// Current scroll viewport for smart scrolling
     scroll_viewport: Option<scrollable::Viewport>,
+    is_searching: bool,
 }
 
 impl DitoxApp {
@@ -1088,7 +1091,7 @@ impl DitoxApp {
         ];
 
         let app = DitoxApp {
-            db,
+            db: Arc::new(Mutex::new(db)),
             config,
             search_query: String::new(),
             selected_index: 0,
@@ -1109,6 +1112,7 @@ impl DitoxApp {
             input_blocked_until: None,
             image_cache: HashMap::new(),
             scroll_viewport: None,
+            is_searching: false,
         };
 
         let initial_task = window::oldest().and_then(move |id| {
@@ -1137,7 +1141,7 @@ impl DitoxApp {
                         EntryType::Image => Clipboard::set_image(&entry.content),
                     };
                     if result.is_ok() {
-                        let _ = self.db.touch(&entry.id);
+                        let _ = self.db.lock().unwrap().touch(&entry.id);
                         tracing::info!("Copied: {}", entry.preview(30));
                     }
                 }
@@ -1167,7 +1171,7 @@ impl DitoxApp {
                 // Actually delete the entry (after confirmation for favorites)
                 let was_in_preview = matches!(self.view_mode, ViewMode::ImagePreview(_));
                 let was_in_confirm = matches!(self.view_mode, ViewMode::ConfirmDelete(_));
-                let _ = self.db.delete(&id);
+                let _ = self.db.lock().unwrap().delete(&id);
                 self.refresh_entries();
                 // Close modal after deletion
                 if was_in_preview || was_in_confirm {
@@ -1186,7 +1190,7 @@ impl DitoxApp {
 
             Message::ToggleFavorite(id) => {
                 if self.view_mode == ViewMode::Main {
-                    let _ = self.db.toggle_favorite(&id);
+                    let _ = self.db.lock().unwrap().toggle_favorite(&id);
                     self.refresh_entries();
                 }
             }
@@ -1204,13 +1208,61 @@ impl DitoxApp {
                 self.search_query = query.clone();
                 if query.is_empty() {
                     self.refresh_entries();
-                } else {
-                    let all_entries = self.db.get_all(50).unwrap_or_default();
-                    self.entries = all_entries
-                        .into_iter()
-                        .filter(|e| e.content.to_lowercase().contains(&query.to_lowercase()))
-                        .collect();
-                    self.selected_index = 0;
+                    return Task::none();
+                } 
+                
+                // Debounce: wait 20ms (virtually instant but handles key mash)
+                // We pass the query content so we can verify if it's still current when the task completes
+                let query_to_search = query.clone();
+                return Task::perform(
+                    async move {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    },
+                    move |_| Message::PerformSearch(query_to_search),
+                );
+            }
+
+            Message::PerformSearch(query) => {
+                // Only search if the query is still the current one (handles debouncing)
+                if query == self.search_query {
+                     if query.is_empty() {
+                        self.refresh_entries();
+                        return Task::none();
+                     }
+
+                     self.is_searching = true;
+
+                     let db = self.db.clone();
+                     let filter = self.active_tab_filter().clone();
+                     let (filter_str_ref, collection_id_ref) = filter.db_filter();
+                     let filter_str = filter_str_ref.to_string();
+                     let collection_id = collection_id_ref.map(|s| s.to_string());
+                     
+                     // Offload to background thread
+                     return Task::perform(
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                let db = db.lock().unwrap();
+                                db.search_entries_filtered(&query, 50, &filter_str, collection_id.as_deref())
+                                    .map_err(|e| e.to_string())
+                            }).await.unwrap()
+                        },
+                        Message::SearchCompleted
+                     );
+                }
+
+            }
+
+            Message::SearchCompleted(result) => {
+                 self.is_searching = false;
+                 match result {
+                    Ok(results) => {
+                        self.entries = results;
+                        self.selected_index = 0;
+                    }
+                    Err(e) => {
+                        tracing::error!("Search failed: {}", e);
+                    }
                 }
             }
 
@@ -1323,6 +1375,10 @@ impl DitoxApp {
                         .chain(window::resize(id, Size::new(ws.width, ws.height)))
                         .chain(window::move_to(id, Point::new(ws.x, ws.y)))
                         .chain(window::gain_focus(id))
+                        .chain(operation::snap_to(
+                            ENTRY_LIST_ID,
+                            scrollable::RelativeOffset { x: 0.0, y: 0.0 },
+                        ))
                 })
                 .chain(delayed_force_focus())  // Call again after Iced finishes
                 .chain(delayed_focus_search());
@@ -1485,7 +1541,7 @@ impl DitoxApp {
                     if let Some(entry) = self.entries.iter().find(|e| e.id == *entry_id) {
                         let result = Clipboard::set_image(&entry.content);
                         if result.is_ok() {
-                            let _ = self.db.touch(&entry.id);
+                            let _ = self.db.lock().unwrap().touch(&entry.id);
                             tracing::info!("Copied image: {}", entry.preview(30));
                         }
                     }
@@ -1517,7 +1573,7 @@ impl DitoxApp {
         let filter = self.active_tab_filter().clone();
         let (filter_str, collection_id) = filter.db_filter();
         let offset = self.current_page * PAGE_SIZE;
-        self.entries = self.db.get_page_filtered(offset, PAGE_SIZE, filter_str, collection_id).unwrap_or_default();
+        self.entries = self.db.lock().unwrap().get_page_filtered(offset, PAGE_SIZE, filter_str, collection_id).unwrap_or_default();
         self.selected_index = 0;
     }
 
@@ -1871,6 +1927,12 @@ impl DitoxApp {
             String::new()
         };
 
+        let search_indicator: Element<'_, Message> = if self.is_searching {
+            text("Searching...").size(11).color(colors::TEXT_MUTED).into()
+        } else {
+            Space::new().width(0).height(0).into()
+        };
+
         // Status badge - using icon
         let status_badge = container(icon(icons::CIRCLE_FILL).size(8).color(colors::SUCCESS))
             .padding([0, 4]);
@@ -1880,6 +1942,8 @@ impl DitoxApp {
                 text(count).size(11).color(colors::ACCENT),
                 text(" entries").size(11).color(colors::TEXT_MUTED),
                 text(page_info).size(11).color(colors::TEXT_MUTED),
+                Space::new().width(10),
+                search_indicator,
                 Space::new().width(Length::Fill),
                 status_badge,
                 text("Ctrl+Shift+V").size(10).color(colors::TEXT_MUTED),
@@ -2314,7 +2378,7 @@ impl DitoxApp {
 
         if self.search_query.is_empty() {
              // Normal pagination
-             if let Ok(entries) = self.db.get_page_filtered(
+             if let Ok(entries) = self.db.lock().unwrap().get_page_filtered(
                 self.current_page * self.config.general.max_entries,
                 self.config.general.max_entries,
                 filter,
@@ -2323,12 +2387,12 @@ impl DitoxApp {
                 self.entries = entries;
             }
             // Update counts 
-             if let Ok(count) = self.db.count_filtered(filter, collection_id) {
+             if let Ok(count) = self.db.lock().unwrap().count_filtered(filter, collection_id) {
                 self.total_count = count;
             }
         } else {
             // Search mode - use new search_entries_filtered
-             match self.db.search_entries_filtered(
+             match self.db.lock().unwrap().search_entries_filtered(
                 &self.search_query, 
                 self.config.general.max_entries,
                 filter,
