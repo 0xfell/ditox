@@ -3,11 +3,16 @@
 , pkg-config
 , openssl
 , wayland
+, glib
+, cairo
+, pango
+, gdk-pixbuf
+, gtk3
 }:
 
 rustPlatform.buildRustPackage rec {
   pname = "ditox";
-  version = "0.1.12";
+  version = "0.2.2";
 
   src = lib.cleanSource ./..;
 
@@ -16,7 +21,7 @@ rustPlatform.buildRustPackage rec {
   };
 
   nativeBuildInputs = [ pkg-config ];
-  buildInputs = [ openssl wayland ];
+  buildInputs = [ openssl wayland glib cairo pango gdk-pixbuf gtk3 ];
 
   # Skip tests for now
   doCheck = false;
