@@ -47,35 +47,32 @@ mod platform {
     use super::*;
     use std::io::Write;
     use std::process::{Command, Stdio};
-    use wl_clipboard_rs::paste::{
-        get_contents, ClipboardType, Error as PasteError, MimeType as PasteMimeType, Seat,
-    };
 
     impl Clipboard {
-        /// Get current clipboard text content
+        /// Get current clipboard text content using wl-paste CLI
         pub fn get_text() -> Result<Option<String>> {
-            let result = get_contents(
-                ClipboardType::Regular,
-                Seat::Unspecified,
-                PasteMimeType::Text,
-            );
+            let output = Command::new("wl-paste")
+                .arg("--no-newline")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .output();
 
-            match result {
-                Ok((mut reader, _)) => {
-                    let mut content = String::new();
-                    std::io::Read::read_to_string(&mut reader, &mut content)?;
+            match output {
+                Ok(output) => {
+                    if !output.status.success() {
+                        // Exit code 1 usually means clipboard is empty
+                        return Ok(None);
+                    }
 
+                    let content = String::from_utf8_lossy(&output.stdout).to_string();
                     if content.is_empty() {
                         Ok(None)
                     } else {
                         Ok(Some(content))
                     }
                 }
-                Err(PasteError::NoSeats)
-                | Err(PasteError::ClipboardEmpty)
-                | Err(PasteError::NoMimeType) => Ok(None),
                 Err(e) => Err(DitoxError::Clipboard(format!(
-                    "Failed to get clipboard: {}",
+                    "Failed to run wl-paste: {}",
                     e
                 ))),
             }
@@ -94,23 +91,26 @@ mod platform {
             ];
 
             for mime in &image_mimes {
-                let result = get_contents(
-                    ClipboardType::Regular,
-                    Seat::Unspecified,
-                    PasteMimeType::Specific(mime),
-                );
+                let output = Command::new("wl-paste")
+                    .arg("--type")
+                    .arg(mime)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .output();
 
-                match result {
-                    Ok((mut reader, mime_type)) => {
-                        let mut data = Vec::new();
-                        std::io::Read::read_to_end(&mut reader, &mut data)?;
+                match output {
+                    Ok(output) => {
+                        if !output.status.success() {
+                            continue;
+                        }
 
+                        let data = output.stdout;
                         if data.is_empty() {
                             continue;
                         }
 
                         let hash = Self::hash(&data);
-                        let ext = Self::mime_to_extension(&mime_type);
+                        let ext = Self::mime_to_extension(mime);
                         let timestamp = chrono::Utc::now().timestamp();
                         let filename = format!("{}_{}.{}", timestamp, &hash[..8], ext);
                         let path = save_dir.join(&filename);
@@ -124,17 +124,7 @@ mod platform {
 
                         return Ok(Some((path_str, size, hash)));
                     }
-                    Err(PasteError::NoSeats)
-                    | Err(PasteError::ClipboardEmpty)
-                    | Err(PasteError::NoMimeType) => {
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(DitoxError::Clipboard(format!(
-                            "Failed to get clipboard: {}",
-                            e
-                        )))
-                    }
+                    Err(_) => continue,
                 }
             }
 
