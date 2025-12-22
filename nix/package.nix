@@ -8,11 +8,14 @@
 , pango
 , gdk-pixbuf
 , gtk3
+, xdotool
+, libxkbcommon
+, libappindicator-gtk3
 }:
 
 rustPlatform.buildRustPackage rec {
   pname = "ditox";
-  version = "0.2.2";
+  version = "0.2.3";
 
   src = lib.cleanSource ./..;
 
@@ -21,7 +24,7 @@ rustPlatform.buildRustPackage rec {
   };
 
   nativeBuildInputs = [ pkg-config ];
-  buildInputs = [ openssl wayland glib cairo pango gdk-pixbuf gtk3 ];
+  buildInputs = [ openssl wayland glib cairo pango gdk-pixbuf gtk3 xdotool libxkbcommon libappindicator-gtk3 ];
 
   # Skip tests for now
   doCheck = false;
