@@ -44,11 +44,18 @@ fn create_picker(
 
     let mut picker = if let Some((w, h)) = override_font_size {
         tracing::info!("Using configured font size: {}x{}", w, h);
+        // `from_fontsize` is deprecated in ratatui-image 10 in favor of `halfblocks`,
+        // but it's the only public API that accepts a caller-supplied font size,
+        // which we need for kitty/sixel when stdio query is unavailable.
+        #[allow(deprecated)]
         Picker::from_fontsize((w, h))
     } else {
         match Picker::from_query_stdio() {
             Ok(p) => p,
-            Err(_) => Picker::from_fontsize((9, 18)),
+            Err(_) => {
+                #[allow(deprecated)]
+                Picker::from_fontsize((9, 18))
+            }
         }
     };
 
@@ -178,7 +185,9 @@ fn run_loop<B: Backend>(
             *last_refresh = Instant::now();
         }
 
-        terminal.draw(|f| layout::draw(f, app, theme, cache, picker, loader, keybindings))?;
+        terminal
+            .draw(|f| layout::draw(f, app, theme, cache, picker, loader, keybindings))
+            .map_err(|e| ditox_core::error::DitoxError::Io(std::io::Error::other(e.to_string())))?;
         // Note: layout::draw updates app.terminal_height for page navigation
 
         // Poll with short timeout to allow for responsive UI and auto-refresh

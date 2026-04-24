@@ -1,4 +1,4 @@
-﻿//! Ditox iced GUI application - Modern redesign
+//! Ditox iced GUI application - Modern redesign
 
 use ditox_core::app::TabFilter;
 use ditox_core::{Clipboard, Config, Database, Entry, EntryType, Result, Watcher};
@@ -527,6 +527,7 @@ impl WindowState {
 // ============================================================================
 // Modern color palette - Sleek dark theme with teal accents
 // ============================================================================
+#[allow(clippy::approx_constant)] // values are colour channels, not math constants
 mod colors {
     use iced::Color;
 

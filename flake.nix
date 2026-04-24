@@ -17,6 +17,7 @@
           inherit system;
           overlays = [ rust-overlay.overlays.default ];
         };
+        lib = pkgs.lib;
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" "rust-analyzer" ];
         };
@@ -29,13 +30,56 @@
         };
 
         devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
+          nativeBuildInputs = with pkgs; [
             rustToolchain
             pkg-config
-            openssl
-            # For wl-clipboard-rs
-            wayland
           ];
+
+          buildInputs = with pkgs; [
+            openssl
+            # Clipboard
+            wl-clipboard
+            wayland
+            libxkbcommon
+            # Tray (StatusNotifierItem via libappindicator/GTK)
+            glib
+            gdk-pixbuf
+            cairo
+            pango
+            atk
+            gtk3
+            libappindicator-gtk3
+            libdbusmenu-gtk3
+            xdotool        # libxdo for muda/tray-icon
+            # Iced / winit runtime (wgpu backend + tiny-skia fallback)
+            vulkan-loader
+            libGL
+            fontconfig
+            freetype
+            expat
+            chafa          # ratatui-image 10+ terminal graphics
+            # X11 fallback (winit)
+            xorg.libX11
+            xorg.libXcursor
+            xorg.libXrandr
+            xorg.libXi
+            xorg.libxcb
+          ];
+
+          # Iced/winit dlopen these at runtime; rpath them in
+          LD_LIBRARY_PATH = lib.makeLibraryPath (with pkgs; [
+            vulkan-loader
+            libGL
+            wayland
+            libxkbcommon
+            fontconfig
+            freetype
+            xorg.libX11
+            xorg.libXcursor
+            xorg.libXrandr
+            xorg.libXi
+            xorg.libxcb
+          ]);
 
           RUST_BACKTRACE = 1;
           RUST_LOG = "ditox=debug";
