@@ -91,6 +91,22 @@ pub enum Commands {
         json: bool,
     },
 
+    /// Reconcile the image store with the database.
+    ///
+    /// Removes orphan files (on disk but not in DB) and dangling rows
+    /// (in DB but blob missing). With `--fix-hashes` also verifies that
+    /// each referenced file's SHA-256 matches the DB hash and quarantines
+    /// mismatches under `images/.quarantine/` for manual review.
+    Repair {
+        /// Report what would be done without touching anything.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Additionally verify and quarantine hash-mismatched files.
+        #[arg(long)]
+        fix_hashes: bool,
+    },
+
     /// Manage collections
     #[command(subcommand)]
     Collection(CollectionCommands),

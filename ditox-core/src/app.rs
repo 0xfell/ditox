@@ -566,7 +566,14 @@ impl App {
                     self.set_message(format!("Copied: {}", preview));
                 }
                 crate::entry::EntryType::Image => {
-                    Clipboard::set_image(&entry.content)?;
+                    // `entry.content` is the content-addressable hash now;
+                    // derive the real path before handing it to the OS.
+                    let path = entry.image_path().ok_or_else(|| {
+                        crate::error::DitoxError::Other(
+                            "image entry missing extension".into(),
+                        )
+                    })?;
+                    Clipboard::set_image(&path.to_string_lossy())?;
                     self.set_message(format!("Copied image: {}", preview));
                 }
             }
@@ -936,7 +943,12 @@ impl App {
                     self.set_message(format!("Slot {}: {}", slot, preview));
                 }
                 crate::entry::EntryType::Image => {
-                    Clipboard::set_image(&entry.content)?;
+                    let path = entry.image_path().ok_or_else(|| {
+                        crate::error::DitoxError::Other(
+                            "image entry missing extension".into(),
+                        )
+                    })?;
+                    Clipboard::set_image(&path.to_string_lossy())?;
                     self.set_message(format!("Slot {} (image): {}", slot, preview));
                 }
             }

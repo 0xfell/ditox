@@ -215,7 +215,7 @@ Uses conditional compilation (`#[cfg(unix)]` / `#[cfg(windows)]`):
 
 **Deduplication**: All entries are SHA256 hashed. Watcher calls `db.exists_by_hash()` before inserting.
 
-**Image handling**: Images saved to data dir `/images/` with format `{timestamp}_{hash_prefix}.{ext}`.
+**Image handling**: Content-addressed. Images saved to `/images/{hash[..2]}/{hash}.{ext}` (schema v1+). The DB `content` column stores the bare hash; `Entry::image_path()` resolves it to the absolute path. Writes are atomic (`tmp-write → fsync → rename → fsync parent`). Deletes use a persistent `pending_blob_prunes` queue so a crash between row-delete and file-delete is self-healing on the next open. See `docs/notes/image-storage.md` for the full protocol and `ditox repair` for reconciliation.
 
 ## Test Structure
 

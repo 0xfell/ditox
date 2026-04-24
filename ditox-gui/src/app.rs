@@ -1156,7 +1156,12 @@ impl DitoxApp {
                 if let Some(entry) = self.entries.get(index) {
                     let result = match entry.entry_type {
                         EntryType::Text => Clipboard::set_text(&entry.content),
-                        EntryType::Image => Clipboard::set_image(&entry.content),
+                        EntryType::Image => match entry.image_path() {
+                            Some(p) => Clipboard::set_image(&p.to_string_lossy()),
+                            None => Err(ditox_core::DitoxError::Other(
+                                "image entry missing extension".into(),
+                            )),
+                        },
                     };
                     if result.is_ok() {
                         let _ = self.db.lock().unwrap().touch(&entry.id);
@@ -1571,7 +1576,12 @@ impl DitoxApp {
             Message::CopyFromPreview => {
                 if let ViewMode::ImagePreview(ref entry_id) = self.view_mode {
                     if let Some(entry) = self.entries.iter().find(|e| e.id == *entry_id) {
-                        let result = Clipboard::set_image(&entry.content);
+                        let result = match entry.image_path() {
+                            Some(p) => Clipboard::set_image(&p.to_string_lossy()),
+                            None => Err(ditox_core::DitoxError::Other(
+                                "image entry missing extension".into(),
+                            )),
+                        };
                         if result.is_ok() {
                             let _ = self.db.lock().unwrap().touch(&entry.id);
                             tracing::info!("Copied image: {}", entry.preview(30));
@@ -1814,8 +1824,14 @@ impl DitoxApp {
         // Build entry content based on type
         let entry_content: Row<'_, Message> = match entry.entry_type {
             EntryType::Image => {
-                // Image entry: thumbnail + filename
-                let thumbnail = self.view_thumbnail(&entry.content, 40, 40);
+                // Image entry: thumbnail + filename. `entry.content` is the
+                // content-addressable hash now; derive the real path for
+                // iced's image loader.
+                let path_string = entry
+                    .image_path()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let thumbnail = self.view_thumbnail(&path_string, 40, 40);
                 let filename = text(entry.preview(30))
                     .size(12)
                     .color(if is_selected {
@@ -2122,13 +2138,13 @@ impl DitoxApp {
         let entry = self.entries.iter().find(|e| e.id == entry_id);
 
         let content = if let Some(entry) = entry {
-            let path = &entry.content;
-            let path_buf = std::path::Path::new(path);
+            let path_buf = entry.image_path().unwrap_or_default();
+            let path = path_buf.to_string_lossy().into_owned();
 
             // Image display
             let image_display: Element<'_, Message> = if path_buf.exists() {
                 container(
-                    iced_image(iced_image::Handle::from_path(path))
+                    iced_image(iced_image::Handle::from_path(&path))
                         .content_fit(ContentFit::Contain)
                         .width(Length::Fill)
                         .height(Length::Fixed(280.0)),
@@ -2154,11 +2170,9 @@ impl DitoxApp {
                 .into()
             };
 
-            // Metadata
-            let filename = std::path::Path::new(&entry.content)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("Unknown");
+            // Metadata — show the synthesized filename (image-<hash8>.<ext>).
+            // Owned String to avoid a borrow that outlives the function body.
+            let filename: String = entry.preview(40);
 
             let size_str = if entry.byte_size < 1024 {
                 format!("{} B", entry.byte_size)
@@ -2497,24 +2511,26 @@ impl DitoxApp {
         self.update_image_cache();
     }
 
-    /// Update image cache for currently visible entries
+    /// Update image cache for currently visible entries. The cache is keyed
+    /// by the resolved blob path (not the hash), because iced's `Handle` is
+    /// path-based — we need to match how we render thumbnails.
     fn update_image_cache(&mut self) {
-        // Collect paths we need
-        let current_paths: std::collections::HashSet<String> = self.entries
+        let current_paths: std::collections::HashSet<String> = self
+            .entries
             .iter()
             .filter(|e| e.entry_type == EntryType::Image)
-            .map(|e| e.content.clone())
+            .filter_map(|e| e.image_path().map(|p| p.to_string_lossy().into_owned()))
             .collect();
 
-        // Remove entries no longer needed
-        self.image_cache.retain(|path, _| current_paths.contains(path));
+        self.image_cache
+            .retain(|path, _| current_paths.contains(path));
 
-        // Add new entries
         for path in current_paths {
             if !self.image_cache.contains_key(&path) {
                 let path_buf = std::path::Path::new(&path);
                 if path_buf.exists() {
-                    self.image_cache.insert(path.clone(), iced_image::Handle::from_path(&path));
+                    self.image_cache
+                        .insert(path.clone(), iced_image::Handle::from_path(&path));
                 }
             }
         }

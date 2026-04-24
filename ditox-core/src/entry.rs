@@ -57,6 +57,11 @@ pub struct Entry {
     /// Optional collection ID for organization
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collection_id: Option<String>,
+    /// For image entries: the file extension ("png", "jpg", …). For text
+    /// entries this is `None`. The on-disk path is derived from
+    /// `(hash, image_extension)` — see `Database::image_path`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_extension: Option<String>,
 }
 
 impl Entry {
@@ -76,15 +81,21 @@ impl Entry {
             favorite: false,
             notes: None,
             collection_id: None,
+            image_extension: None,
         }
     }
 
-    pub fn new_image(path: String, size: usize, hash: String) -> Self {
+    /// Construct an image entry. `hash` is the SHA-256 of the image bytes and
+    /// uniquely identifies the on-disk blob; `extension` is a bare lowercase
+    /// extension like "png" or "jpg" (no leading dot). The DB `content`
+    /// column stores the bare hash and the path is derived — never hand the
+    /// caller a filesystem path here.
+    pub fn new_image(hash: String, size: usize, extension: String) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4().to_string(),
             entry_type: EntryType::Image,
-            content: path,
+            content: hash.clone(),
             hash,
             byte_size: size,
             created_at: now,
@@ -92,7 +103,19 @@ impl Entry {
             favorite: false,
             notes: None,
             collection_id: None,
+            image_extension: Some(extension),
         }
+    }
+
+    /// For image entries, resolve the absolute on-disk path of the backing
+    /// blob. Returns `None` for non-image entries or if the data directory
+    /// can't be resolved.
+    pub fn image_path(&self) -> Option<std::path::PathBuf> {
+        if self.entry_type != EntryType::Image {
+            return None;
+        }
+        let ext = self.image_extension.as_deref().unwrap_or("png");
+        crate::db::Database::image_path(&self.hash, ext).ok()
     }
 
     pub fn compute_hash(content: &[u8]) -> String {
@@ -125,11 +148,14 @@ impl Entry {
                 }
             }
             EntryType::Image => {
-                let path = std::path::Path::new(&self.content);
-                path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("image")
-                    .to_string()
+                // `content` is the content-addressable hash; show a short,
+                // stable label that doesn't leak implementation details.
+                let ext = self
+                    .image_extension
+                    .as_deref()
+                    .unwrap_or("png");
+                let short = self.content.chars().take(8).collect::<String>();
+                format!("image-{}.{}", short, ext)
             }
         }
     }

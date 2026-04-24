@@ -16,6 +16,7 @@ fn create_entry(id: &str, content: &str) -> Entry {
         favorite: false,
         notes: None,
         collection_id: None,
+        image_extension: None,
     }
 }
 

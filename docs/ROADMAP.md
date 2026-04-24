@@ -6,7 +6,7 @@
 
 | Category | Count |
 |----------|-------|
-| Completed | 10 |
+| Completed | 11 |
 | In Progress | 0 |
 | Planned | 0 |
 
@@ -28,6 +28,7 @@
 
 | Task | Date | Description |
 |------|------|-------------|
+| [Image Storage Bug Fix](tasks/completed/011-image-storage-bug.md) | 2026-04-25 | Content-addressed image store, refcount prune queue, schema v1 migration, `ditox repair` command. Fixes 4 disk-leak bugs. |
 | [Linux GUI](tasks/completed/010-linux-gui.md) | 2026-04-24 | Cross-platform `ditox-gui` (Wayland/X11) with tray, `--toggle` IPC, XDG autostart |
 | [Delete Confirmation in TUI](tasks/completed/009-delete-confirmation-tui.md) | 2025-12-02 | Add confirmation dialogs for delete operations (`d` and `D`) |
 | [TUI Pagination](tasks/completed/005-tui-pagination.md) | 2025-11-27 | Lazy loading & pagination for 126x faster startup, 500x memory reduction |
@@ -70,6 +71,7 @@ pagination, notes, stats, collections.
 - `ditox status` — Show status
 - `ditox stats` — Show usage statistics
 - `ditox collection …` — Manage collections
+- `ditox repair [--dry-run] [--fix-hashes]` — Reconcile image store with DB
 
 **GUI CLI (`ditox-gui`):** `--toggle`, `--show`, `--hide`, `--quit`, `--help`,
 `--version`.

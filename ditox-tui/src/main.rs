@@ -28,7 +28,7 @@ fn run() -> Result<()> {
 
     let cli = Cli::parse();
     let config = Config::load()?;
-    let db = Database::open()?;
+    let mut db = Database::open()?;
     db.init_schema()?;
 
     match cli.command {
@@ -42,12 +42,16 @@ fn run() -> Result<()> {
         Some(Commands::Get { target, json }) => cmd_get(&db, &target, json),
         Some(Commands::Search { query, limit, json }) => cmd_search(&db, &query, limit, json),
         Some(Commands::Copy { target }) => cmd_copy(&db, &target),
-        Some(Commands::Delete { target }) => cmd_delete(&db, &target),
+        Some(Commands::Delete { target }) => cmd_delete(&mut db, &target),
         Some(Commands::Favorite { target }) => cmd_favorite(&db, &target),
-        Some(Commands::Clear { confirm }) => cmd_clear(&db, confirm),
+        Some(Commands::Clear { confirm }) => cmd_clear(&mut db, confirm),
         Some(Commands::Count) => cmd_count(&db),
         Some(Commands::Status) => cmd_status(&db),
         Some(Commands::Stats { json }) => cmd_stats(&db, json),
+        Some(Commands::Repair {
+            dry_run,
+            fix_hashes,
+        }) => cmd_repair(&mut db, dry_run, fix_hashes),
         Some(Commands::Collection(subcmd)) => cmd_collection(&db, subcmd),
     }
 }
@@ -110,7 +114,10 @@ fn cmd_copy(db: &Database, target: &str) -> Result<()> {
                     println!("Copied: {}", entry.preview(50));
                 }
                 EntryType::Image => {
-                    Clipboard::set_image(&entry.content)?;
+                    let path = entry.image_path().ok_or_else(|| {
+                        DitoxError::Other("image entry missing extension".into())
+                    })?;
+                    Clipboard::set_image(&path.to_string_lossy())?;
                     println!("Copied image: {}", entry.preview(50));
                 }
             }
@@ -122,7 +129,7 @@ fn cmd_copy(db: &Database, target: &str) -> Result<()> {
     }
 }
 
-fn cmd_clear(db: &Database, confirm: bool) -> Result<()> {
+fn cmd_clear(db: &mut Database, confirm: bool) -> Result<()> {
     if !confirm {
         print!("Clear all clipboard history? [y/N] ");
         use std::io::Write;
@@ -137,19 +144,12 @@ fn cmd_clear(db: &Database, confirm: bool) -> Result<()> {
         }
     }
 
+    // `clear_all` queues every image blob for pruning inside the same SQL
+    // transaction and then drains the queue, so we don't need (and must not
+    // do) a separate `remove_dir_all` — that would clobber pinned images or
+    // the quarantine directory managed by `ditox repair`.
     let count = db.clear_all()?;
     println!("Cleared {} entries.", count);
-
-    // Also clear images directory
-    if let Ok(images_dir) = Database::get_images_dir() {
-        if images_dir.exists() {
-            if let Err(e) = std::fs::remove_dir_all(&images_dir) {
-                eprintln!("Warning: Could not clear images directory: {}", e);
-            } else {
-                std::fs::create_dir_all(&images_dir)?;
-            }
-        }
-    }
 
     Ok(())
 }
@@ -266,7 +266,7 @@ fn cmd_search(db: &Database, query: &str, limit: usize, json: bool) -> Result<()
     Ok(())
 }
 
-fn cmd_delete(db: &Database, target: &str) -> Result<()> {
+fn cmd_delete(db: &mut Database, target: &str) -> Result<()> {
     let entry = resolve_target(db, target)?;
 
     match entry {
@@ -274,11 +274,10 @@ fn cmd_delete(db: &Database, target: &str) -> Result<()> {
             let preview = entry.preview(30);
             let id = entry.id.clone();
 
-            // If it's an image, also delete the image file
-            if entry.entry_type == EntryType::Image {
-                let _ = std::fs::remove_file(&entry.content); // Ignore errors
-            }
-
+            // `Database::delete` handles the blob cleanup via the pending
+            // prune queue; don't unlink by hand here (doing so would race
+            // with the queue drain and could delete an unrelated blob if
+            // hashes ever collided).
             db.delete(&id)?;
             println!("Deleted: {}", preview);
             Ok(())
@@ -310,6 +309,121 @@ fn cmd_favorite(db: &Database, target: &str) -> Result<()> {
 fn cmd_count(db: &Database) -> Result<()> {
     let count = db.count()?;
     println!("{}", count);
+    Ok(())
+}
+
+/// Reconcile the image store with the database. See the `Repair` variant in
+/// cli.rs for user-facing docs. Exit code is 0 on success (even if fixes
+/// were applied); callers distinguish dry-run vs fix via flags, not exit.
+fn cmd_repair(db: &mut Database, dry_run: bool, fix_hashes: bool) -> Result<()> {
+    use std::collections::HashSet;
+
+    let mode = if dry_run { "[dry-run] " } else { "" };
+
+    // 1. Dangling rows: DB says "image" but the blob is gone.
+    let rows = db.image_rows_with_paths()?;
+    let mut dangling: Vec<(String, String)> = Vec::new(); // (id, preview)
+    for (id, hash, ext, path) in &rows {
+        if !path.exists() {
+            dangling.push((id.clone(), format!("{}.{}", &hash[..8.min(hash.len())], ext)));
+        }
+    }
+
+    // 2. Orphan files: on disk but no live row points at them.
+    let referenced: HashSet<(String, String)> =
+        db.referenced_image_blobs()?.into_iter().collect();
+    let files = db.scan_image_files()?;
+    let mut orphans: Vec<std::path::PathBuf> = Vec::new();
+    for f in &files {
+        let stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let ext = f.extension().and_then(|s| s.to_str()).unwrap_or("");
+        let key = (stem.to_string(), ext.to_string());
+        if !referenced.contains(&key) {
+            orphans.push(f.clone());
+        }
+    }
+
+    // 3. (Optional) Hash verification for referenced files.
+    let mut mismatched: Vec<(String, String, String, std::path::PathBuf, String)> = Vec::new();
+    // Each entry: (id, db_hash, ext, path, actual_hash)
+    if fix_hashes {
+        for (id, hash, ext, path) in &rows {
+            if !path.exists() {
+                continue; // dangling, handled above
+            }
+            let bytes = match std::fs::read(path) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("warn: could not read {}: {}", path.display(), e);
+                    continue;
+                }
+            };
+            let actual = Clipboard::hash(&bytes);
+            if &actual != hash {
+                mismatched.push((id.clone(), hash.clone(), ext.clone(), path.clone(), actual));
+            }
+        }
+    }
+
+    println!("{mode}Repair report:");
+    println!("  dangling rows:  {}", dangling.len());
+    println!("  orphan files:   {}", orphans.len());
+    if fix_hashes {
+        println!("  hash mismatches:{}", mismatched.len());
+    }
+
+    if dry_run {
+        for (id, preview) in &dangling {
+            println!("  would delete dangling row {} ({})", id, preview);
+        }
+        for p in &orphans {
+            println!("  would remove orphan file {}", p.display());
+        }
+        for (id, db_hash, _, path, actual) in &mismatched {
+            println!(
+                "  would quarantine {} (db={}, actual={})",
+                path.display(),
+                &db_hash[..8.min(db_hash.len())],
+                &actual[..8.min(actual.len())],
+            );
+            let _ = id;
+        }
+        return Ok(());
+    }
+
+    // Apply.
+    for (id, _) in &dangling {
+        let _ = db.delete_dangling_row(id);
+    }
+    for p in &orphans {
+        if let Err(e) = std::fs::remove_file(p) {
+            eprintln!("warn: could not remove {}: {}", p.display(), e);
+        }
+    }
+    if fix_hashes {
+        for (_id, db_hash, ext, path, actual) in &mismatched {
+            match Database::quarantine_file(path, db_hash, actual, ext) {
+                Ok(dest) => println!("  quarantined {} -> {}", path.display(), dest.display()),
+                Err(e) => eprintln!(
+                    "warn: could not quarantine {}: {}",
+                    path.display(),
+                    e
+                ),
+            }
+        }
+    }
+
+    println!(
+        "{mode}applied: {} dangling rows deleted, {} orphan files removed{}",
+        dangling.len(),
+        orphans.len(),
+        if fix_hashes {
+            format!(", {} files quarantined", mismatched.len())
+        } else {
+            String::new()
+        }
+    );
+
     Ok(())
 }
 

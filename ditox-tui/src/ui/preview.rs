@@ -198,7 +198,12 @@ pub fn draw(
                         ])
                         .split(inner);
 
-                    let path = &entry.content;
+                    // `entry.content` is the content-addressable hash; resolve
+                    // to the real on-disk path before handing it to the image
+                    // loader / cache.
+                    let path_buf = entry.image_path().unwrap_or_default();
+                    let path = path_buf.to_string_lossy().into_owned();
+                    let path: &str = &path;
                     let mut image_rendered = false;
 
                     // Check cache first
@@ -225,14 +230,14 @@ pub fn draw(
                     }
 
                     // Render image info
-                    let dimensions_str = if let Some((w, h)) = get_image_dimensions(&entry.content) {
+                    let dimensions_str = if let Some((w, h)) = get_image_dimensions(path) {
                         format!("{}x{}", w, h)
                     } else {
                         "unknown".to_string()
                     };
                     let info = format!(
                         "Path: {}\nSize: {} │ Dimensions: {}\nCreated: {}",
-                        entry.content,
+                        path,
                         format_size(entry.byte_size),
                         dimensions_str,
                         entry.created_at.format("%Y-%m-%d %H:%M:%S")

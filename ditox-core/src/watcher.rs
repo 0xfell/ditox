@@ -125,64 +125,95 @@ impl Watcher {
         }
     }
 
-    /// Initialize the last hash with current clipboard content
+    /// Initialize the last hash with current clipboard content. We prime
+    /// from the image side first so that a restart while an image is still
+    /// on the clipboard doesn't cause us to re-capture it on the very next
+    /// poll (that was bug #4 in the hunt).
     pub fn initialize_hash(&mut self) {
+        if let Ok(Some(img)) = Clipboard::read_image() {
+            self.last_hash = Some(img.hash);
+            debug!("Initialized last_hash from existing clipboard image");
+            return;
+        }
         if let Ok(Some(text)) = Clipboard::get_text() {
             self.last_hash = Some(Clipboard::hash(text.as_bytes()));
-            debug!("Initialized with existing clipboard content");
+            debug!("Initialized last_hash from existing clipboard text");
         }
     }
 
-    /// Internal poll that returns whether a new entry was captured
+    /// Internal poll that returns whether a new entry was captured.
+    ///
+    /// Flow (critical ordering — this is the fix for bugs #1 and #4):
+    /// 1. Read image bytes into memory (no disk write yet).
+    /// 2. Short-circuit if content is unchanged since last poll (`last_hash`).
+    /// 3. Short-circuit if DB already has a row with this hash
+    ///    (`exists_by_hash`) — no disk write, no insert, no duplication.
+    /// 4. Only then store the blob (content-addressed, atomic) AND insert
+    ///    the DB row. Either both succeed or neither does.
+    /// 5. Run LRU eviction; evicted image rows' blobs are pruned via the
+    ///    persistent queue in `Database`.
     fn poll_internal(&mut self) -> Result<bool> {
-        // Try image first - browsers put both URL (text) and image data when copying images,
-        // so we prioritize image to capture the actual image instead of just the URL
-        let images_dir = Database::get_images_dir()?;
-        if let Some((path, size, hash)) = Clipboard::get_image(&images_dir)? {
-            if self.last_hash.as_ref() != Some(&hash) {
-                let captured = if !self.db.exists_by_hash(&hash)? {
-                    let entry = Entry::new_image(path, size, hash.clone());
-                    self.db.insert(&entry)?;
-                    info!("Captured image entry: {} bytes", entry.byte_size);
-
-                    let removed = self.db.cleanup_old(self.config.general.max_entries)?;
-                    if removed > 0 {
-                        debug!("Cleaned up {} old entries", removed);
-                    }
-                    true
-                } else {
-                    false
-                };
-                self.last_hash = Some(hash);
-                return Ok(captured);
+        // Image path has priority over text: browsers put both a URL (text)
+        // and the rendered image on the clipboard when you "Copy image",
+        // and we want the image.
+        if let Some(img) = Clipboard::read_image()? {
+            if self.last_hash.as_ref() == Some(&img.hash) {
+                return Ok(false);
             }
-            return Ok(false);
+
+            let captured = if !self.db.exists_by_hash(&img.hash)? {
+                // Store the blob ONLY after we've decided we'll keep it.
+                let (_path, _new) =
+                    Database::store_image_blob(&img.hash, &img.extension, &img.bytes)?;
+                let entry = Entry::new_image(
+                    img.hash.clone(),
+                    img.bytes.len(),
+                    img.extension.clone(),
+                );
+                self.db.insert(&entry)?;
+                info!(
+                    "Captured image entry: {} bytes ({}.{})",
+                    entry.byte_size,
+                    &img.hash[..8],
+                    img.extension
+                );
+
+                let removed = self.db.cleanup_old(self.config.general.max_entries)?;
+                if removed > 0 {
+                    debug!("Cleaned up {} old entries", removed);
+                }
+                true
+            } else {
+                // Already on record. Update last_hash below so we don't
+                // keep re-checking on every poll.
+                false
+            };
+            self.last_hash = Some(img.hash);
+            return Ok(captured);
         }
 
-        // Try text if no image
+        // Text path.
         if let Some(text) = Clipboard::get_text()? {
             let hash = Clipboard::hash(text.as_bytes());
-
-            // Check if content changed
-            if self.last_hash.as_ref() != Some(&hash) {
-                // Check if already in database
-                let captured = if !self.db.exists_by_hash(&hash)? {
-                    let entry = Entry::new_text(text);
-                    self.db.insert(&entry)?;
-                    info!("Captured text entry: {} bytes", entry.byte_size);
-
-                    // Cleanup old entries
-                    let removed = self.db.cleanup_old(self.config.general.max_entries)?;
-                    if removed > 0 {
-                        debug!("Cleaned up {} old entries", removed);
-                    }
-                    true
-                } else {
-                    false
-                };
-                self.last_hash = Some(hash);
-                return Ok(captured);
+            if self.last_hash.as_ref() == Some(&hash) {
+                return Ok(false);
             }
+
+            let captured = if !self.db.exists_by_hash(&hash)? {
+                let entry = Entry::new_text(text);
+                self.db.insert(&entry)?;
+                info!("Captured text entry: {} bytes", entry.byte_size);
+
+                let removed = self.db.cleanup_old(self.config.general.max_entries)?;
+                if removed > 0 {
+                    debug!("Cleaned up {} old entries", removed);
+                }
+                true
+            } else {
+                false
+            };
+            self.last_hash = Some(hash);
+            return Ok(captured);
         }
 
         Ok(false)

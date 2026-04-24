@@ -2,6 +2,23 @@ use crate::error::{DitoxError, Result};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
+/// In-memory image read from the clipboard. Crucially, this type holds the
+/// full bytes and the content hash but does NOT imply anything has been
+/// written to disk. Callers decide whether the image is worth storing
+/// (dedup check, etc.) before calling `Database::store_image_blob`.
+///
+/// This separation is the fix for the write-before-dedup bug: previously
+/// `get_image` wrote every image to a fresh timestamped filename and then
+/// the watcher would drop the insert when `exists_by_hash` returned true,
+/// orphaning the file.
+#[derive(Debug, Clone)]
+pub struct ClipboardImage {
+    pub bytes: Vec<u8>,
+    pub hash: String,
+    /// Extension without leading dot: "png", "jpg", …
+    pub extension: String,
+}
+
 pub struct Clipboard;
 
 impl Clipboard {
@@ -78,10 +95,16 @@ mod platform {
             }
         }
 
-        /// Get current clipboard image and save to path
-        /// Returns the path where the image was saved, size, and hash
-        pub fn get_image(save_dir: &Path) -> Result<Option<(String, usize, String)>> {
-            // Try common image MIME types in order of preference
+        /// Read the current clipboard image into memory. Does NOT write to
+        /// disk — callers are responsible for deduplication against the DB
+        /// and for deciding whether to persist via `Database::store_image_blob`.
+        ///
+        /// Returns `None` when the clipboard holds no image in any of the
+        /// MIME types we understand.
+        pub fn read_image() -> Result<Option<ClipboardImage>> {
+            // MIME types in order of preference. PNG first because it's
+            // lossless, which makes content-hash dedup work across repeated
+            // copies of the same screenshot.
             let image_mimes = [
                 "image/png",
                 "image/jpeg",
@@ -103,26 +126,18 @@ mod platform {
                         if !output.status.success() {
                             continue;
                         }
-
                         let data = output.stdout;
                         if data.is_empty() {
                             continue;
                         }
 
                         let hash = Self::hash(&data);
-                        let ext = Self::mime_to_extension(mime);
-                        let timestamp = chrono::Utc::now().timestamp();
-                        let filename = format!("{}_{}.{}", timestamp, &hash[..8], ext);
-                        let path = save_dir.join(&filename);
-
-                        // Create directory if needed
-                        std::fs::create_dir_all(save_dir)?;
-                        std::fs::write(&path, &data)?;
-
-                        let size = data.len();
-                        let path_str = path.to_string_lossy().to_string();
-
-                        return Ok(Some((path_str, size, hash)));
+                        let extension = Self::mime_to_extension(mime).to_string();
+                        return Ok(Some(ClipboardImage {
+                            bytes: data,
+                            hash,
+                            extension,
+                        }));
                     }
                     Err(_) => continue,
                 }
@@ -233,25 +248,30 @@ mod platform {
             }
         }
 
-        /// Get current clipboard image and save to path
-        /// Returns the path where the image was saved, size, and hash
-        pub fn get_image(save_dir: &Path) -> Result<Option<(String, usize, String)>> {
+        /// Read the current clipboard image into memory. Does NOT write to
+        /// disk — callers are responsible for deduplication against the DB
+        /// and for deciding whether to persist via `Database::store_image_blob`.
+        ///
+        /// On Windows arboard hands us raw RGBA; we re-encode to PNG so we
+        /// have stable, comparable bytes for content-hashing.
+        pub fn read_image() -> Result<Option<ClipboardImage>> {
             let mut clipboard = ArboardClipboard::new()
                 .map_err(|e| DitoxError::Clipboard(format!("Failed to access clipboard: {}", e)))?;
 
             match clipboard.get_image() {
                 Ok(img_data) => {
-                    // Convert to PNG bytes
                     let width = img_data.width;
                     let height = img_data.height;
                     let bytes = img_data.bytes;
 
-                    // Create image buffer and encode to PNG
-                    let img_buffer: image::RgbaImage =
-                        image::ImageBuffer::from_raw(width as u32, height as u32, bytes.into_owned())
-                            .ok_or_else(|| {
-                                DitoxError::Clipboard("Failed to create image buffer".to_string())
-                            })?;
+                    let img_buffer: image::RgbaImage = image::ImageBuffer::from_raw(
+                        width as u32,
+                        height as u32,
+                        bytes.into_owned(),
+                    )
+                    .ok_or_else(|| {
+                        DitoxError::Clipboard("Failed to create image buffer".to_string())
+                    })?;
 
                     let mut png_data = Vec::new();
                     let mut cursor = std::io::Cursor::new(&mut png_data);
@@ -262,18 +282,11 @@ mod platform {
                         })?;
 
                     let hash = Self::hash(&png_data);
-                    let timestamp = chrono::Utc::now().timestamp();
-                    let filename = format!("{}_{}.png", timestamp, &hash[..8]);
-                    let path = save_dir.join(&filename);
-
-                    // Create directory if needed
-                    std::fs::create_dir_all(save_dir)?;
-                    std::fs::write(&path, &png_data)?;
-
-                    let size = png_data.len();
-                    let path_str = path.to_string_lossy().to_string();
-
-                    Ok(Some((path_str, size, hash)))
+                    Ok(Some(ClipboardImage {
+                        bytes: png_data,
+                        hash,
+                        extension: "png".to_string(),
+                    }))
                 }
                 Err(arboard::Error::ContentNotAvailable) => Ok(None),
                 Err(e) => Err(DitoxError::Clipboard(format!(

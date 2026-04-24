@@ -38,6 +38,7 @@ fn create_random_entry(i: usize) -> Entry {
         favorite: i % 100 == 0, // 1% favorites
         notes: if i % 50 == 0 { Some("Special note".to_string()) } else { None },
         collection_id: None,
+        image_extension: None,
     }
 }
 
