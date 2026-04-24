@@ -28,6 +28,11 @@
         apps.default = flake-utils.lib.mkApp {
           drv = self.packages.${system}.default;
         };
+        apps.ditox = self.apps.${system}.default;
+        apps.ditox-gui = flake-utils.lib.mkApp {
+          drv = self.packages.${system}.default;
+          name = "ditox-gui";
+        };
 
         devShells.default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [
@@ -49,6 +54,7 @@
             atk
             gtk3
             libappindicator-gtk3
+            libayatana-appindicator   # tray-icon prefers this at runtime
             libdbusmenu-gtk3
             xdotool        # libxdo for muda/tray-icon
             # Iced / winit runtime (wgpu backend + tiny-skia fallback)
@@ -66,7 +72,7 @@
             xorg.libxcb
           ];
 
-          # Iced/winit dlopen these at runtime; rpath them in
+          # Iced/winit/tray-icon dlopen these at runtime; rpath them in
           LD_LIBRARY_PATH = lib.makeLibraryPath (with pkgs; [
             vulkan-loader
             libGL
@@ -74,6 +80,16 @@
             libxkbcommon
             fontconfig
             freetype
+            # tray-icon uses libappindicator via dlopen on Linux
+            libappindicator-gtk3
+            libayatana-appindicator
+            libdbusmenu-gtk3
+            gtk3
+            gdk-pixbuf
+            glib
+            atk
+            cairo
+            pango
             xorg.libX11
             xorg.libXcursor
             xorg.libXrandr

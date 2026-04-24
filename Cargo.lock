@@ -1400,12 +1400,15 @@ name = "ditox-gui"
 version = "0.2.1"
 dependencies = [
  "auto-launch",
+ "clap",
  "directories",
  "ditox-core",
  "global-hotkey",
+ "gtk",
  "iced",
  "iced_fonts",
  "image",
+ "libc",
  "serde",
  "serde_json",
  "tokio",

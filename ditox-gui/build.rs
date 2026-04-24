@@ -118,7 +118,4 @@ fn embed_windows_resources() {
     }
 }
 
-#[cfg(not(windows))]
-fn embed_windows_resources() {
-    // No-op on non-Windows platforms
-}
+

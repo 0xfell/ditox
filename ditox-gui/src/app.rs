@@ -2,6 +2,7 @@
 
 use ditox_core::app::TabFilter;
 use ditox_core::{Clipboard, Config, Database, Entry, EntryType, Result, Watcher};
+#[cfg(windows)]
 use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
@@ -135,8 +136,6 @@ const DEFAULT_WINDOW_SIZE: Size = Size::new(420.0, 520.0);
 /// Minimum window size
 const MIN_WINDOW_SIZE: Size = Size::new(320.0, 300.0);
 
-/// Force restore window using Win32 APIs
-/// This handles the case where Win+D (Show Desktop) minimizes the window
 #[cfg(windows)]
 fn force_restore_window(width: u32, height: u32) {
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -972,6 +971,8 @@ pub enum Message {
 
     // Window
     ToggleWindow,
+    /// Unconditionally show the window (sent by IPC `--show`).
+    IpcShow,
     HideWindow,
     WindowFocused,
     WindowUnfocused,
@@ -983,7 +984,8 @@ pub enum Message {
     // Refresh
     Tick,
 
-    // Global hotkey
+    // Global hotkey (Windows only)
+    #[cfg(windows)]
     GlobalHotkeyPressed,
 
     // Clipboard watcher
@@ -1035,11 +1037,13 @@ pub struct DitoxApp {
     current_page: usize,
     total_count: usize,
     window_state: WindowState,
+    #[cfg(windows)]
     _hotkey_manager: Option<GlobalHotKeyManager>,
     _tray_icon: Option<TrayIcon>,
     last_refresh: Instant,
     poll_interval_ms: u64,
     last_show_time: Instant,
+    #[cfg_attr(not(windows), allow(dead_code))]
     last_hotkey_time: Instant,
     /// Block search input until this time (to prevent capturing hotkey "v")
     input_blocked_until: Option<Instant>,
@@ -1051,7 +1055,7 @@ pub struct DitoxApp {
 }
 
 impl DitoxApp {
-    fn new(db: Database, config: Config) -> (Self, Task<Message>) {
+    fn new(db: Database, config: Config, start_hidden: bool) -> (Self, Task<Message>) {
         let total_count = db.count().unwrap_or(0);
         let entries = db.get_page(0, PAGE_SIZE).unwrap_or_default();
         let window_state = WindowState::load();
@@ -1061,15 +1065,27 @@ impl DitoxApp {
             window_state.width, window_state.height, window_state.x, window_state.y
         );
 
-        let hotkey_manager = GlobalHotKeyManager::new().ok();
-        if let Some(ref manager) = hotkey_manager {
-            let hotkey = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyV);
-            if manager.register(hotkey).is_ok() {
-                tracing::info!("Registered global hotkey: Ctrl+Shift+V");
+        #[cfg(windows)]
+        let hotkey_manager = {
+            let hotkey_manager = GlobalHotKeyManager::new().ok();
+            if let Some(ref manager) = hotkey_manager {
+                let hotkey = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyV);
+                if manager.register(hotkey).is_ok() {
+                    tracing::info!("Registered global hotkey: Ctrl+Shift+V");
+                }
             }
-        }
+            hotkey_manager
+        };
 
+        #[cfg(windows)]
         let tray_icon = setup_tray_icon();
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let tray_icon: Option<TrayIcon> = {
+            spawn_linux_tray_thread();
+            None // owned by the tray thread; nothing to hold here
+        };
+        #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+        let tray_icon: Option<TrayIcon> = None;
 
         let watcher_db = Database::open().unwrap_or_else(|e| {
             tracing::error!("Failed to open watcher database: {}", e);
@@ -1097,13 +1113,14 @@ impl DitoxApp {
             search_query: String::new(),
             selected_index: 0,
             entries,
-            visible: true,
+            visible: !start_hidden,
             view_mode: ViewMode::Main,
             tabs,
             active_tab: 0,
             current_page: 0,
             total_count,
             window_state: window_state.clone(),
+            #[cfg(windows)]
             _hotkey_manager: hotkey_manager,
             _tray_icon: tray_icon,
             last_refresh: Instant::now(),
@@ -1386,10 +1403,23 @@ impl DitoxApp {
             }
 
             Message::ForceWindowFocus => {
-                // This is called after Iced has finished setting up the window
-                // Now apply Win32 force restore to handle Win+D scenario
-                tracing::info!("ForceWindowFocus: Applying Win32 force restore");
-                force_restore_window(self.window_state.width as u32, self.window_state.height as u32);
+                // Windows-only: works around Win+D hiding us. On Linux/macOS
+                // this is a no-op (see `force_restore_window` stub).
+                #[cfg(windows)]
+                {
+                    tracing::info!("ForceWindowFocus: Applying Win32 force restore");
+                }
+                force_restore_window(
+                    self.window_state.width as u32,
+                    self.window_state.height as u32,
+                );
+            }
+
+            Message::IpcShow => {
+                // Forced show from `ditox-gui --show`; always route through the
+                // show branch of ToggleWindow by making ourselves look hidden.
+                self.visible = false;
+                return self.update(Message::ToggleWindow);
             }
 
             Message::HideWindow | Message::CloseOverlay => {
@@ -1426,6 +1456,7 @@ impl DitoxApp {
                 }
             }
 
+            #[cfg(windows)]
             Message::GlobalHotkeyPressed => {
                 let elapsed = self.last_hotkey_time.elapsed();
                 if elapsed < Duration::from_millis(300) {
@@ -2303,6 +2334,9 @@ impl DitoxApp {
 
         let tick_sub = iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick);
 
+        // Global hotkey is Windows-only; on Linux the user binds a compositor
+        // shortcut to `ditox-gui --toggle` which goes through the IPC socket.
+        #[cfg(windows)]
         let hotkey_sub = Subscription::run(|| {
             iced::stream::channel(10, |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
                 let receiver = GlobalHotKeyEvent::receiver();
@@ -2315,6 +2349,30 @@ impl DitoxApp {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
             })
+        });
+
+        // IPC subscription: drain commands from any `ditox-gui --toggle` etc.
+        // launched after us. Cross-platform, but a no-op on platforms where
+        // the IPC server isn't running.
+        let ipc_sub = Subscription::run(|| {
+            iced::stream::channel(
+                16,
+                |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
+                    loop {
+                        // Drain any pending commands from the global receiver.
+                        while let Some(cmd) = crate::ipc_bridge::try_recv() {
+                            let msg = match cmd {
+                                crate::ipc::IpcCommand::Toggle => Message::ToggleWindow,
+                                crate::ipc::IpcCommand::Show => Message::IpcShow,
+                                crate::ipc::IpcCommand::Hide => Message::HideWindow,
+                                crate::ipc::IpcCommand::Quit => Message::QuitApp,
+                            };
+                            let _ = sender.try_send(msg);
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                },
+            )
         });
 
         let clipboard_sub = Subscription::run(|| {
@@ -2366,7 +2424,26 @@ impl DitoxApp {
             })
         });
 
-        Subscription::batch([keyboard_sub, tick_sub, hotkey_sub, clipboard_sub, focus_sub, tray_sub])
+        #[cfg(windows)]
+        let subs = Subscription::batch([
+            keyboard_sub,
+            tick_sub,
+            hotkey_sub,
+            clipboard_sub,
+            focus_sub,
+            tray_sub,
+            ipc_sub,
+        ]);
+        #[cfg(not(windows))]
+        let subs = Subscription::batch([
+            keyboard_sub,
+            tick_sub,
+            clipboard_sub,
+            focus_sub,
+            tray_sub,
+            ipc_sub,
+        ]);
+        subs
     }
 
     fn refresh_entries(&mut self) {
@@ -2460,11 +2537,17 @@ struct TrayMenuIds {
 
 static TRAY_MENU_IDS: std::sync::OnceLock<TrayMenuIds> = std::sync::OnceLock::new();
 
-fn setup_tray_icon() -> Option<TrayIcon> {
+/// Build the shared tray menu. The returned items must stay alive for the
+/// lifetime of the tray icon or the menu disappears.
+fn build_tray_menu() -> Option<(Menu, MenuItem, CheckMenuItem, MenuItem)> {
     let menu = Menu::new();
-    let show_item = MenuItem::new("Show (Ctrl+Shift+V)", true, None);
+    #[cfg(windows)]
+    let show_label = "Show (Ctrl+Shift+V)";
+    #[cfg(not(windows))]
+    let show_label = "Show";
+    let show_item = MenuItem::new(show_label, true, None);
     let startup_enabled = crate::startup::is_startup_enabled();
-    let startup_item = CheckMenuItem::new("Run on Startup", true, startup_enabled, None);
+    let startup_item = CheckMenuItem::new("Run at login", true, startup_enabled, None);
     let quit_item = MenuItem::new("Quit", true, None);
 
     let _ = TRAY_MENU_IDS.set(TrayMenuIds {
@@ -2478,6 +2561,14 @@ fn setup_tray_icon() -> Option<TrayIcon> {
     menu.append(&PredefinedMenuItem::separator()).ok()?;
     menu.append(&quit_item).ok()?;
 
+    Some((menu, show_item, startup_item, quit_item))
+}
+
+/// Windows: build the tray on the iced thread. The win32 event loop is already
+/// running here courtesy of winit.
+#[cfg(windows)]
+fn setup_tray_icon() -> Option<TrayIcon> {
+    let (menu, _show, _startup, _quit) = build_tray_menu()?;
     let icon = create_default_icon()?;
 
     TrayIconBuilder::new()
@@ -2486,6 +2577,49 @@ fn setup_tray_icon() -> Option<TrayIcon> {
         .with_menu(Box::new(menu))
         .build()
         .ok()
+}
+
+/// Linux: tray-icon's Linux backend requires a GTK event loop on the same
+/// thread where the `TrayIcon` is created. iced/winit does not run GTK, so
+/// we spawn a dedicated GTK thread that owns the tray and drives
+/// `gtk::main()`. Menu events travel back to the iced app via the global
+/// `MenuEvent::receiver()` (which the existing subscription already polls).
+#[cfg(all(unix, not(target_os = "macos")))]
+fn spawn_linux_tray_thread() {
+    std::thread::Builder::new()
+        .name("ditox-tray".into())
+        .spawn(|| {
+            if let Err(e) = gtk::init() {
+                tracing::warn!("Could not initialise GTK for tray icon: {e}");
+                return;
+            }
+
+            // Menu + icon live for the rest of the thread.
+            let tray_bits = build_tray_menu();
+            let icon = create_default_icon();
+
+            let tray = match (tray_bits, icon) {
+                (Some((menu, _show, _startup, _quit)), Some(icon)) => TrayIconBuilder::new()
+                    .with_tooltip("Ditox Clipboard Manager")
+                    .with_icon(icon)
+                    .with_menu(Box::new(menu))
+                    .build()
+                    .ok(),
+                _ => None,
+            };
+
+            if tray.is_none() {
+                tracing::warn!(
+                    "Could not create tray icon; continuing without tray. \
+                     (Desktop may not provide a StatusNotifierItem host.)"
+                );
+            }
+
+            // Keep `_tray` and the menu items alive and pump GTK events.
+            let _tray = tray;
+            gtk::main();
+        })
+        .expect("failed to spawn tray thread");
 }
 
 const ICON_PNG: &[u8] = include_bytes!("../../ditox.png");
@@ -2510,29 +2644,48 @@ fn load_window_icon() -> Option<iced::window::Icon> {
 
 /// Global storage for app config (iced 0.14 requires Fn boot closure, Database is not Sync)
 static APP_CONFIG: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
+static APP_START_HIDDEN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 fn boot_app() -> (DitoxApp, Task<Message>) {
-    let config = APP_CONFIG.get()
+    let config = APP_CONFIG
+        .get()
         .expect("APP_CONFIG must be set before running the app")
         .clone();
+    let start_hidden = APP_START_HIDDEN.load(std::sync::atomic::Ordering::Relaxed);
     let db = Database::open().expect("Failed to open database for app");
-    DitoxApp::new(db, config)
+    DitoxApp::new(db, config, start_hidden)
 }
 
-pub fn run(_db: Database, config: Config) -> Result<()> {
+pub fn run_with(_db: Database, config: Config, start_hidden: bool) -> Result<()> {
     let window_state = WindowState::load();
 
     // Store config for the boot function (db will be opened fresh since it's not Sync)
     let _ = APP_CONFIG.set(config);
+    APP_START_HIDDEN.store(start_hidden, std::sync::atomic::Ordering::Relaxed);
 
     let mut settings = iced::window::Settings::default();
     settings.size = Size::new(window_state.width, window_state.height);
     settings.position = window::Position::Specific(Point::new(window_state.x, window_state.y));
     settings.icon = load_window_icon();
-    settings.decorations = false; // Custom title bar with resize zones
+    // On Windows we draw our own title bar + resize zones because the custom
+    // dark styling can't be applied to the native chrome. On Linux/macOS the
+    // native compositor chrome integrates much better with each DE's theme,
+    // so we enable it there.
+    #[cfg(windows)]
+    {
+        settings.decorations = false;
+    }
+    #[cfg(not(windows))]
+    {
+        settings.decorations = true;
+    }
     settings.transparent = false;
     settings.resizable = true;
     settings.min_size = Some(MIN_WINDOW_SIZE);
+    // `--hide` / autostart: the window should come up already hidden; the user
+    // will summon it later via `ditox-gui --toggle`.
+    settings.visible = !start_hidden;
 
     iced::application(boot_app, DitoxApp::update, DitoxApp::view)
         .subscription(DitoxApp::subscription)

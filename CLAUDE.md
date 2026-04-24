@@ -59,7 +59,8 @@ cargo test -p ditox-core                 # Test core library only
 cargo run -p ditox-tui                   # TUI mode
 cargo run -p ditox-tui -- watch          # Daemon mode (Linux)
 cargo run -p ditox-tui -- list --json    # CLI commands
-cargo run -p ditox-gui                   # Windows GUI
+cargo run -p ditox-gui                   # Cross-platform GUI (Linux/Windows)
+cargo run -p ditox-gui -- --toggle       # Summon the running GUI from a shell
 
 # Development with Nix (Linux only)
 nix develop                              # Enter dev shell
@@ -75,7 +76,7 @@ Ditox is a cross-platform clipboard manager (Linux/Wayland + Windows) with a wor
 │                         Frontends                                │
 ├──────────────────┬──────────────────┬──────────────────────────┤
 │  ditox-tui       │  ditox-gui       │  ditox-tui (CLI)         │
-│  (Linux TUI)     │  (Windows GUI)   │  (both platforms)        │
+│  (Linux TUI)     │  (Linux + Win)   │  (both platforms)        │
 │  Ratatui+Crossterm  Iced+tray-icon  │  Clap commands           │
 └────────┬─────────┴────────┬─────────┴────────┬─────────────────┘
          │                  │                  │
@@ -97,7 +98,13 @@ Ditox is a cross-platform clipboard manager (Linux/Wayland + Windows) with a wor
               └───────────────────────────┘
 ```
 
-**No IPC needed** - all interfaces access SQLite directly.
+**DB access:** all frontends talk to SQLite directly — no inter-process
+coordination for clipboard data.
+
+**ditox-gui IPC (Linux only):** a second launch talks to the running instance
+over `$XDG_RUNTIME_DIR/ditox-gui-$UID.sock` with `TOGGLE` / `SHOW` / `HIDE` /
+`QUIT` newline-delimited text commands. Used by compositor keybinds (see
+`docs/notes/linux-gui-architecture.md`).
 
 ## Workspace Crates
 
@@ -105,7 +112,7 @@ Ditox is a cross-platform clipboard manager (Linux/Wayland + Windows) with a wor
 |-------|--------|---------|
 | `ditox-core` | (library) | Shared business logic, DB, clipboard abstraction |
 | `ditox-tui` | `ditox` | Terminal UI + CLI + watcher daemon |
-| `ditox-gui` | `ditox-gui` | Windows GUI with system tray and global hotkey |
+| `ditox-gui` | `ditox-gui` | Cross-platform GUI (Linux + Windows). Tray, CLI flags, IPC, optional global hotkey on Windows |
 
 ## Key Modules (ditox-core)
 
@@ -121,28 +128,61 @@ Ditox is a cross-platform clipboard manager (Linux/Wayland + Windows) with a wor
 
 ## GUI-Specific Details (ditox-gui)
 
-The Windows GUI uses the Iced framework with several Windows-specific integrations:
+The GUI uses iced (wgpu + tiny-skia) and shares one codebase across Linux
+and Windows. Platform-specific behaviour is isolated behind `#[cfg]` gates
+rather than split crates.
 
-**Key Dependencies:**
-- `iced` - Main GUI framework with custom dark theme
-- `tray-icon` - System tray with menu (Show, Run on Startup, Quit)
-- `global-hotkey` - Ctrl+Shift+V hotkey registration
-- `windows` crate - Direct Win32 API for window focus management
-- `iced-fonts` - Bootstrap Icons for UI elements
+**Shared (cross-platform) dependencies:**
+- `iced` 0.14 with `image` + `tokio` features
+- `iced_fonts` 0.3 (Bootstrap Icons)
+- `tray-icon` 0.22 (works on Windows via win32 and on Linux via
+  libappindicator / StatusNotifierItem)
+- `clap` 4 for the `--toggle` / `--show` / `--hide` / `--quit` CLI flags
 
-**Window Management:**
-- Custom borderless window with draggable title bar and resize grip
-- Win32 `SetForegroundWindow`, `SetWindowPos` for reliable focus after Win+D
-- Window position/size persisted to `window_state.json`
-- `TOPMOST` flag management to appear above desktop after Win+D
+**Windows-only (`#[cfg(windows)]`):**
+- `windows` 0.62 — Win32 focus recovery (`SetForegroundWindow`,
+  `SetWindowPos`, TOPMOST toggle, Win+D workaround)
+- `auto-launch` 0.6 — run-on-startup via the `Run` registry key
+- `global-hotkey` 0.7 — Ctrl+Shift+V
 
-**Architecture Patterns:**
-- `OnceLock` statics for clipboard watcher and config (Iced 0.14 requires `Fn` boot closure)
-- Image thumbnail cache (`HashMap<String, Handle>`) to avoid reloading on every render
-- Delayed focus task to avoid capturing "V" from Ctrl+Shift+V hotkey
+**Linux-only (`#[cfg(unix)]`):**
+- `libc` — flock + getuid
+- `gtk` 0.18 — pumped on a dedicated thread so tray-icon's Linux backend
+  can talk to libappindicator (winit does not run GTK)
+
+**Window management:**
+- Windows: borderless, custom draggable title bar & resize zones; Win32
+  APIs work around Win+D / foreground-lock issues.
+- Linux: native compositor decorations (`settings.decorations = true`);
+  iced + the compositor handle focus, stacking and dragging.
+- Window position/size persisted to `window_state.json` on both.
+
+**Summoning the GUI:**
+- Windows: `global-hotkey` registers Ctrl+Shift+V.
+- Linux: compositor keybind runs `ditox-gui --toggle`. Single-instance
+  coordination uses a `flock`ed lock file and Unix socket under
+  `$XDG_RUNTIME_DIR/ditox-gui-$UID.{lock,sock}`. IPC protocol is one
+  newline-delimited command per connection (`TOGGLE`, `SHOW`, `HIDE`,
+  `QUIT`). See `docs/notes/linux-gui-architecture.md`.
+
+**Run-at-login:**
+- Windows: `HKCU\...\Run` registry key (via `auto-launch`).
+- Linux: `~/.config/autostart/ditox-gui.desktop` (`Exec=ditox-gui --hide`).
+- Toggled from the tray "Run at login" checkbox on both.
+
+**Architecture patterns:**
+- `OnceLock` statics for clipboard watcher and config (iced 0.14
+  requires `Fn` boot closure; `Database` isn't `Sync`).
+- Image thumbnail cache (`HashMap<String, Handle>`) to avoid reloading on
+  every render.
+- IPC commands reach the iced event loop through a static mpsc in
+  `ipc_bridge.rs` — the subscription boot closure has to be `Fn`, so we
+  can't move a `Receiver` into it; the static mpsc is the bridge.
+- Delayed focus task on Windows to avoid capturing "V" from Ctrl+Shift+V.
 
 **Build:**
-- `build.rs` embeds Windows manifest for proper DPI handling
+- `build.rs` generates `ditox.ico` from `ditox.png` always, and on
+  Windows it additionally embeds the icon + version info via `winres`.
 
 ## TUI Module Structure (ditox-tui)
 
