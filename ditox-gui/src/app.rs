@@ -127,9 +127,6 @@ fn scroll_if_needed(
 /// Delay before focusing search input (to avoid capturing the hotkey's "v")
 const FOCUS_DELAY_MS: u64 = 250;
 
-/// Delay before forcing window focus with Win32 APIs
-const FORCE_FOCUS_DELAY_MS: u64 = 100;
-
 /// Create a delayed focus task
 fn delayed_focus_search() -> Task<Message> {
     Task::perform(
@@ -140,22 +137,16 @@ fn delayed_focus_search() -> Task<Message> {
     )
 }
 
-/// Create a delayed Win32 force focus task (after Iced makes window visible)
-fn delayed_force_focus() -> Task<Message> {
-    Task::perform(
-        async {
-            tokio::time::sleep(Duration::from_millis(FORCE_FOCUS_DELAY_MS)).await;
-        },
-        |_| Message::ForceWindowFocus,
-    )
-}
-
 /// Default window size
 const DEFAULT_WINDOW_SIZE: Size = Size::new(420.0, 520.0);
+
+/// Margin (px) between the floating window and the screen edges.
+const FLOATING_MARGIN: f32 = 20.0;
 /// Minimum window size
 const MIN_WINDOW_SIZE: Size = Size::new(320.0, 300.0);
 
 #[cfg(windows)]
+#[allow(dead_code)]
 fn force_restore_window(width: u32, height: u32) {
     use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM};
@@ -356,12 +347,14 @@ fn force_restore_window(width: u32, height: u32) {
 }
 
 #[cfg(not(windows))]
+#[allow(dead_code)]
 fn force_restore_window(_width: u32, _height: u32) {
     // No-op on non-Windows platforms
 }
 
 /// Remove TOPMOST flag from our window (called when hiding)
 #[cfg(windows)]
+#[allow(dead_code)]
 fn remove_topmost() {
     use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM};
@@ -422,6 +415,7 @@ fn remove_topmost() {
 }
 
 #[cfg(not(windows))]
+#[allow(dead_code)]
 fn remove_topmost() {
     // No-op on non-Windows platforms
 }
@@ -429,6 +423,7 @@ fn remove_topmost() {
 /// Check if our main window is actually visible at Win32 level
 /// This helps detect when Win+D has hidden us but our visible flag is still true
 #[cfg(windows)]
+#[allow(dead_code)]
 fn is_window_actually_visible() -> bool {
     use std::process;
     use windows::core::BOOL;
@@ -497,6 +492,7 @@ fn is_window_actually_visible() -> bool {
 }
 
 #[cfg(not(windows))]
+#[allow(dead_code)]
 fn is_window_actually_visible() -> bool {
     true // Assume visible on non-Windows
 }
@@ -589,6 +585,7 @@ mod colors {
     pub const ACCENT_GLOW: Color = Color::from_rgba(0.318, 0.816, 0.816, 0.15);
 
     // Semantic colors
+    #[allow(dead_code)]
     pub const SUCCESS: Color = Color::from_rgb(0.298, 0.733, 0.486); // #4cbb7c
     pub const WARNING: Color = Color::from_rgb(0.988, 0.725, 0.298); // #fcb94c
     pub const DANGER: Color = Color::from_rgb(0.914, 0.349, 0.388); // #e95963
@@ -876,6 +873,23 @@ mod styles {
         }
     }
 
+    /// Right-hand inspector panel rendered next to the main entry list.
+    /// Distinguished from the main pane by an elevated background + a left
+    /// divider drawn via the border's left edge.
+    pub fn side_panel(_theme: &iced::Theme) -> container::Style {
+        container::Style {
+            background: Some(Background::Color(colors::BG_SURFACE)),
+            border: Border {
+                color: colors::BORDER,
+                width: 1.0,
+                radius: Radius::new(0.0),
+            },
+            shadow: Shadow::default(),
+            text_color: Some(colors::TEXT_PRIMARY),
+            snap: false,
+        }
+    }
+
     // Status bar
     pub fn status_bar(_theme: &iced::Theme) -> container::Style {
         container::Style {
@@ -993,7 +1007,10 @@ pub enum ViewMode {
     Main,
     Settings,
     Help,
-    ImagePreview(String),  // entry_id
+    /// Side panel inspecting a single entry (text or image). The user opens
+    /// it with Tab on the focused entry; the main list stays visible to its
+    /// left and the side panel takes the right portion of the window.
+    EntryPanel(String), // entry_id
     ConfirmDelete(String), // entry_id - confirmation for deleting favorites
 }
 
@@ -1023,8 +1040,6 @@ pub enum Message {
 
     // Window
     ToggleWindow,
-    /// Unconditionally show the window (sent by IPC `--show`).
-    IpcShow,
     HideWindow,
     WindowFocused,
     WindowUnfocused,
@@ -1053,9 +1068,12 @@ pub enum Message {
     ToggleHelp,
     CloseOverlay,
 
-    // Image preview
-    ShowImagePreview(String), // entry_id
-    CloseImagePreview,
+    // Side panel inspector
+    ToggleEntryPanel(String), // entry_id - open or close depending on state
+    /// Toggle the side panel for the currently selected entry. Sent by the
+    /// keyboard subscription (Tab key) since it can't see app state.
+    ToggleSelectedEntryPanel,
+    CloseEntryPanel,
     CopyFromPreview,
 
     // Delete confirmation
@@ -1068,9 +1086,6 @@ pub enum Message {
 
     // Focus
     FocusSearch,
-
-    // Win32 force focus (delayed after Iced makes window visible)
-    ForceWindowFocus,
 
     // Scroll tracking
     Scrolled(scrollable::Viewport),
@@ -1188,13 +1203,9 @@ impl DitoxApp {
             is_searching: false,
         };
 
-        let initial_task = window::oldest()
-            .and_then(move |id| {
-                window::move_to(id, Point::new(window_state.x, window_state.y)).chain(
-                    window::resize(id, Size::new(window_state.width, window_state.height)),
-                )
-            })
-            .chain(delayed_focus_search());
+        // One-shot mode: don't override the bottom-left position picked by
+        // `Position::SpecificWith`. Just focus the search input.
+        let initial_task = delayed_focus_search();
 
         (app, initial_task)
     }
@@ -1225,9 +1236,11 @@ impl DitoxApp {
                         tracing::info!("Copied: {}", entry.preview(30));
                     }
                 }
+                // One-shot: exit after copying. Wayland can't reliably hide an
+                // already-mapped iced window, so each launch is a fresh process
+                // and copy → exit is the auto-close mechanism.
                 self.save_window_state();
-                self.visible = false;
-                return window::oldest().and_then(|id| window::set_mode(id, window::Mode::Hidden));
+                std::process::exit(0);
             }
 
             Message::CopySelected => {
@@ -1248,7 +1261,7 @@ impl DitoxApp {
 
             Message::ConfirmDeleteEntry(id) => {
                 // Actually delete the entry (after confirmation for favorites)
-                let was_in_preview = matches!(self.view_mode, ViewMode::ImagePreview(_));
+                let was_in_preview = matches!(self.view_mode, ViewMode::EntryPanel(_));
                 let was_in_confirm = matches!(self.view_mode, ViewMode::ConfirmDelete(_));
                 let _ = self.db.lock().unwrap().delete(&id);
                 self.refresh_entries();
@@ -1425,90 +1438,20 @@ impl DitoxApp {
             }
 
             Message::ToggleWindow => {
-                // Check actual window visibility at Win32 level
-                // This detects Win+D hiding us even though our visible flag is true
-                let actually_visible = is_window_actually_visible();
-                tracing::info!(
-                    "ToggleWindow: self.visible={}, actually_visible={}",
-                    self.visible,
-                    actually_visible
-                );
-
-                // If we're visible AND actually visible (have foreground), hide
-                if self.visible && actually_visible {
-                    tracing::info!("Window is visible, hiding it");
-                    self.save_window_state();
-                    self.visible = false;
-                    // Remove TOPMOST flag before hiding
-                    remove_topmost();
-                    return window::oldest()
-                        .and_then(|id| window::set_mode(id, window::Mode::Hidden));
-                }
-
-                // Otherwise, show the window
-                tracing::info!("Window is hidden or not foreground, showing it");
-
-                self.visible = true;
-                self.search_query.clear();
-                self.refresh_entries();
-                self.last_show_time = Instant::now();
-                self.input_blocked_until = Some(Instant::now() + Duration::from_millis(300));
-
-                let ws = self.window_state.clone();
-                // Then let Iced configure the window
-                return window::oldest()
-                    .and_then(move |id| {
-                        window::set_mode(id, window::Mode::Windowed)
-                            .chain(window::minimize(id, false))
-                            .chain(window::resize(id, Size::new(ws.width, ws.height)))
-                            .chain(window::move_to(id, Point::new(ws.x, ws.y)))
-                            .chain(window::gain_focus(id))
-                            .chain(operation::snap_to(
-                                ENTRY_LIST_ID,
-                                scrollable::RelativeOffset { x: 0.0, y: 0.0 },
-                            ))
-                    })
-                    .chain(delayed_force_focus()) // Call again after Iced finishes
-                    .chain(delayed_focus_search());
-            }
-
-            Message::ForceWindowFocus => {
-                // Windows-only: works around Win+D hiding us. On Linux/macOS
-                // this is a no-op (see `force_restore_window` stub).
-                #[cfg(windows)]
-                {
-                    tracing::info!("ForceWindowFocus: Applying Win32 force restore");
-                }
-                force_restore_window(
-                    self.window_state.width as u32,
-                    self.window_state.height as u32,
-                );
-            }
-
-            Message::IpcShow => {
-                // Forced show from `ditox-gui --show`; always route through the
-                // show branch of ToggleWindow by making ourselves look hidden.
-                self.visible = false;
-                return self.update(Message::ToggleWindow);
+                // One-shot mode: only the tray "Show" item routes here, and
+                // we're always already shown — so just gain focus.
+                return window::oldest().and_then(window::gain_focus);
             }
 
             Message::HideWindow | Message::CloseOverlay => {
-                // Check if we're closing an image preview - preserve scroll position
-                let was_image_preview = matches!(self.view_mode, ViewMode::ImagePreview(_));
-
+                // One-shot mode: Esc / overlay-click closes any overlay first;
+                // pressing it again from Main exits the process.
                 if self.view_mode != ViewMode::Main {
                     self.view_mode = ViewMode::Main;
-                    // If closing image preview, scroll back to selected entry
-                    if was_image_preview {
-                        return scroll_to_selected(self.selected_index, self.entries.len());
-                    }
                     return Task::none();
                 }
                 self.save_window_state();
-                self.visible = false;
-                // Remove TOPMOST flag before hiding
-                remove_topmost();
-                return window::oldest().and_then(|id| window::set_mode(id, window::Mode::Hidden));
+                std::process::exit(0);
             }
 
             Message::StartDrag => {
@@ -1527,12 +1470,14 @@ impl DitoxApp {
 
             #[cfg(windows)]
             Message::GlobalHotkeyPressed => {
+                // Windows: the GUI is one-shot like Linux now, but the hotkey
+                // is still registered while we're alive. Gain focus on press.
                 let elapsed = self.last_hotkey_time.elapsed();
                 if elapsed < Duration::from_millis(300) {
                     return Task::none();
                 }
                 self.last_hotkey_time = Instant::now();
-                return self.update(Message::ToggleWindow);
+                return window::oldest().and_then(window::gain_focus);
             }
 
             Message::ClipboardChanged => {
@@ -1556,21 +1501,22 @@ impl DitoxApp {
             }
 
             Message::WindowFocused => {
-                self.visible = true;
-                self.refresh_entries();
                 // Block input for 300ms to prevent capturing stray keystrokes
+                // (e.g. the "v" from Ctrl+Shift+V on Windows).
                 self.input_blocked_until = Some(Instant::now() + Duration::from_millis(300));
                 return delayed_focus_search();
             }
 
             Message::WindowUnfocused => {
+                // Auto-close on focus loss. Grace period prevents the brief
+                // unfocus that some compositors emit while the window is still
+                // animating in from killing us before the user can interact.
                 let elapsed = self.last_show_time.elapsed();
                 if elapsed < Duration::from_millis(500) {
                     return Task::none();
                 }
                 self.save_window_state();
-                self.visible = false;
-                return window::oldest().and_then(|id| window::set_mode(id, window::Mode::Hidden));
+                std::process::exit(0);
             }
 
             Message::TrayMenuEvent(menu_id) => {
@@ -1624,41 +1570,54 @@ impl DitoxApp {
                 return iced::widget::operation::focus(search_input_id());
             }
 
-            Message::ShowImagePreview(entry_id) => {
-                // Update selected_index to match the clicked entry
+            Message::ToggleEntryPanel(entry_id) => {
+                // Toggle: if already inspecting this entry, close. Otherwise
+                // open the side panel for the given entry.
+                if let ViewMode::EntryPanel(ref current) = self.view_mode {
+                    if current == &entry_id {
+                        self.view_mode = ViewMode::Main;
+                        return Task::none();
+                    }
+                }
                 if let Some(index) = self.entries.iter().position(|e| e.id == entry_id) {
                     self.selected_index = index;
                 }
-                self.view_mode = ViewMode::ImagePreview(entry_id);
-                // Preserve scroll position by snapping back to the selected item
+                self.view_mode = ViewMode::EntryPanel(entry_id);
                 return scroll_to_selected(self.selected_index, self.entries.len());
             }
 
-            Message::CloseImagePreview => {
+            Message::ToggleSelectedEntryPanel => {
+                if let Some(entry) = self.entries.get(self.selected_index) {
+                    let id = entry.id.clone();
+                    return self.update(Message::ToggleEntryPanel(id));
+                }
+            }
+
+            Message::CloseEntryPanel => {
                 self.view_mode = ViewMode::Main;
-                // Scroll back to the selected entry
                 return scroll_to_selected(self.selected_index, self.entries.len());
             }
 
             Message::CopyFromPreview => {
-                if let ViewMode::ImagePreview(ref entry_id) = self.view_mode {
+                if let ViewMode::EntryPanel(ref entry_id) = self.view_mode {
                     if let Some(entry) = self.entries.iter().find(|e| e.id == *entry_id) {
-                        let result = match entry.image_path() {
-                            Some(p) => Clipboard::set_image(&p.to_string_lossy()),
-                            None => Err(ditox_core::DitoxError::Other(
-                                "image entry missing extension".into(),
-                            )),
+                        let result = match entry.entry_type {
+                            EntryType::Text => Clipboard::set_text(&entry.content),
+                            EntryType::Image => match entry.image_path() {
+                                Some(p) => Clipboard::set_image(&p.to_string_lossy()),
+                                None => Err(ditox_core::DitoxError::Other(
+                                    "image entry missing extension".into(),
+                                )),
+                            },
                         };
                         if result.is_ok() {
                             let _ = self.db.lock().unwrap().touch(&entry.id);
-                            tracing::info!("Copied image: {}", entry.preview(30));
+                            tracing::info!("Copied: {}", entry.preview(30));
                         }
                     }
                 }
-                self.view_mode = ViewMode::Main;
                 self.save_window_state();
-                self.visible = false;
-                return window::oldest().and_then(|id| window::set_mode(id, window::Mode::Hidden));
+                std::process::exit(0);
             }
 
             Message::Scrolled(viewport) => {
@@ -1699,19 +1658,36 @@ impl DitoxApp {
     // ========================================================================
 
     fn view(&self) -> Element<'_, Message> {
-        let main_view = self.view_main();
-
         match &self.view_mode {
-            ViewMode::Main => main_view,
-            ViewMode::Settings => self.view_with_overlay(main_view, self.view_settings()),
-            ViewMode::Help => self.view_with_overlay(main_view, self.view_help()),
-            ViewMode::ImagePreview(entry_id) => {
-                self.view_with_overlay(main_view, self.view_image_preview(entry_id))
-            }
+            ViewMode::Main => self.view_main(),
+            ViewMode::Settings => self.view_with_overlay(self.view_main(), self.view_settings()),
+            ViewMode::Help => self.view_with_overlay(self.view_main(), self.view_help()),
+            ViewMode::EntryPanel(entry_id) => self.view_main_with_panel(entry_id),
             ViewMode::ConfirmDelete(entry_id) => {
-                self.view_with_overlay(main_view, self.view_confirm_delete(entry_id))
+                self.view_with_overlay(self.view_main(), self.view_confirm_delete(entry_id))
             }
         }
+    }
+
+    /// Render the main list with a side panel showing the focused entry's
+    /// metadata + actions. Replaces the modal-style image preview.
+    fn view_main_with_panel(&self, entry_id: &str) -> Element<'_, Message> {
+        let main = self.view_main();
+        let panel = self.view_entry_panel(entry_id);
+        // Two-column layout: main list (3 parts) + side panel (2 parts).
+        // The window stays at 420px so the split is roughly 252 / 168 px.
+        container(
+            row![
+                container(main).width(Length::FillPortion(3)),
+                container(panel)
+                    .width(Length::FillPortion(2))
+                    .style(styles::side_panel),
+            ]
+            .spacing(0),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     fn view_with_overlay<'a>(
@@ -1943,12 +1919,13 @@ impl DitoxApp {
             }
         };
 
-        // Determine action on click: images open preview, text copies directly
+        // One-shot UX: a click on any entry — text or image — copies and
+        // exits. The side panel (Tab key) is the way to inspect an entry
+        // without copying. `entry_id_preview` is intentionally unused now
+        // but kept to minimise churn; suppressed below.
+        let _ = &entry_id_preview;
         let on_press = if interactive {
-            match entry.entry_type {
-                EntryType::Image => Some(Message::ShowImagePreview(entry_id_preview)),
-                EntryType::Text => Some(Message::CopyEntry(index)),
-            }
+            Some(Message::CopyEntry(index))
         } else {
             None
         };
@@ -2031,46 +2008,44 @@ impl DitoxApp {
     }
 
     fn view_status(&self) -> Element<'_, Message> {
-        let count = if self.search_query.is_empty() {
-            format!("{}", self.total_count)
+        // Floating-launcher status bar:  "{n} items · Press Tab to preview · vX.Y.Z"
+        // Search/page indicators replace the items count when relevant.
+        let primary: String = if !self.search_query.is_empty() {
+            format!("{}/{} matches", self.entries.len(), self.total_count)
+        } else if self.total_pages() > 1 {
+            format!(
+                "{} items · {}/{}",
+                self.total_count,
+                self.current_page + 1,
+                self.total_pages()
+            )
         } else {
-            format!("{}/{}", self.entries.len(), self.total_count)
+            format!("{} items", self.total_count)
         };
 
-        let page_info = if self.search_query.is_empty() && self.total_pages() > 1 {
-            format!("  |  {}/{}", self.current_page + 1, self.total_pages())
+        let hint: Element<'_, Message> = if self.is_searching {
+            text("Searching…").size(10).color(colors::TEXT_MUTED).into()
         } else {
-            String::new()
-        };
-
-        let search_indicator: Element<'_, Message> = if self.is_searching {
-            text("Searching...")
-                .size(11)
+            text("· Press Tab to preview")
+                .size(10)
                 .color(colors::TEXT_MUTED)
                 .into()
-        } else {
-            Space::new().width(0).height(0).into()
         };
 
-        // Status badge - using icon
-        let status_badge =
-            container(icon(icons::CIRCLE_FILL).size(8).color(colors::SUCCESS)).padding([0, 4]);
+        let version = format!("· v{}", env!("CARGO_PKG_VERSION"));
 
         container(
             row![
-                text(count).size(11).color(colors::ACCENT),
-                text(" entries").size(11).color(colors::TEXT_MUTED),
-                text(page_info).size(11).color(colors::TEXT_MUTED),
-                Space::new().width(10),
-                search_indicator,
+                text(primary).size(10).color(colors::ACCENT),
+                Space::new().width(6),
+                hint,
                 Space::new().width(Length::Fill),
-                status_badge,
-                text("Ctrl+Shift+V").size(10).color(colors::TEXT_MUTED),
+                text(version).size(10).color(colors::TEXT_MUTED),
             ]
             .spacing(2)
             .align_y(iced::Alignment::Center),
         )
-        .padding([8, 12])
+        .padding([6, 12])
         .width(Length::Fill)
         .style(styles::status_bar)
         .into()
@@ -2164,7 +2139,14 @@ impl DitoxApp {
                 text("Hide window").size(11).color(colors::TEXT_MUTED),
             ],
             row![
-                text("Tab / Shift+Tab").size(11).color(colors::ACCENT),
+                text("Tab").size(11).color(colors::ACCENT),
+                Space::new().width(Length::Fill),
+                text("Toggle preview panel")
+                    .size(11)
+                    .color(colors::TEXT_MUTED),
+            ],
+            row![
+                text("Shift+Left/Right").size(11).color(colors::ACCENT),
                 Space::new().width(Length::Fill),
                 text("Switch tabs").size(11).color(colors::TEXT_MUTED),
             ],
@@ -2200,121 +2182,161 @@ impl DitoxApp {
         container(content).style(styles::modal).into()
     }
 
-    fn view_image_preview(&self, entry_id: &str) -> Element<'_, Message> {
-        // Find the entry in our current entries list
+    /// Side panel rendered next to the entry list when `view_mode ==
+    /// EntryPanel(_)`. Mirrors the floating-launcher reference design:
+    /// type label + relative timestamp + content area + Copy / Delete
+    /// buttons + char/line counter (text only).
+    fn view_entry_panel(&self, entry_id: &str) -> Element<'_, Message> {
         let entry = self.entries.iter().find(|e| e.id == entry_id);
 
         let content = if let Some(entry) = entry {
-            let path_buf = entry.image_path().unwrap_or_default();
-            let path = path_buf.to_string_lossy().into_owned();
+            let entry_id_owned = entry.id.clone();
 
-            // Image display
-            let image_display: Element<'_, Message> = if path_buf.exists() {
-                container(
-                    iced_image(iced_image::Handle::from_path(&path))
-                        .content_fit(ContentFit::Contain)
-                        .width(Length::Fill)
-                        .height(Length::Fixed(280.0)),
-                )
-                .width(Length::Fill)
-                .style(styles::preview_image_container)
-                .padding(8)
-                .into()
-            } else {
-                container(
-                    column![
-                        icon(icons::IMAGE).size(48).color(colors::TEXT_MUTED),
-                        text("Image not found").size(12).color(colors::TEXT_MUTED),
-                    ]
-                    .spacing(8)
-                    .align_x(iced::Alignment::Center),
-                )
-                .width(Length::Fill)
-                .height(Length::Fixed(280.0))
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
-                .style(styles::preview_image_container)
-                .into()
+            // Header: type label + close button
+            let type_label = match entry.entry_type {
+                EntryType::Text => "Text",
+                EntryType::Image => "Image",
             };
-
-            // Metadata — show the synthesized filename (image-<hash8>.<ext>).
-            // Owned String to avoid a borrow that outlives the function body.
-            let filename: String = entry.preview(40);
-
-            let size_str = if entry.byte_size < 1024 {
-                format!("{} B", entry.byte_size)
-            } else if entry.byte_size < 1024 * 1024 {
-                format!("{:.1} KB", entry.byte_size as f64 / 1024.0)
-            } else {
-                format!("{:.1} MB", entry.byte_size as f64 / (1024.0 * 1024.0))
-            };
-
-            let entry_id_delete = entry.id.clone();
-
-            column![
-                // Header
-                row![
-                    text("Image Preview").size(16).color(colors::TEXT_PRIMARY),
-                    Space::new().width(Length::Fill),
-                    button(icon(icons::X).size(12))
-                        .style(styles::action_btn)
-                        .on_press(Message::CloseImagePreview)
-                        .padding([4, 8]),
-                ]
-                .align_y(iced::Alignment::Center),
-                Space::new().height(12),
-                // Image
-                image_display,
-                Space::new().height(12),
-                // Metadata
-                row![
-                    text(filename).size(11).color(colors::TEXT_SECONDARY),
-                    Space::new().width(Length::Fill),
-                    text(size_str).size(11).color(colors::TEXT_MUTED),
-                ],
-                row![
-                    text(entry.relative_time())
-                        .size(10)
-                        .color(colors::TEXT_MUTED),
-                    Space::new().width(Length::Fill),
-                    if entry.favorite {
-                        icon(icons::STAR_FILL).size(10).color(colors::WARNING)
-                    } else {
-                        text("").size(10)
-                    },
-                ],
-                Space::new().height(16),
-                // Actions
-                row![
-                    button(text("Copy to Clipboard").size(11))
-                        .style(styles::primary_btn)
-                        .on_press(Message::CopyFromPreview)
-                        .padding([8, 16]),
-                    Space::new().width(Length::Fill),
-                    button(row![icon(icons::TRASH).size(12), text(" Delete").size(11),].spacing(4))
-                        .style(styles::delete_btn)
-                        .on_press(Message::DeleteEntry(entry_id_delete))
-                        .padding([8, 16]),
-                ]
-                .spacing(8),
+            let header = row![
+                text(type_label).size(13).color(colors::TEXT_PRIMARY),
+                Space::new().width(Length::Fill),
+                button(icon(icons::X).size(11))
+                    .style(styles::action_btn)
+                    .on_press(Message::CloseEntryPanel)
+                    .padding([3, 6]),
             ]
-            .padding(20)
-            .width(Length::Fixed(400.0))
-        } else {
-            // Entry not found (maybe deleted while preview was open)
+            .align_y(iced::Alignment::Center);
+
+            // Subhead: "Copied <relative_time>"
+            let subhead = row![
+                text(format!("Copied {}", entry.relative_time()))
+                    .size(10)
+                    .color(colors::TEXT_MUTED),
+                Space::new().width(Length::Fill),
+                if entry.favorite {
+                    icon(icons::STAR_FILL).size(11).color(colors::WARNING)
+                } else {
+                    icon(icons::STAR).size(11).color(colors::TEXT_MUTED)
+                },
+            ]
+            .align_y(iced::Alignment::Center);
+
+            // Content area: image thumbnail or text excerpt
+            let body: Element<'_, Message> = match entry.entry_type {
+                EntryType::Image => {
+                    let path_buf = entry.image_path().unwrap_or_default();
+                    let path = path_buf.to_string_lossy().into_owned();
+                    if path_buf.exists() {
+                        container(
+                            iced_image(iced_image::Handle::from_path(&path))
+                                .content_fit(ContentFit::Contain)
+                                .width(Length::Fill)
+                                .height(Length::Fixed(180.0)),
+                        )
+                        .width(Length::Fill)
+                        .style(styles::preview_image_container)
+                        .padding(6)
+                        .into()
+                    } else {
+                        container(
+                            column![
+                                icon(icons::IMAGE).size(32).color(colors::TEXT_MUTED),
+                                text("Image not found").size(11).color(colors::TEXT_MUTED),
+                            ]
+                            .spacing(6)
+                            .align_x(iced::Alignment::Center),
+                        )
+                        .width(Length::Fill)
+                        .height(Length::Fixed(180.0))
+                        .center_x(Length::Fill)
+                        .center_y(Length::Fill)
+                        .style(styles::preview_image_container)
+                        .into()
+                    }
+                }
+                EntryType::Text => {
+                    let excerpt = entry.preview(400);
+                    container(text(excerpt).size(11).color(colors::TEXT_SECONDARY))
+                        .padding(8)
+                        .width(Length::Fill)
+                        .style(styles::preview_image_container)
+                        .into()
+                }
+            };
+
+            // Footer: char/line count for text, byte size for image
+            let footer_text = match entry.entry_type {
+                EntryType::Text => {
+                    let chars = entry.content.chars().count();
+                    let lines = entry.content.lines().count().max(1);
+                    format!("{} chars · {} lines", chars, lines)
+                }
+                EntryType::Image => {
+                    if entry.byte_size < 1024 {
+                        format!("{} B", entry.byte_size)
+                    } else if entry.byte_size < 1024 * 1024 {
+                        format!("{:.1} KB", entry.byte_size as f64 / 1024.0)
+                    } else {
+                        format!("{:.1} MB", entry.byte_size as f64 / (1024.0 * 1024.0))
+                    }
+                }
+            };
+
+            // Action buttons: Copy + Delete (compact for the narrow panel).
+            let actions = column![
+                button(
+                    row![
+                        icon(icons::CIRCLE_FILL).size(8),
+                        text("Copy Again").size(11)
+                    ]
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center)
+                )
+                .style(styles::primary_btn)
+                .on_press(Message::CopyFromPreview)
+                .padding([7, 12])
+                .width(Length::Fill),
+                button(
+                    row![icon(icons::TRASH).size(11), text("Delete").size(11)]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center)
+                )
+                .style(styles::delete_btn)
+                .on_press(Message::DeleteEntry(entry_id_owned))
+                .padding([7, 12])
+                .width(Length::Fill),
+            ]
+            .spacing(6);
+
             column![
-                text("Entry not found").size(14).color(colors::TEXT_MUTED),
-                Space::new().height(16),
+                header,
+                Space::new().height(4),
+                subhead,
+                Space::new().height(10),
+                body,
+                Space::new().height(10),
+                actions,
+                Space::new().height(Length::Fill),
+                text(footer_text).size(10).color(colors::TEXT_MUTED),
+            ]
+            .spacing(0)
+            .padding(12)
+        } else {
+            column![
+                text("Entry not found").size(12).color(colors::TEXT_MUTED),
+                Space::new().height(8),
                 button(text("Close").size(11))
                     .style(styles::primary_btn)
-                    .on_press(Message::CloseImagePreview)
-                    .padding([8, 16]),
+                    .on_press(Message::CloseEntryPanel)
+                    .padding([6, 12]),
             ]
-            .padding(20)
-            .width(Length::Fixed(300.0))
+            .padding(12)
         };
 
-        container(content).style(styles::modal).into()
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
     fn view_confirm_delete(&self, entry_id: &str) -> Element<'_, Message> {
@@ -2393,17 +2415,28 @@ impl DitoxApp {
                         Some(Message::CopySelected)
                     }
                     keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
-                        Some(Message::PrevPage)
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
-                        Some(Message::NextPage)
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::Tab) => {
+                        // Shift+Left cycles to previous tab; bare Left navigates pages.
                         if modifiers.shift() {
                             Some(Message::PrevTab)
                         } else {
-                            Some(Message::NextTab)
+                            Some(Message::PrevPage)
                         }
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                        // Shift+Right cycles to next tab; bare Right navigates pages.
+                        if modifiers.shift() {
+                            Some(Message::NextTab)
+                        } else {
+                            Some(Message::NextPage)
+                        }
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::Tab) => {
+                        // Tab toggles the side inspector panel for the
+                        // currently selected entry. The handler in `update`
+                        // resolves selection -> entry id (the subscription
+                        // closure can't see app state, so we route through
+                        // a dedicated message).
+                        Some(Message::ToggleSelectedEntryPanel)
                     }
                     keyboard::Key::Character(c) => {
                         let s: &str = c;
@@ -2441,29 +2474,10 @@ impl DitoxApp {
             )
         });
 
-        // IPC subscription: drain commands from any `ditox-gui --toggle` etc.
-        // launched after us. Cross-platform, but a no-op on platforms where
-        // the IPC server isn't running.
-        let ipc_sub = Subscription::run(|| {
-            iced::stream::channel(
-                16,
-                |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
-                    loop {
-                        // Drain any pending commands from the global receiver.
-                        while let Some(cmd) = crate::ipc_bridge::try_recv() {
-                            let msg = match cmd {
-                                crate::ipc::IpcCommand::Toggle => Message::ToggleWindow,
-                                crate::ipc::IpcCommand::Show => Message::IpcShow,
-                                crate::ipc::IpcCommand::Hide => Message::HideWindow,
-                                crate::ipc::IpcCommand::Quit => Message::QuitApp,
-                            };
-                            let _ = sender.try_send(msg);
-                        }
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                    }
-                },
-            )
-        });
+        // IPC subscription removed: one-shot mode does not run an IPC
+        // server; each launch is its own process. The `ipc` and
+        // `ipc_bridge` modules remain compiled for potential future use
+        // (e.g. a native global hotkey on Linux that talks to a daemon).
 
         let clipboard_sub = Subscription::run(|| {
             iced::stream::channel(
@@ -2529,17 +2543,10 @@ impl DitoxApp {
             clipboard_sub,
             focus_sub,
             tray_sub,
-            ipc_sub,
         ]);
         #[cfg(not(windows))]
-        let subs = Subscription::batch([
-            keyboard_sub,
-            tick_sub,
-            clipboard_sub,
-            focus_sub,
-            tray_sub,
-            ipc_sub,
-        ]);
+        let subs =
+            Subscription::batch([keyboard_sub, tick_sub, clipboard_sub, focus_sub, tray_sub]);
         subs
     }
 
@@ -2761,23 +2768,27 @@ fn boot_app() -> (DitoxApp, Task<Message>) {
 }
 
 pub fn run_with(_db: Database, config: Config, start_hidden: bool) -> Result<()> {
-    let window_state = WindowState::load();
-
     // Store config for the boot function (db will be opened fresh since it's not Sync)
     let _ = APP_CONFIG.set(config);
     APP_START_HIDDEN.store(start_hidden, std::sync::atomic::Ordering::Relaxed);
 
-    // Incremental construction reads more naturally with the #[cfg] gate
-    // for `decorations` than a single struct literal would.
+    // One-shot floating-launcher: ignore any persisted size and force a
+    // compact 420x520 window anchored to the bottom-left of the active
+    // monitor.
     #[allow(clippy::field_reassign_with_default)]
     let settings = {
         let mut settings = iced::window::Settings::default();
-        settings.size = Size::new(window_state.width, window_state.height);
-        settings.position = window::Position::Specific(Point::new(window_state.x, window_state.y));
+        settings.size = DEFAULT_WINDOW_SIZE;
+        // SpecificWith receives (window_size, monitor_size) and returns the
+        // top-left corner. Anchor to the bottom-left with a 20px margin on
+        // both axes (matches the floating-launcher reference design).
+        settings.position = window::Position::SpecificWith(|window_size, monitor_size| {
+            Point::new(
+                FLOATING_MARGIN,
+                (monitor_size.height - window_size.height - FLOATING_MARGIN).max(FLOATING_MARGIN),
+            )
+        });
         settings.icon = load_window_icon();
-        // On Windows we draw our own title bar + resize zones because the
-        // custom dark styling can't be applied to the native chrome. On
-        // Linux the compositor chrome integrates with each DE's theme.
         #[cfg(windows)]
         {
             settings.decorations = false;
@@ -2789,8 +2800,6 @@ pub fn run_with(_db: Database, config: Config, start_hidden: bool) -> Result<()>
         settings.transparent = false;
         settings.resizable = true;
         settings.min_size = Some(MIN_WINDOW_SIZE);
-        // `--hide` / autostart: the window comes up already hidden; the user
-        // will summon it later via `ditox-gui --toggle`.
         settings.visible = !start_hidden;
         settings
     };

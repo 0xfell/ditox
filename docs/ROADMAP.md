@@ -1,12 +1,12 @@
 # Ditox Roadmap
 
-> **Current Version:** 0.3.0
+> **Current Version:** 0.3.1
 
 ## Status Overview
 
 | Category | Count |
 |----------|-------|
-| Completed | 12 |
+| Completed | 13 |
 | In Progress | 0 |
 | Planned | 0 |
 
@@ -28,6 +28,7 @@
 
 | Task | Date | Description |
 |------|------|-------------|
+| [Floating-launcher GUI redesign](tasks/completed/013-floating-launcher-redesign.md) | 2026-04-26 | One-shot GUI: each launch opens a 420×520 floating panel at bottom-left; copy/Esc/unfocus/close exits the process. Replaces the broken Wayland hide/show model. Tab key opens a side inspector panel for text & image entries. Versions bumped to 0.3.1. |
 | [Release Infrastructure](tasks/completed/012-release-infra.md) | 2026-04-25 | CI + release workflows (GitHub Actions), prebuilt Linux/Windows binaries (TUI tarball, musl static, AppImage, Windows zip), Cachix push, README rewrite, versions bumped to 0.3.0 |
 | [Image Storage Bug Fix](tasks/completed/011-image-storage-bug.md) | 2026-04-25 | Content-addressed image store, refcount prune queue, schema v1 migration, `ditox repair` command. Fixes 4 disk-leak bugs. |
 | [Linux GUI](tasks/completed/010-linux-gui.md) | 2026-04-24 | Cross-platform `ditox-gui` (Wayland/X11) with tray, `--toggle` IPC, XDG autostart |
@@ -45,18 +46,19 @@
 
 ## Quick Reference
 
-### What's Working (v0.3.0)
+### What's Working (v0.3.1)
 
 **TUI (`ditox`):** Full feature set — list, search, copy, delete, pin, preview,
 pagination, notes, stats, collections.
 
-**GUI (`ditox-gui`):**
+**GUI (`ditox-gui`):** One-shot floating launcher (420×520, bottom-left).
+Each launch opens a fresh window; click an entry / Enter / Esc / unfocus
+exits the process. Tab opens a side inspector panel.
 - **Windows:** system tray, Ctrl+Shift+V global hotkey, auto-start via
   registry, Win32 focus recovery for Win+D.
 - **Linux (Wayland + X11):** system tray (StatusNotifierItem via
-  libappindicator), `--toggle` / `--show` / `--hide` / `--quit` flags for
-  compositor keybinds, XDG autostart, single-instance Unix-socket IPC,
-  native window decorations.
+  libappindicator); compositor keybind launches a fresh process per press.
+  `--toggle` / `--show` / `--hide` retained as no-op compatibility shims.
 
 **CLI (`ditox`):**
 - `ditox` — TUI
@@ -94,9 +96,10 @@ pagination, notes, stats, collections.
 - Notes: `docs/notes/`
 - Config: `~/.config/ditox/config.toml`
 - Data: `~/.local/share/ditox/`
-- GUI window state: `~/.local/share/ditox/window_state.json`
-- GUI runtime lock/socket: `$XDG_RUNTIME_DIR/ditox-gui-$UID.{lock,sock}`
-- GUI autostart: `~/.config/autostart/ditox-gui.desktop`
+- GUI window state: `~/.local/share/ditox/window_state.json` (saved for
+  telemetry; size/position are forced to 420×520 bottom-left at boot)
+- GUI autostart: `~/.config/autostart/ditox-gui.desktop` (no longer
+  required for keybind summon — bind directly to `ditox-gui`)
 
 **Windows:**
 - Config: `%APPDATA%/ditox/config.toml`
