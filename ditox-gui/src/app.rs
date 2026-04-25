@@ -157,7 +157,8 @@ const MIN_WINDOW_SIZE: Size = Size::new(320.0, 300.0);
 
 #[cfg(windows)]
 fn force_restore_window(width: u32, height: u32) {
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM};
     use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
     use windows::Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindowLongW,
@@ -229,7 +230,7 @@ fn force_restore_window(width: u32, height: u32) {
                 let _ = windows::Win32::System::Threading::AttachThreadInput(
                     current_thread_id,
                     fg_thread_id,
-                    BOOL::from(true),
+                    true,
                 );
 
                 attached = true;
@@ -289,7 +290,15 @@ fn force_restore_window(width: u32, height: u32) {
                 flags |= SWP_NOMOVE; // Only preserve position if ON SCREEN
             }
 
-            let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width as i32, height as i32, flags);
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                x,
+                y,
+                width as i32,
+                height as i32,
+                flags,
+            );
 
             // 4. Force focus
             let _ = BringWindowToTop(hwnd);
@@ -313,7 +322,7 @@ fn force_restore_window(width: u32, height: u32) {
                 let _ = windows::Win32::System::Threading::AttachThreadInput(
                     current_thread_id,
                     fg_thread_id,
-                    BOOL::from(false),
+                    false,
                 );
             }
 
@@ -321,7 +330,7 @@ fn force_restore_window(width: u32, height: u32) {
             std::thread::sleep(std::time::Duration::from_millis(100));
             let _ = SetWindowPos(
                 hwnd,
-                HWND_NOTOPMOST,
+                Some(HWND_NOTOPMOST),
                 0,
                 0,
                 0,
@@ -354,7 +363,8 @@ fn force_restore_window(_width: u32, _height: u32) {
 /// Remove TOPMOST flag from our window (called when hiding)
 #[cfg(windows)]
 fn remove_topmost() {
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM};
     use windows::Win32::System::Threading::GetCurrentProcessId;
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowLongW, GetWindowThreadProcessId, SetWindowPos, GWL_EXSTYLE,
@@ -399,7 +409,7 @@ fn remove_topmost() {
         if let Some(hwnd) = data.main_hwnd {
             let _ = SetWindowPos(
                 hwnd,
-                HWND_NOTOPMOST,
+                Some(HWND_NOTOPMOST),
                 0,
                 0,
                 0,
@@ -421,7 +431,8 @@ fn remove_topmost() {
 #[cfg(windows)]
 fn is_window_actually_visible() -> bool {
     use std::process;
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetForegroundWindow, GetWindowLongW, GetWindowThreadProcessId,
         IsWindowVisible, GWL_EXSTYLE, GWL_STYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_SIZEBOX,

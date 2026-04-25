@@ -18,6 +18,7 @@
 //! named pipe.
 
 use std::io;
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
