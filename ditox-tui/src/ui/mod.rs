@@ -306,16 +306,14 @@ fn handle_normal_mode(
 
         // Multi-select
         Some(Action::ToggleMultiSelect) => app.toggle_multi_select(),
-        Some(Action::SelectCurrent) => {
-            if app.multi_select_mode {
-                app.toggle_current_selection();
-            }
+        Some(Action::SelectCurrent) if app.multi_select_mode => {
+            app.toggle_current_selection();
         }
-        Some(Action::SelectAll) => {
-            if app.multi_select_mode {
-                app.toggle_select_all();
-            }
+        Some(Action::SelectCurrent) => {}
+        Some(Action::SelectAll) if app.multi_select_mode => {
+            app.toggle_select_all();
         }
+        Some(Action::SelectAll) => {}
 
         // Handle Esc specially for closing modes
         Some(Action::ExitSearch) => {
@@ -461,37 +459,36 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, state: &mut MouseState) -> Res
     let list_end_row = app.terminal_height.saturating_sub(2); // -1 for status, -1 for border
 
     match mouse.kind {
-        MouseEventKind::Down(MouseButton::Left) => {
-            // Check if click is in the list area
-            if mouse.row >= list_start_row && mouse.row < list_end_row {
-                // Calculate which entry was clicked (accounting for scroll offset)
-                // Currently we don't track scroll offset separately - Ratatui handles it
-                // So we map the click to the visible position
-                let clicked_visible_row = (mouse.row - list_start_row) as usize;
+        MouseEventKind::Down(MouseButton::Left)
+            if mouse.row >= list_start_row && mouse.row < list_end_row =>
+        {
+            // Calculate which entry was clicked (accounting for scroll offset)
+            // Currently we don't track scroll offset separately - Ratatui handles it
+            // So we map the click to the visible position
+            let clicked_visible_row = (mouse.row - list_start_row) as usize;
 
-                // The visible entries start from some offset based on selection
-                // For simplicity, we calculate the entry index relative to the scroll
-                let visible_height = (list_end_row - list_start_row) as usize;
+            // The visible entries start from some offset based on selection
+            // For simplicity, we calculate the entry index relative to the scroll
+            let visible_height = (list_end_row - list_start_row) as usize;
 
-                // Calculate scroll offset (how many items are scrolled off-screen)
-                let scroll_offset = if app.selected >= visible_height {
-                    app.selected.saturating_sub(visible_height / 2)
+            // Calculate scroll offset (how many items are scrolled off-screen)
+            let scroll_offset = if app.selected >= visible_height {
+                app.selected.saturating_sub(visible_height / 2)
+            } else {
+                0
+            };
+
+            let clicked_index = scroll_offset + clicked_visible_row;
+
+            if clicked_index < app.filtered.len() {
+                // Check for double-click
+                if state.is_double_click(mouse.row) {
+                    // Double-click: copy and exit
+                    app.selected = clicked_index;
+                    app.should_copy_and_quit = true;
                 } else {
-                    0
-                };
-
-                let clicked_index = scroll_offset + clicked_visible_row;
-
-                if clicked_index < app.filtered.len() {
-                    // Check for double-click
-                    if state.is_double_click(mouse.row) {
-                        // Double-click: copy and exit
-                        app.selected = clicked_index;
-                        app.should_copy_and_quit = true;
-                    } else {
-                        // Single click: just select
-                        app.selected = clicked_index;
-                    }
+                    // Single click: just select
+                    app.selected = clicked_index;
                 }
             }
         }
