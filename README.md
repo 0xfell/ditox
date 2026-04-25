@@ -67,7 +67,7 @@ compilation:
 ```sh
 # One-off:
 nix run --option extra-substituters https://ditox.cachix.org \
-        --option extra-trusted-public-keys ditox.cachix.org-1:REPLACE_ME= \
+        --option extra-trusted-public-keys ditox.cachix.org-1:kVMmDqje/wWu/ChZfMzWdqduZlBptE7LoHZ3lTFdxg8= \
         github:0xfell/ditox
 
 # Or, once, as root on NixOS:
