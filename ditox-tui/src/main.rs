@@ -229,8 +229,8 @@ fn cmd_search(db: &Database, query: &str, limit: usize, json: bool) -> Result<()
         })
         .collect();
 
-    // Sort by score descending
-    matches.sort_by(|a, b| b.1.cmp(&a.1));
+    // Sort by score descending.
+    matches.sort_by_key(|m| std::cmp::Reverse(m.1));
 
     // Take only up to limit
     let results: Vec<&Entry> = matches.iter().take(limit).map(|(e, _)| *e).collect();

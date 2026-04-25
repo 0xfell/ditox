@@ -40,7 +40,10 @@ sysinfo = "0.38.4"
 # TUI-specific
 ratatui = "0.30.0"
 crossterm = "0.29.0"
-ratatui-image = "10.0.6"
+# `chafa-dyn` (default) needs pkg-config + libchafa at build time. We only
+# want chafa on Linux/Wayland — Windows can't use it anyway. The non-chafa
+# protocols (kitty/sixel/iterm2/halfblocks) compile in unconditionally.
+ratatui-image = { version = "10.0.6", default-features = false, features = ["crossterm"] }
 clap = { version = "4.6.1", features = ["derive"] }
 
 # GUI-specific

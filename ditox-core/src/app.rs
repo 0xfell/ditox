@@ -394,8 +394,8 @@ impl App {
             })
             .collect();
 
-        // Sort by score descending
-        matches.sort_by(|a, b| b.1.cmp(&a.1));
+        // Sort by score descending.
+        matches.sort_by_key(|m| std::cmp::Reverse(m.1));
 
         // Store filtered indices and match positions
         self.filtered = matches.iter().map(|(idx, _, _)| *idx).collect();

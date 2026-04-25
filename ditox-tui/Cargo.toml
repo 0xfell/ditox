@@ -32,6 +32,13 @@ nucleo-matcher.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+# Linux-only: enable chafa for richer terminal-graphics fallback. Requires
+# libchafa-dev at build time (provided by `nix develop` and the CI runner's
+# apt install). Windows doesn't need this — its terminals don't speak the
+# protocols chafa accelerates.
+[target.'cfg(unix)'.dependencies]
+ratatui-image = { workspace = true, features = ["chafa-dyn"] }
+
 [dev-dependencies]
 assert_cmd.workspace = true
 predicates.workspace = true

@@ -56,8 +56,13 @@ cargo build --workspace
 cargo test --workspace --locked
 
 # 1e. Run the pre-commit gauntlet (same as CI).
+#     IMPORTANT: clippy lints change between toolchain versions. CI uses
+#     `dtolnay/rust-toolchain@stable` which always tracks the latest stable
+#     release; our `nix develop` shell pins to whatever rust-bin.stable.latest
+#     resolves to (usually 1–2 versions behind). To guarantee parity with
+#     CI, run clippy with the host stable explicitly:
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
+rustup run stable cargo clippy --workspace --all-targets --locked -- -D warnings
 nix build .#default
 ```
 
