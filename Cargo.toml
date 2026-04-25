@@ -40,9 +40,12 @@ sysinfo = "0.38.4"
 # TUI-specific
 ratatui = "0.30.0"
 crossterm = "0.29.0"
-# `chafa-dyn` (default) needs pkg-config + libchafa at build time. We only
-# want chafa on Linux/Wayland — Windows can't use it anyway. The non-chafa
-# protocols (kitty/sixel/iterm2/halfblocks) compile in unconditionally.
+# `chafa-dyn` (default) needs pkg-config + libchafa at build time on every
+# host that compiles the TUI. We rely on the bundled protocols
+# (kitty/sixel/iterm2/halfblocks) instead — those cover every modern
+# terminal and don't require any system library. Halfblocks is the
+# universal fallback, so image preview still works everywhere chafa would
+# have helped.
 ratatui-image = { version = "10.0.6", default-features = false, features = ["crossterm"] }
 clap = { version = "4.6.1", features = ["derive"] }
 

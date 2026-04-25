@@ -75,7 +75,7 @@
             fontconfig
             freetype
             expat
-            chafa          # ratatui-image 10+ terminal graphics
+            chafa          # optional runtime tool; not a build dep
             # X11 fallback (winit)
             xorg.libX11
             xorg.libXcursor

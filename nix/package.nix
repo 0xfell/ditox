@@ -18,7 +18,6 @@
 , libGL
 , fontconfig
 , freetype
-, chafa
 , xorg
 , makeWrapper
 }:
@@ -56,7 +55,6 @@ rustPlatform.buildRustPackage rec {
     libGL
     fontconfig
     freetype
-    chafa
     xorg.libX11
     xorg.libXcursor
     xorg.libXrandr
