@@ -3,6 +3,14 @@
 //!
 //! These tests exercise the DB layer directly with a temp `XDG_DATA_HOME`
 //! so they don't depend on the clipboard or on a running watcher.
+//!
+//! Linux-only: the test fixtures hardcode the Linux `ProjectDirs` layout
+//! (`<XDG_DATA_HOME>/ditox/...`). On Windows `ProjectDirs` resolves to
+//! `<APPDATA>/ditox/ditox/data/...`, so the manual path joins below
+//! wouldn't match. The image-store logic itself is platform-agnostic and
+//! exercised by the Linux job.
+
+#![cfg(unix)]
 
 use chrono::Utc;
 use ditox_core::db::Database;

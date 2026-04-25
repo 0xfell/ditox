@@ -1,6 +1,10 @@
 //! Database layer tests.
 //!
 //! Tests all database operations: CRUD, queries, constraints, and edge cases.
+//!
+//! Linux-only: shares the `common::TestFixture` which uses `XDG_DATA_HOME`.
+
+#![cfg(unix)]
 
 mod common;
 

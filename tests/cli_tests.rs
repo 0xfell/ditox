@@ -2,7 +2,12 @@
 //!
 //! Tests the ditox binary through its command-line interface.
 //! These tests verify end-to-end functionality by running the actual binary.
+//!
+//! Linux-only: tests configure paths via `XDG_DATA_HOME` / `XDG_CONFIG_HOME`,
+//! which only `directories::ProjectDirs` honours on Linux. The CLI logic
+//! itself is platform-agnostic and exercised by the Linux job.
 
+#![cfg(unix)]
 #![allow(deprecated)] // assert_cmd::Command::cargo_bin is deprecated but still works
 
 mod common;

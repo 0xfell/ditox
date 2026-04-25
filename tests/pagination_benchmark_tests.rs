@@ -5,6 +5,10 @@
 //!
 //! For memory profiling, run with:
 //! RUST_BACKTRACE=1 cargo test --test pagination_benchmark_tests -- --nocapture
+//!
+//! Linux-only: shares the `common::TestFixture` which uses `XDG_DATA_HOME`.
+
+#![cfg(unix)]
 
 mod common;
 

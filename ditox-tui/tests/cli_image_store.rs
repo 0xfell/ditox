@@ -4,6 +4,11 @@
 //! These run the real `ditox` binary against a scratch `XDG_DATA_HOME`,
 //! seeding rows/files directly via `ditox-core` so we don't need a
 //! live clipboard.
+//!
+//! Linux-only: relies on `XDG_DATA_HOME` and the Linux ProjectDirs layout.
+//! See `ditox-core/tests/image_store.rs` for the rationale.
+
+#![cfg(unix)]
 
 use assert_cmd::Command;
 use ditox_core::db::Database;
