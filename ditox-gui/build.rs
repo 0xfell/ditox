@@ -94,7 +94,10 @@ fn generate_ico_if_needed() {
     if let Err(e) = std::fs::write(ico_path, &ico_data) {
         println!("cargo:warning=Could not write ditox.ico: {}", e);
     } else {
-        println!("cargo:warning=Generated ditox.ico with {} sizes", num_images);
+        println!(
+            "cargo:warning=Generated ditox.ico with {} sizes",
+            num_images
+        );
     }
 
     // Also copy to installer directory
@@ -117,5 +120,3 @@ fn embed_windows_resources() {
         println!("cargo:warning=Failed to compile Windows resources: {}", e);
     }
 }
-
-

@@ -24,6 +24,10 @@
       in {
         packages.default = pkgs.callPackage ./nix/package.nix { };
         packages.ditox = self.packages.${system}.default;
+        # Same derivation (it builds both binaries), aliased so users can
+        # `nix profile install github:0xfell/ditox#ditox-gui` and have the
+        # intent be explicit in their flake history.
+        packages.ditox-gui = self.packages.${system}.default;
 
         apps.default = flake-utils.lib.mkApp {
           drv = self.packages.${system}.default;
@@ -33,6 +37,14 @@
           drv = self.packages.${system}.default;
           name = "ditox-gui";
         };
+
+        # `nix fmt`
+        formatter = pkgs.nixpkgs-fmt;
+
+        # `nix flake check` smoke tests — keep lightweight (no `cargo test`
+        # because the test suite writes to XDG_DATA_HOME and a couple of
+        # tests need a display / clipboard).
+        checks.build = self.packages.${system}.default;
 
         devShells.default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [

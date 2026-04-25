@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Ditox
+GenericName=Clipboard Manager
+Comment=Cross-platform clipboard manager with history and search
+Exec=ditox-gui
+Icon=ditox-gui
+Terminal=false
+Categories=Utility;
+Keywords=clipboard;paste;history;manager;
+StartupNotify=true
+StartupWMClass=ditox-gui

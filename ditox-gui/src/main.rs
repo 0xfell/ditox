@@ -57,10 +57,7 @@ fn run() -> Result<()> {
                 _ => {
                     match ipc::send_to_existing(action) {
                         Ok(()) => {
-                            tracing::info!(
-                                "forwarded {:?} to running ditox-gui, exiting",
-                                action
-                            );
+                            tracing::info!("forwarded {:?} to running ditox-gui, exiting", action);
                             return Ok(());
                         }
                         Err(e) => {

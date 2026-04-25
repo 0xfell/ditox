@@ -2,8 +2,8 @@
 //!
 //! Shows a horizontal tab bar with filter options.
 
-use ditox_core::app::App;
 use crate::ui::theme::Theme;
+use ditox_core::app::App;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 

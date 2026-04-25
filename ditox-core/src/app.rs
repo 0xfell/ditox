@@ -257,7 +257,9 @@ impl App {
 
             // Load current page with filter
             let offset = self.current_page * PAGE_SIZE;
-            self.entries = self.db.get_page_filtered(offset, PAGE_SIZE, filter_str, collection_id)?;
+            self.entries =
+                self.db
+                    .get_page_filtered(offset, PAGE_SIZE, filter_str, collection_id)?;
             self.filtered = (0..self.entries.len()).collect();
             self.match_indices.clear();
         } else {
@@ -288,7 +290,9 @@ impl App {
 
         self.current_page = page;
         let offset = page * PAGE_SIZE;
-        self.entries = self.db.get_page_filtered(offset, PAGE_SIZE, filter_str, collection_id)?;
+        self.entries = self
+            .db
+            .get_page_filtered(offset, PAGE_SIZE, filter_str, collection_id)?;
         self.filtered = (0..self.entries.len()).collect();
         self.match_indices.clear();
         self.selected = 0; // Reset selection to top of new page
@@ -302,7 +306,7 @@ impl App {
         if self.total_count == 0 {
             1
         } else {
-            (self.total_count + PAGE_SIZE - 1) / PAGE_SIZE
+            self.total_count.div_ceil(PAGE_SIZE)
         }
     }
 
@@ -315,7 +319,9 @@ impl App {
     fn load_search_results(&mut self) -> Result<()> {
         // Use DB LIKE to pre-filter, then apply search mode specific matching
         let max_search_results = self.config.general.max_entries;
-        self.entries = self.db.search_entries(&self.search_query, max_search_results)?;
+        self.entries = self
+            .db
+            .search_entries(&self.search_query, max_search_results)?;
         self.total_count = self.entries.len();
         self.current_page = 0; // Reset to first page for search results
 
@@ -382,8 +388,7 @@ impl App {
 
                 // Get score and indices
                 let mut indices = Vec::new();
-                let score =
-                    pattern.indices(haystack_str, &mut self.matcher, &mut indices)?;
+                let score = pattern.indices(haystack_str, &mut self.matcher, &mut indices)?;
 
                 Some((idx, score, indices))
             })
@@ -447,7 +452,8 @@ impl App {
                 for mat in regex.find_iter(content) {
                     // Convert byte positions to char indices
                     let start_char = content[..mat.start()].chars().count() as u32;
-                    let end_char = start_char + content[mat.start()..mat.end()].chars().count() as u32;
+                    let end_char =
+                        start_char + content[mat.start()..mat.end()].chars().count() as u32;
                     for i in start_char..end_char {
                         indices.push(i);
                     }
@@ -569,9 +575,7 @@ impl App {
                     // `entry.content` is the content-addressable hash now;
                     // derive the real path before handing it to the OS.
                     let path = entry.image_path().ok_or_else(|| {
-                        crate::error::DitoxError::Other(
-                            "image entry missing extension".into(),
-                        )
+                        crate::error::DitoxError::Other("image entry missing extension".into())
                     })?;
                     Clipboard::set_image(&path.to_string_lossy())?;
                     self.set_message(format!("Copied image: {}", preview));
@@ -895,7 +899,7 @@ impl App {
     /// Get entry for a snippet slot (1-9)
     #[allow(dead_code)]
     pub fn get_snippet(&self, slot: usize) -> Option<&Entry> {
-        if slot < 1 || slot > 9 {
+        if !(1..=9).contains(&slot) {
             return None;
         }
         let entry_id = self.snippet_slots[slot - 1].as_ref()?;
@@ -905,7 +909,7 @@ impl App {
     /// Get snippet entry info for display (preview text and entry ID)
     #[allow(dead_code)]
     pub fn get_snippet_info(&self, slot: usize) -> Option<(String, String)> {
-        if slot < 1 || slot > 9 {
+        if !(1..=9).contains(&slot) {
             return None;
         }
         let entry_id = self.snippet_slots[slot - 1].as_ref()?;
@@ -921,7 +925,7 @@ impl App {
 
     /// Copy snippet slot (1-9) to clipboard
     pub fn copy_snippet(&mut self, slot: usize) -> Result<()> {
-        if slot < 1 || slot > 9 {
+        if !(1..=9).contains(&slot) {
             self.set_message("Invalid slot number");
             return Ok(());
         }
@@ -944,9 +948,7 @@ impl App {
                 }
                 crate::entry::EntryType::Image => {
                     let path = entry.image_path().ok_or_else(|| {
-                        crate::error::DitoxError::Other(
-                            "image entry missing extension".into(),
-                        )
+                        crate::error::DitoxError::Other("image entry missing extension".into())
                     })?;
                     Clipboard::set_image(&path.to_string_lossy())?;
                     self.set_message(format!("Slot {} (image): {}", slot, preview));
@@ -1020,7 +1022,10 @@ impl App {
             if let Ok(count) = self.db.count_filtered(filter_str, collection_id) {
                 self.total_count = count;
             }
-            if let Ok(entries) = self.db.get_page_filtered(0, PAGE_SIZE, filter_str, collection_id) {
+            if let Ok(entries) = self
+                .db
+                .get_page_filtered(0, PAGE_SIZE, filter_str, collection_id)
+            {
                 self.entries = entries;
                 self.filtered = (0..self.entries.len()).collect();
             }
@@ -1147,7 +1152,10 @@ impl App {
                 }
             }
             ConfirmAction::ClearAll => {
-                format!("Delete ALL {} entries? This cannot be undone!", self.total_count)
+                format!(
+                    "Delete ALL {} entries? This cannot be undone!",
+                    self.total_count
+                )
             }
         })
     }

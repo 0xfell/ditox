@@ -1,0 +1,130 @@
+# Continuous integration: build + test on every push and PR.
+#
+# The goal here is to catch breakage fast, NOT to produce artifacts.
+# The release pipeline (release.yml) handles prebuilt binaries separately
+# and only runs on tag pushes.
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+# Cancel superseded runs on the same ref to save minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  # Reduce incremental-compile overhead; CI runners are cold anyway.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Linux: full workspace build + test + clippy + fmt.
+  # Installs the GTK/Wayland/Vulkan system libs the GUI links against.
+  # ---------------------------------------------------------------------
+  test-linux:
+    name: test (linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libssl-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libgtk-3-dev \
+            libglib2.0-dev \
+            libayatana-appindicator3-dev \
+            libdbusmenu-gtk3-dev \
+            libxdo-dev \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libvulkan-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcb1-dev \
+            wl-clipboard
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-ci
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: cargo build
+        run: cargo build --workspace --locked
+
+      - name: cargo test
+        run: cargo test --workspace --locked
+
+  # ---------------------------------------------------------------------
+  # Windows: core + CLI + GUI build & unit tests. No clippy/fmt here (the
+  # Linux job covers those since the code is platform-agnostic except for
+  # the clipboard module).
+  # ---------------------------------------------------------------------
+  test-windows:
+    name: test (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-ci
+
+      - name: cargo build
+        run: cargo build --workspace --locked
+
+      - name: cargo test
+        run: cargo test --workspace --locked
+
+  # ---------------------------------------------------------------------
+  # Nix: smoke-test the flake. On master pushes we also push the closure
+  # to cachix so users benefit from prebuilt .drv outputs.
+  # ---------------------------------------------------------------------
+  nix:
+    name: nix build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # Push outputs to Cachix only on master (not on PRs from forks —
+      # they don't have access to secrets anyway). Cache name is `ditox`.
+      - uses: cachix/cachix-action@v15
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        with:
+          name: ditox
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: nix flake check
+        run: nix flake check --accept-flake-config
+
+      - name: nix build .#default
+        run: nix build .#default --accept-flake-config --print-build-logs

@@ -1,4 +1,3 @@
-use ditox_core::app::{App, InputMode};
 use crate::keybindings::KeybindingResolver;
 use crate::ui::confirm;
 use crate::ui::help;
@@ -8,6 +7,7 @@ use crate::ui::preview::{self, ImageCache, ImageLoader};
 use crate::ui::search;
 use crate::ui::tabs;
 use crate::ui::theme::Theme;
+use ditox_core::app::{App, InputMode};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui_image::picker::Picker;
@@ -196,7 +196,7 @@ fn draw_expanded(
                 }
 
                 // Render info
-                let dimensions_str = if let Some((w, h)) = image::image_dimensions(&entry.content).ok() {
+                let dimensions_str = if let Ok((w, h)) = image::image_dimensions(&entry.content) {
                     format!("{}x{}", w, h)
                 } else {
                     "unknown".to_string()
@@ -233,9 +233,9 @@ fn draw_expanded(
 fn draw_status(frame: &mut Frame, app: &App, theme: &Theme, area: Rect, show_snippets: bool) {
     // Check watcher status
     let watcher_status = if ditox_core::watcher::is_watcher_running() {
-        "●"  // Green dot (will be styled)
+        "●" // Green dot (will be styled)
     } else {
-        "○"  // Empty dot
+        "○" // Empty dot
     };
 
     let status = if let Some(msg) = &app.message {
@@ -245,8 +245,7 @@ fn draw_status(frame: &mut Frame, app: &App, theme: &Theme, area: Rect, show_sni
         let selected_count = app.multi_selected.len();
         format!(
             " {} │ [MULTI] Space:Select  v:All  d:Delete  y:Copy  Esc:Exit │ {} selected",
-            watcher_status,
-            selected_count
+            watcher_status, selected_count
         )
     } else {
         // Show snippet hints if any slots are filled (respecting narrow terminal)
@@ -256,7 +255,10 @@ fn draw_status(frame: &mut Frame, app: &App, theme: &Theme, area: Rect, show_sni
         } else {
             ""
         };
-        let keybindings = format!("{}j/k:Move  Enter:Copy  /:Search  ?:Help  q:Quit", snippet_hint);
+        let keybindings = format!(
+            "{}j/k:Move  Enter:Copy  /:Search  ?:Help  q:Quit",
+            snippet_hint
+        );
         let entry_count = if !app.search_query.is_empty() {
             // Show filtered/total when searching
             format!("{}/{} filtered", app.filtered.len(), app.entries.len())
@@ -264,7 +266,10 @@ fn draw_status(frame: &mut Frame, app: &App, theme: &Theme, area: Rect, show_sni
             format!("{} entries", app.entries.len())
         };
         let refresh_time = app.time_since_refresh();
-        format!(" {} │ {} │ {} │ Updated: {} ago", watcher_status, keybindings, entry_count, refresh_time)
+        format!(
+            " {} │ {} │ {} │ Updated: {} ago",
+            watcher_status, keybindings, entry_count, refresh_time
+        )
     };
 
     let status_bar = Paragraph::new(status)

@@ -92,10 +92,7 @@ fn cli_clear_removes_all_blobs() {
     let (_e2, p2) = insert_image_via_core(&png_bytes(21));
     assert!(p1.exists() && p2.exists());
 
-    ditox(&dir)
-        .args(["clear", "--confirm"])
-        .assert()
-        .success();
+    ditox(&dir).args(["clear", "--confirm"]).assert().success();
 
     assert!(!p1.exists() && !p2.exists());
     let images_dir = dir.path().join("ditox/images");
@@ -147,10 +144,7 @@ fn cli_repair_dry_run_reports_but_does_nothing() {
     let db = Database::open().unwrap();
     db.insert(&entry).unwrap();
 
-    ditox(&dir)
-        .args(["repair", "--dry-run"])
-        .assert()
-        .success();
+    ditox(&dir).args(["repair", "--dry-run"]).assert().success();
 
     // Both untouched.
     assert!(orphan.exists(), "dry-run must not remove files");
@@ -191,9 +185,5 @@ fn cli_repair_fix_hashes_quarantines_mismatches() {
         .flatten()
         .map(|e| e.path())
         .collect();
-    assert_eq!(
-        q_files.len(),
-        1,
-        "exactly one file should be quarantined"
-    );
+    assert_eq!(q_files.len(), 1, "exactly one file should be quarantined");
 }

@@ -124,7 +124,9 @@ impl Database {
             return Err(DitoxError::Other(format!("invalid image hash: {}", hash)));
         }
         let base = Self::get_images_dir()?;
-        Ok(base.join(&hash[..2]).join(format!("{}.{}", hash, extension)))
+        Ok(base
+            .join(&hash[..2])
+            .join(format!("{}.{}", hash, extension)))
     }
 
     /// Content-addressed write.
@@ -137,11 +139,7 @@ impl Database {
     /// - Safe under concurrent writers: if another process wins the rename
     ///   race we observe `AlreadyExists`-like behaviour (the destination
     ///   now exists) and quietly clean up our `.tmp`.
-    pub fn store_image_blob(
-        hash: &str,
-        extension: &str,
-        bytes: &[u8],
-    ) -> Result<(PathBuf, bool)> {
+    pub fn store_image_blob(hash: &str, extension: &str, bytes: &[u8]) -> Result<(PathBuf, bool)> {
         let path = Self::image_path(hash, extension)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -155,9 +153,7 @@ impl Database {
         // clobber each other's tmp on the way to the same destination.
         let tmp_name = format!(
             "{}.{}{}",
-            path.file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("blob"),
+            path.file_name().and_then(|s| s.to_str()).unwrap_or("blob"),
             std::process::id(),
             TMP_SUFFIX
         );
@@ -197,11 +193,7 @@ impl Database {
     /// transaction that deletes the entry row so a crash between row-gone
     /// and file-gone doesn't leak a blob. [`drain_pending_blob_prunes`]
     /// runs on every startup and processes the queue.
-    fn queue_blob_prune_tx(
-        tx: &rusqlite::Transaction,
-        hash: &str,
-        extension: &str,
-    ) -> Result<()> {
+    fn queue_blob_prune_tx(tx: &rusqlite::Transaction, hash: &str, extension: &str) -> Result<()> {
         tx.execute(
             "INSERT OR IGNORE INTO pending_blob_prunes (hash, extension, queued_at)
              VALUES (?1, ?2, ?3)",
@@ -217,24 +209,24 @@ impl Database {
     ///   `hash` is UNIQUE, but future-proof), leave the queue entry alone
     ///   so it's reconsidered next startup.
     pub(crate) fn drain_pending_blob_prunes(&self) {
-        let mut stmt = match self.conn.prepare(
-            "SELECT hash, extension FROM pending_blob_prunes",
-        ) {
+        let mut stmt = match self
+            .conn
+            .prepare("SELECT hash, extension FROM pending_blob_prunes")
+        {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!("could not read pending_blob_prunes: {}", e);
                 return;
             }
         };
-        let rows: Vec<(String, String)> = match stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-        {
-            Ok(it) => it.filter_map(|r| r.ok()).collect(),
-            Err(e) => {
-                tracing::warn!("could not iterate pending_blob_prunes: {}", e);
-                return;
-            }
-        };
+        let rows: Vec<(String, String)> =
+            match stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?))) {
+                Ok(it) => it.filter_map(|r| r.ok()).collect(),
+                Err(e) => {
+                    tracing::warn!("could not iterate pending_blob_prunes: {}", e);
+                    return;
+                }
+            };
         drop(stmt);
 
         for (hash, extension) in rows {
@@ -257,11 +249,7 @@ impl Database {
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                     Err(e) => {
-                        tracing::warn!(
-                            "could not remove orphan blob {}: {}",
-                            path.display(),
-                            e
-                        );
+                        tracing::warn!("could not remove orphan blob {}: {}", path.display(), e);
                         // Leave in queue for retry.
                         continue;
                     }
@@ -284,8 +272,8 @@ impl Database {
         if !base.exists() {
             return;
         }
-        let cutoff = std::time::SystemTime::now()
-            - std::time::Duration::from_secs(TMP_SWEEP_AGE_SECS);
+        let cutoff =
+            std::time::SystemTime::now() - std::time::Duration::from_secs(TMP_SWEEP_AGE_SECS);
 
         // Walk top-level + fan-out subdirectories.
         let Ok(entries) = std::fs::read_dir(&base) else {
@@ -325,7 +313,7 @@ impl Database {
             };
             if meta.is_dir() {
                 // Skip quarantine
-                if top.file_name() == std::ffi::OsString::from(QUARANTINE_DIR) {
+                if top.file_name() == QUARANTINE_DIR {
                     continue;
                 }
                 for e in std::fs::read_dir(top.path())?.flatten() {
@@ -507,25 +495,26 @@ impl Database {
                 DELETE FROM entries_fts WHERE id = old.id;
                 INSERT INTO entries_fts(id, content, notes) VALUES (new.id, new.content, new.notes);
             END;
-            "
+            ",
         )?;
 
         // Population migration:
         // Check if FTS table is empty but main table is not, implying we need to populate it
-        let fts_count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM entries_fts",
-            [],
-            |row| row.get(0),
-        ).unwrap_or(0);
+        let fts_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM entries_fts", [], |row| row.get(0))
+            .unwrap_or(0);
 
-        let entries_count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM entries",
-            [],
-            |row| row.get(0),
-        ).unwrap_or(0);
+        let entries_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+            .unwrap_or(0);
 
         if fts_count == 0 && entries_count > 0 {
-            tracing::info!("Populating FTS index for {} existing entries...", entries_count);
+            tracing::info!(
+                "Populating FTS index for {} existing entries...",
+                entries_count
+            );
             self.conn.execute(
                 "INSERT INTO entries_fts(id, content, notes) SELECT id, content, notes FROM entries",
                 [],
@@ -605,7 +594,10 @@ impl Database {
         for (id, hash, content, ext) in rows {
             // Already migrated? image_extension populated AND content looks
             // like a full hex hash.
-            if ext.is_some() && content.len() == 64 && content.chars().all(|c| c.is_ascii_hexdigit()) {
+            if ext.is_some()
+                && content.len() == 64
+                && content.chars().all(|c| c.is_ascii_hexdigit())
+            {
                 continue;
             }
 
@@ -710,7 +702,7 @@ impl Database {
         )?;
 
         let entries = stmt
-            .query_map([limit as i64], |row| Self::row_to_entry(row))?
+            .query_map([limit as i64], Self::row_to_entry)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(entries)
@@ -722,9 +714,7 @@ impl Database {
              FROM entries WHERE id = ?1",
         )?;
 
-        let entry = stmt
-            .query_row([id], |row| Self::row_to_entry(row))
-            .optional()?;
+        let entry = stmt.query_row([id], Self::row_to_entry).optional()?;
 
         Ok(entry)
     }
@@ -738,7 +728,7 @@ impl Database {
         )?;
 
         let entry = stmt
-            .query_row([index as i64], |row| Self::row_to_entry(row))
+            .query_row([index as i64], Self::row_to_entry)
             .optional()?;
 
         Ok(entry)
@@ -776,7 +766,9 @@ impl Database {
     /// this does NOT queue a prune (there's nothing to prune) and is safe
     /// to call in bulk from `ditox repair`.
     pub fn delete_dangling_row(&self, id: &str) -> Result<bool> {
-        let rows = self.conn.execute("DELETE FROM entries WHERE id = ?1", [id])?;
+        let rows = self
+            .conn
+            .execute("DELETE FROM entries WHERE id = ?1", [id])?;
         Ok(rows > 0)
     }
 
@@ -833,10 +825,9 @@ impl Database {
     }
 
     pub fn toggle_favorite(&self, id: &str) -> Result<bool> {
-        let rows = self.conn.execute(
-            "UPDATE entries SET pinned = NOT pinned WHERE id = ?1",
-            [id],
-        )?;
+        let rows = self
+            .conn
+            .execute("UPDATE entries SET pinned = NOT pinned WHERE id = ?1", [id])?;
         Ok(rows > 0)
     }
 
@@ -929,22 +920,22 @@ impl Database {
         // FTS syntax: wrap in quotes to match phrase or sanitize
         // For simple partial matching in FTS, typically just the words or wildcards.
         // We'll use prefix matching for the query terms.
-        
+
         let should_use_wildcard = !query.contains('"') && !query.contains('*');
         let fts_query = if should_use_wildcard {
-             format!("\"{}\"*", query.replace("\"", "\"\""))
+            format!("\"{}\"*", query.replace("\"", "\"\""))
         } else {
-             query.to_string()
+            query.to_string()
         };
 
         // Note: ORDER BY rank is the default relevance for FTS, but usually users want recent stuff too.
-        // However, usually detailed search means relevance matters. 
+        // However, usually detailed search means relevance matters.
         // Current requirement says "ordered by last_used" in previous implementation.
-        // But FTS is most useful when ranked by match. 
-        // LIMIT applies. 
+        // But FTS is most useful when ranked by match.
+        // LIMIT applies.
         // Let's stick to last_used DESC as the primary sort for consistency unless the user requested relevance sort.
         // Actually, for search, let's just get matching entries and sort by last_used.
-        
+
         // We join with FTS table to get the matching IDs
         let mut stmt = self.conn.prepare(
             "SELECT e.id, e.entry_type, e.content, e.hash, e.byte_size, e.created_at, e.last_used, e.pinned, e.notes, e.collection_id, e.image_extension
@@ -975,12 +966,12 @@ impl Database {
     ) -> Result<Vec<Entry>> {
         let should_use_wildcard = !query.contains('"') && !query.contains('*');
         let fts_query = if should_use_wildcard {
-             format!("\"{}\"*", query.replace("\"", "\"\""))
+            format!("\"{}\"*", query.replace("\"", "\"\""))
         } else {
-             query.to_string()
+            query.to_string()
         };
         let limit_i64 = limit as i64;
-        
+
         // Base query joins with FTS
         let base_sql = "SELECT e.id, e.entry_type, e.content, e.hash, e.byte_size, e.created_at, e.last_used, e.pinned, e.notes, e.collection_id, e.image_extension
                         FROM entries e
@@ -990,35 +981,50 @@ impl Database {
         // Append filter conditions
         match filter {
             "text" | "image" => {
-                let sql = format!("{} AND e.entry_type = ?1 ORDER BY e.last_used DESC LIMIT ?3", base_sql);
+                let sql = format!(
+                    "{} AND e.entry_type = ?1 ORDER BY e.last_used DESC LIMIT ?3",
+                    base_sql
+                );
                 let mut stmt = self.conn.prepare(&sql)?;
-                let entries = stmt.query_map(params![filter, fts_query, limit_i64], |row| Self::row_to_entry(row))?
+                let entries = stmt
+                    .query_map(params![filter, fts_query, limit_i64], Self::row_to_entry)?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 return Ok(entries);
             }
             "today" => {
                 let today = (Utc::now() - Duration::hours(24)).to_rfc3339();
-                let sql = format!("{} AND e.created_at > ?1 ORDER BY e.last_used DESC LIMIT ?3", base_sql);
+                let sql = format!(
+                    "{} AND e.created_at > ?1 ORDER BY e.last_used DESC LIMIT ?3",
+                    base_sql
+                );
                 let mut stmt = self.conn.prepare(&sql)?;
-                let entries = stmt.query_map(params![today, fts_query, limit_i64], |row| Self::row_to_entry(row))?
+                let entries = stmt
+                    .query_map(params![today, fts_query, limit_i64], Self::row_to_entry)?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 return Ok(entries);
             }
             "collection" if collection_id.is_some() => {
                 let cid = collection_id.unwrap();
-                let sql = format!("{} AND e.collection_id = ?1 ORDER BY e.last_used DESC LIMIT ?3", base_sql);
+                let sql = format!(
+                    "{} AND e.collection_id = ?1 ORDER BY e.last_used DESC LIMIT ?3",
+                    base_sql
+                );
                 let mut stmt = self.conn.prepare(&sql)?;
-                let entries = stmt.query_map(params![cid, fts_query, limit_i64], |row| Self::row_to_entry(row))?
+                let entries = stmt
+                    .query_map(params![cid, fts_query, limit_i64], Self::row_to_entry)?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 return Ok(entries);
             }
             "favorite" => {
-                // Fixed param index: pinned=1 is simpler to inline or use param. 
+                // Fixed param index: pinned=1 is simpler to inline or use param.
                 // Using ?1 for consistency in param ordering logic is tricky if no other param.
                 // Here we don't have a ?1 so we need to be careful with indexing.
                 // The base query uses ?2 for MATCH.
                 // So we can put pinned=1 in SQL.
-                let _sql = format!("{} AND e.pinned = 1 ORDER BY e.last_used DESC LIMIT ?3", base_sql);
+                let _sql = format!(
+                    "{} AND e.pinned = 1 ORDER BY e.last_used DESC LIMIT ?3",
+                    base_sql
+                );
                 // We only need fts_query and limit.
                 // But wait, our base query uses ?2. So we need ?1 to be something or renumber?
                 // Actually base_sql uses ?2. So we can pass a dummy as ?1 or just fix the indices.
@@ -1031,7 +1037,8 @@ impl Database {
                      ORDER BY e.last_used DESC
                      LIMIT ?2"
                 )?;
-                 let entries = stmt.query_map(params![fts_query, limit_i64], |row| Self::row_to_entry(row))?
+                let entries = stmt
+                    .query_map(params![fts_query, limit_i64], Self::row_to_entry)?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 return Ok(entries);
             }
@@ -1049,7 +1056,8 @@ impl Database {
              LIMIT ?2"
         )?;
 
-        let entries = stmt.query_map(params![fts_query, limit_i64], |row| Self::row_to_entry(row))?
+        let entries = stmt
+            .query_map(params![fts_query, limit_i64], Self::row_to_entry)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(entries)
     }
@@ -1104,7 +1112,7 @@ impl Database {
         )?;
 
         let entries = stmt
-            .query_map(params![limit as i64], |row| Self::row_to_entry(row))?
+            .query_map(params![limit as i64], Self::row_to_entry)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(entries)
@@ -1129,11 +1137,11 @@ impl Database {
         )?;
 
         // Favorites count
-        let favorites_count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM entries WHERE pinned = 1",
-            [],
-            |row| row.get(0),
-        )?;
+        let favorites_count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM entries WHERE pinned = 1", [], |row| {
+                    row.get(0)
+                })?;
 
         // Total usage count
         let total_usage: i64 = self.conn.query_row(
@@ -1160,10 +1168,7 @@ impl Database {
                     preview: if entry_type == "image" {
                         // `content` is the hash; show a stable synthesized
                         // label rather than leaking filesystem details.
-                        format!(
-                            "image-{}",
-                            content.chars().take(8).collect::<String>()
-                        )
+                        format!("image-{}", content.chars().take(8).collect::<String>())
                     } else {
                         content.chars().take(50).collect()
                     },
@@ -1207,9 +1212,7 @@ impl Database {
 
         // Get file sizes
         let db_path = Self::get_db_path()?;
-        let db_size_bytes = std::fs::metadata(&db_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let db_size_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
 
         // Image bytes: walk via `scan_image_files` so we pick up the 2-char
         // fan-out directories and skip `.quarantine` + `.tmp` leftovers.
@@ -1267,7 +1270,7 @@ impl Database {
         )?;
 
         let collections = stmt
-            .query_map([], |row| Self::row_to_collection(row))?
+            .query_map([], Self::row_to_collection)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(collections)
@@ -1280,9 +1283,7 @@ impl Database {
              FROM collections WHERE id = ?1",
         )?;
 
-        let collection = stmt
-            .query_row([id], |row| Self::row_to_collection(row))
-            .optional()?;
+        let collection = stmt.query_row([id], Self::row_to_collection).optional()?;
 
         Ok(collection)
     }
@@ -1294,9 +1295,7 @@ impl Database {
              FROM collections WHERE name = ?1",
         )?;
 
-        let collection = stmt
-            .query_row([name], |row| Self::row_to_collection(row))
-            .optional()?;
+        let collection = stmt.query_row([name], Self::row_to_collection).optional()?;
 
         Ok(collection)
     }
@@ -1325,15 +1324,18 @@ impl Database {
         )?;
 
         // Then delete the collection
-        let rows = self.conn.execute(
-            "DELETE FROM collections WHERE id = ?1",
-            [id],
-        )?;
+        let rows = self
+            .conn
+            .execute("DELETE FROM collections WHERE id = ?1", [id])?;
         Ok(rows > 0)
     }
 
     /// Set or unset collection for an entry
-    pub fn set_entry_collection(&self, entry_id: &str, collection_id: Option<&str>) -> Result<bool> {
+    pub fn set_entry_collection(
+        &self,
+        entry_id: &str,
+        collection_id: Option<&str>,
+    ) -> Result<bool> {
         let rows = self.conn.execute(
             "UPDATE entries SET collection_id = ?1 WHERE id = ?2",
             params![collection_id, entry_id],
@@ -1342,7 +1344,11 @@ impl Database {
     }
 
     /// Get entries in a specific collection
-    pub fn get_entries_in_collection(&self, collection_id: &str, limit: usize) -> Result<Vec<Entry>> {
+    pub fn get_entries_in_collection(
+        &self,
+        collection_id: &str,
+        limit: usize,
+    ) -> Result<Vec<Entry>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id, image_extension
              FROM entries
@@ -1352,7 +1358,7 @@ impl Database {
         )?;
 
         let entries = stmt
-            .query_map(params![collection_id, limit as i64], |row| Self::row_to_entry(row))?
+            .query_map(params![collection_id, limit as i64], Self::row_to_entry)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(entries)

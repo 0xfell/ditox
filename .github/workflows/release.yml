@@ -1,0 +1,408 @@
+# Release pipeline — builds prebuilt binaries for every supported target
+# when a `v*.*.*` tag is pushed, then attaches them to a GitHub Release.
+#
+# Targets (all from v1):
+#   - x86_64-unknown-linux-gnu   → TUI tarball + GUI AppImage
+#   - x86_64-unknown-linux-musl  → static TUI tarball (no runtime deps)
+#   - aarch64-unknown-linux-gnu  → TUI tarball + GUI AppImage (via cross)
+#   - x86_64-pc-windows-msvc     → zip with ditox.exe + ditox-gui.exe
+#
+# macOS is out of scope: clipboard.rs has no macOS backend.
+#
+# Artifacts are named `<bin>-<version>-<target_short>.<ext>`. A SHA256SUMS
+# file covering every artifact is attached to the release.
+#
+# The workflow also pushes the Nix closure to cachix.org/ditox so NixOS
+# users get pre-built derivations without rebuilding locally.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  # Manual trigger for testing the pipeline without cutting a release.
+  # Artifacts are uploaded as workflow-run artifacts only — the `publish`
+  # job is gated on `is_tag=true`.
+  workflow_dispatch:
+
+permissions:
+  contents: write  # needed to create the GitHub Release + upload assets
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Derive a version string once, so every downstream job uses the same
+  # value. For tag pushes it's the tag minus the `v` prefix; for manual
+  # runs it's `0.0.0-dev-<short-sha>`.
+  # ---------------------------------------------------------------------
+  meta:
+    name: meta
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      is_tag: ${{ steps.v.outputs.is_tag }}
+    steps:
+      - id: v
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+            echo "is_tag=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "is_tag=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ---------------------------------------------------------------------
+  # x86_64 Linux TUI (dynamic glibc build, ubuntu-24.04 runner).
+  # Bundles just the `ditox` binary; `wl-clipboard` is a runtime dep the
+  # user installs from their distro.
+  # ---------------------------------------------------------------------
+  linux-gnu-tui:
+    name: linux gnu tui (x86_64)
+    needs: meta
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-linux-gnu
+
+      - name: Build ditox (release)
+        run: cargo build --release --locked -p ditox-tui
+
+      - name: Package tarball
+        run: |
+          mkdir -p dist
+          V=${{ needs.meta.outputs.version }}
+          NAME="ditox-${V}-x86_64-linux"
+          STAGE="dist/${NAME}"
+          mkdir -p "${STAGE}"
+          cp target/release/ditox "${STAGE}/"
+          strip "${STAGE}/ditox"
+          cp README.md LICENSE "${STAGE}/"
+          tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+          rm -rf "${STAGE}"
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-gnu-tui
+          path: dist/*.tar.gz
+          retention-days: 7
+
+  # ---------------------------------------------------------------------
+  # x86_64 Linux musl static TUI — zero runtime deps, drop-in anywhere.
+  # `rusqlite/bundled` means SQLite is compiled in; no -lsqlite3 needed.
+  # ---------------------------------------------------------------------
+  linux-musl-tui:
+    name: linux musl tui (x86_64)
+    needs: meta
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-linux-musl
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build static ditox
+        run: |
+          cargo build --release --locked \
+            --target x86_64-unknown-linux-musl \
+            -p ditox-tui
+
+      - name: Package tarball
+        run: |
+          mkdir -p dist
+          V=${{ needs.meta.outputs.version }}
+          NAME="ditox-${V}-x86_64-linux-musl"
+          STAGE="dist/${NAME}"
+          mkdir -p "${STAGE}"
+          cp target/x86_64-unknown-linux-musl/release/ditox "${STAGE}/"
+          strip "${STAGE}/ditox"
+          cp README.md LICENSE "${STAGE}/"
+          tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+          rm -rf "${STAGE}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-musl-tui
+          path: dist/*.tar.gz
+          retention-days: 7
+
+  # ---------------------------------------------------------------------
+  # x86_64 Linux GUI AppImage. ubuntu-24.04 runner; linuxdeploy bundles
+  # GTK3 + libayatana-appindicator + libdbusmenu + Vulkan loader + all
+  # fontconfig/freetype dependencies. Result is a single ~60MB .AppImage
+  # that runs on most distros with glibc ≥ 2.39.
+  # ---------------------------------------------------------------------
+  linux-gnu-gui-appimage:
+    name: linux gnu gui appimage (x86_64)
+    needs: meta
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-linux-gui
+
+      - name: Install GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libssl-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libgtk-3-dev \
+            libglib2.0-dev \
+            libayatana-appindicator3-dev \
+            libdbusmenu-gtk3-dev \
+            libxdo-dev \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libvulkan-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcb1-dev \
+            fuse libfuse2t64 \
+            imagemagick
+
+      - name: Build ditox-gui (release)
+        run: cargo build --release --locked -p ditox-gui
+
+      - name: Download linuxdeploy + plugin-gtk
+        run: |
+          mkdir -p tools
+          cd tools
+          curl -L -o linuxdeploy \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -L -o linuxdeploy-plugin-gtk \
+            https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          chmod +x linuxdeploy linuxdeploy-plugin-gtk
+
+      - name: Assemble AppDir and build AppImage
+        run: |
+          V=${{ needs.meta.outputs.version }}
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          cp target/release/ditox-gui AppDir/usr/bin/
+          strip AppDir/usr/bin/ditox-gui
+          cp packaging/linux/ditox-gui.desktop AppDir/usr/share/applications/
+          cp packaging/linux/ditox-gui.png AppDir/usr/share/icons/hicolor/256x256/apps/
+          # linuxdeploy needs the icon also in the AppDir root.
+          cp packaging/linux/ditox-gui.png AppDir/ditox-gui.png
+          cp packaging/linux/ditox-gui.desktop AppDir/ditox-gui.desktop
+
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          export OUTPUT="ditox-gui-${V}-x86_64-linux.AppImage"
+          export PATH="$PWD/tools:$PATH"
+          export LINUXDEPLOY_OUTPUT_APP_NAME=ditox-gui
+          export LINUXDEPLOY_OUTPUT_VERSION="${V}"
+
+          tools/linuxdeploy \
+            --appdir AppDir \
+            --plugin gtk \
+            --output appimage
+
+          mkdir -p dist
+          mv ditox-gui-*.AppImage "dist/${OUTPUT}"
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-gnu-gui-appimage
+          path: dist/*.AppImage
+          retention-days: 7
+
+  # ---------------------------------------------------------------------
+  # aarch64 Linux via `cross` (Docker-based cross-compile from x86_64).
+  # Ships TUI tarball + GUI AppImage. Slower than native but needs no
+  # special runner.
+  # ---------------------------------------------------------------------
+  linux-arm64:
+    name: linux gnu (aarch64 via cross)
+    needs: meta
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-linux-arm64
+
+      - name: Install cross
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross --rev main --locked || \
+          cargo install cross --locked
+
+      - name: Build ditox-tui (aarch64)
+        run: cross build --release --locked --target aarch64-unknown-linux-gnu -p ditox-tui
+
+      - name: Build ditox-gui (aarch64)
+        run: cross build --release --locked --target aarch64-unknown-linux-gnu -p ditox-gui
+
+      - name: Package TUI tarball
+        run: |
+          mkdir -p dist
+          V=${{ needs.meta.outputs.version }}
+          NAME="ditox-${V}-aarch64-linux"
+          STAGE="dist/${NAME}"
+          mkdir -p "${STAGE}"
+          cp target/aarch64-unknown-linux-gnu/release/ditox "${STAGE}/"
+          # `strip` from the host doesn't know aarch64. Skip strip for arm64.
+          cp README.md LICENSE "${STAGE}/"
+          tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+          rm -rf "${STAGE}"
+
+      - name: Install AppImage tooling (aarch64)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fuse libfuse2t64 imagemagick
+          mkdir -p tools
+          curl -L -o tools/linuxdeploy-aarch64 \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
+          chmod +x tools/linuxdeploy-aarch64
+
+      - name: Assemble aarch64 AppImage
+        run: |
+          V=${{ needs.meta.outputs.version }}
+          rm -rf AppDir
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          cp target/aarch64-unknown-linux-gnu/release/ditox-gui AppDir/usr/bin/
+          cp packaging/linux/ditox-gui.desktop AppDir/usr/share/applications/
+          cp packaging/linux/ditox-gui.png AppDir/usr/share/icons/hicolor/256x256/apps/
+          cp packaging/linux/ditox-gui.png AppDir/ditox-gui.png
+          cp packaging/linux/ditox-gui.desktop AppDir/ditox-gui.desktop
+
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          export ARCH=aarch64
+          export OUTPUT="ditox-gui-${V}-aarch64-linux.AppImage"
+          export LINUXDEPLOY_OUTPUT_APP_NAME=ditox-gui
+          export LINUXDEPLOY_OUTPUT_VERSION="${V}"
+
+          # NOTE: linuxdeploy-plugin-gtk runs ldd against host libs; for a
+          # cross-built aarch64 binary we rely on `linuxdeploy-aarch64`'s
+          # built-in library copying without the gtk plugin. Users need
+          # GTK installed on their arm64 system — document in release notes.
+          tools/linuxdeploy-aarch64 \
+            --appdir AppDir \
+            --output appimage
+
+          mkdir -p dist
+          mv ditox-gui-*.AppImage "dist/${OUTPUT}"
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: dist/*
+          retention-days: 7
+
+  # ---------------------------------------------------------------------
+  # Windows x86_64 — native MSVC. Icon and version info are embedded by
+  # ditox-gui/build.rs via winres.
+  # ---------------------------------------------------------------------
+  windows:
+    name: windows (x86_64 msvc)
+    needs: meta
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-windows
+
+      - name: Build workspace (release)
+        run: cargo build --release --workspace --locked
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          $v = "${{ needs.meta.outputs.version }}"
+          $name = "ditox-$v-x86_64-windows"
+          New-Item -ItemType Directory -Force -Path "dist/$name" | Out-Null
+          Copy-Item target/release/ditox.exe "dist/$name/"
+          Copy-Item target/release/ditox-gui.exe "dist/$name/"
+          Copy-Item README.md "dist/$name/"
+          Copy-Item LICENSE "dist/$name/"
+          Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
+          Remove-Item -Recurse "dist/$name"
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+          retention-days: 7
+
+  # ---------------------------------------------------------------------
+  # Nix: build the closure and push it to cachix.org/ditox. This runs on
+  # tag pushes so release users hit a warm cache.
+  # ---------------------------------------------------------------------
+  nix-cache:
+    name: nix cachix push
+    needs: meta
+    if: needs.meta.outputs.is_tag == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: cachix/cachix-action@v15
+        with:
+          name: ditox
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: nix build .#default
+        run: nix build .#default --accept-flake-config --print-build-logs
+
+  # ---------------------------------------------------------------------
+  # Aggregate all artifacts, compute SHA256SUMS, and publish the release.
+  # ---------------------------------------------------------------------
+  publish:
+    name: publish release
+    needs:
+      - meta
+      - linux-gnu-tui
+      - linux-musl-tui
+      - linux-gnu-gui-appimage
+      - linux-arm64
+      - windows
+    if: needs.meta.outputs.is_tag == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten + checksum
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.AppImage' -o -name '*.zip' \) \
+            -exec cp -v {} release/ \;
+          cd release
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+          ls -la
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true

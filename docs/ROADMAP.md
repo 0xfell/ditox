@@ -1,12 +1,12 @@
 # Ditox Roadmap
 
-> **Current Version:** 0.2.1
+> **Current Version:** 0.3.0
 
 ## Status Overview
 
 | Category | Count |
 |----------|-------|
-| Completed | 11 |
+| Completed | 12 |
 | In Progress | 0 |
 | Planned | 0 |
 
@@ -28,6 +28,7 @@
 
 | Task | Date | Description |
 |------|------|-------------|
+| [Release Infrastructure](tasks/completed/012-release-infra.md) | 2026-04-25 | CI + release workflows (GitHub Actions), prebuilt Linux/Windows binaries (TUI tarball, musl static, AppImage, Windows zip), Cachix push, README rewrite, versions bumped to 0.3.0 |
 | [Image Storage Bug Fix](tasks/completed/011-image-storage-bug.md) | 2026-04-25 | Content-addressed image store, refcount prune queue, schema v1 migration, `ditox repair` command. Fixes 4 disk-leak bugs. |
 | [Linux GUI](tasks/completed/010-linux-gui.md) | 2026-04-24 | Cross-platform `ditox-gui` (Wayland/X11) with tray, `--toggle` IPC, XDG autostart |
 | [Delete Confirmation in TUI](tasks/completed/009-delete-confirmation-tui.md) | 2025-12-02 | Add confirmation dialogs for delete operations (`d` and `D`) |
@@ -44,7 +45,7 @@
 
 ## Quick Reference
 
-### What's Working (v0.2.1)
+### What's Working (v0.3.0)
 
 **TUI (`ditox`):** Full feature set — list, search, copy, delete, pin, preview,
 pagination, notes, stats, collections.
@@ -76,7 +77,7 @@ pagination, notes, stats, collections.
 **GUI CLI (`ditox-gui`):** `--toggle`, `--show`, `--hide`, `--quit`, `--help`,
 `--version`.
 
-### Performance (v0.2.1)
+### Performance (v0.3.0)
 
 | Metric | Result |
 |--------|--------|

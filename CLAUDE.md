@@ -237,3 +237,39 @@ Tests use `tempfile` for isolated temp directories. Note: CLI tests use `XDG_DAT
 - Database: `%APPDATA%/ditox/ditox.db`
 - Images: `%APPDATA%/ditox/images/`
 - Config: `%APPDATA%/ditox/config.toml`
+
+## Release Process
+
+Distribution channels:
+- **GitHub Releases** — prebuilt tarballs/AppImages/zip for Linux
+  (x86_64 + aarch64) and Windows. Cut automatically by
+  `.github/workflows/release.yml` on `v*.*.*` tag push.
+- **Nix flake** — `nix run github:0xfell/ditox`. Closures pushed to
+  `cachix.org/ditox` by CI on master and on tag pushes.
+
+Full checklist lives at `docs/RELEASING.md`. Short version:
+
+```sh
+export V=0.3.1
+# bump Cargo.toml, nix/package.nix, ditox-gui/installer/setup.iss
+cargo build --workspace                  # refresh Cargo.lock
+cargo test --workspace --locked
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+nix build .#default
+
+git commit -am "chore(release): v$V"
+git tag -a "v$V" -m "v$V"
+git push origin master "v$V"
+```
+
+CI is driven by two workflows:
+- `.github/workflows/ci.yml` — runs on every push/PR: `fmt --check`,
+  `clippy -D warnings`, `cargo test` (Linux + Windows), `nix build`.
+  Pushes the Nix closure to cachix on master only.
+- `.github/workflows/release.yml` — runs on tag push. Six parallel
+  build jobs (linux gnu/musl/appimage/arm64/windows/nix), one publish
+  job that aggregates artifacts + `SHA256SUMS` into a GitHub Release.
+  Can also be triggered manually via `workflow_dispatch` for a dry
+  run (no release is cut, artifacts are kept as workflow-run
+  artifacts for 7 days).

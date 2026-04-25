@@ -1,5 +1,5 @@
-use ditox_core::app::{App, InputMode, SearchMode};
 use crate::ui::theme::Theme;
+use ditox_core::app::{App, InputMode, SearchMode};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
@@ -40,7 +40,10 @@ pub fn draw(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         String::new()
     };
 
-    let search_text = format!(" {}Search: {}{}{}", mode_indicator, app.search_query, cursor_char, match_info);
+    let search_text = format!(
+        " {}Search: {}{}{}",
+        mode_indicator, app.search_query, cursor_char, match_info
+    );
 
     let title = match app.input_mode {
         InputMode::Normal => " Ditox ",
@@ -52,15 +55,13 @@ pub fn draw(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         InputMode::Confirm => " Ditox (confirm) ",
     };
 
-    let search_bar = Paragraph::new(search_text)
-        .style(search_style)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(theme.border())
-                .title(title)
-                .title_style(theme.title()),
-        );
+    let search_bar = Paragraph::new(search_text).style(search_style).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme.border())
+            .title(title)
+            .title_style(theme.title()),
+    );
 
     frame.render_widget(search_bar, area);
 

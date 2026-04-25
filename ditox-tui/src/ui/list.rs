@@ -1,5 +1,5 @@
-use ditox_core::app::App;
 use crate::ui::theme::Theme;
+use ditox_core::app::App;
 use ratatui::prelude::*;
 use ratatui::widgets::{
     Block, Borders, List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState,
@@ -91,6 +91,9 @@ pub fn draw(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     }
 }
 
+// Each argument threads through rendering; grouping into a struct would
+// hide the dependencies without reducing coupling.
+#[allow(clippy::too_many_arguments)]
 fn format_entry_row(
     entry: &ditox_core::entry::Entry,
     index: usize,

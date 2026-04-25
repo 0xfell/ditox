@@ -17,6 +17,10 @@ impl EntryType {
         }
     }
 
+    // Named `from_str` for symmetry with `as_str`. Not implementing the
+    // `FromStr` trait because our error type is just "unknown variant" —
+    // a custom `Result` would add ceremony without value.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "text" => Some(EntryType::Text),
@@ -138,10 +142,8 @@ impl Entry {
                 // Use char count, not byte length, to handle UTF-8 properly
                 let char_count = trimmed.chars().count();
                 if char_count > max_len {
-                    let truncated: String = trimmed
-                        .chars()
-                        .take(max_len.saturating_sub(3))
-                        .collect();
+                    let truncated: String =
+                        trimmed.chars().take(max_len.saturating_sub(3)).collect();
                     format!("{}...", truncated)
                 } else {
                     trimmed.to_string()
@@ -150,10 +152,7 @@ impl Entry {
             EntryType::Image => {
                 // `content` is the content-addressable hash; show a short,
                 // stable label that doesn't leak implementation details.
-                let ext = self
-                    .image_extension
-                    .as_deref()
-                    .unwrap_or("png");
+                let ext = self.image_extension.as_deref().unwrap_or("png");
                 let short = self.content.chars().take(8).collect::<String>();
                 format!("image-{}.{}", short, ext)
             }
@@ -219,7 +218,7 @@ fn strip_ansi_escapes(s: &str) -> String {
             // ESC character - start of escape sequence
             if chars.peek() == Some(&'[') {
                 chars.next(); // consume '['
-                // Skip until we hit a letter (end of CSI sequence)
+                              // Skip until we hit a letter (end of CSI sequence)
                 while let Some(&next) = chars.peek() {
                     chars.next();
                     if next.is_ascii_alphabetic() {

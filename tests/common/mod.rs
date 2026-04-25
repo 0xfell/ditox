@@ -80,7 +80,7 @@ pub mod sample_data {
     pub const TEXT_SAMPLES: &[&str] = &[
         "Hello, World!",
         "fn main() { println!(\"Hello\"); }",
-        "https://github.com/oxfell/ditox",
+        "https://github.com/0xfell/ditox",
         "SELECT * FROM users WHERE id = 1;",
         "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
         "{ \"key\": \"value\", \"number\": 42 }",

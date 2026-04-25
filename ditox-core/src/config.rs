@@ -6,22 +6,12 @@ use std::path::PathBuf;
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(default)]
+#[derive(Default)]
 pub struct Config {
     pub general: GeneralConfig,
     pub storage: StorageConfig,
     pub ui: UiConfig,
     pub keybindings: KeybindingsConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            storage: StorageConfig::default(),
-            ui: UiConfig::default(),
-            keybindings: KeybindingsConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -42,14 +32,9 @@ impl Default for GeneralConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(default)]
+#[derive(Default)]
 pub struct StorageConfig {
     pub data_dir: Option<PathBuf>,
-}
-
-impl Default for StorageConfig {
-    fn default() -> Self {
-        Self { data_dir: None }
-    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

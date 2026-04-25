@@ -114,9 +114,9 @@ fn cmd_copy(db: &Database, target: &str) -> Result<()> {
                     println!("Copied: {}", entry.preview(50));
                 }
                 EntryType::Image => {
-                    let path = entry.image_path().ok_or_else(|| {
-                        DitoxError::Other("image entry missing extension".into())
-                    })?;
+                    let path = entry
+                        .image_path()
+                        .ok_or_else(|| DitoxError::Other("image entry missing extension".into()))?;
                     Clipboard::set_image(&path.to_string_lossy())?;
                     println!("Copied image: {}", entry.preview(50));
                 }
@@ -325,13 +325,15 @@ fn cmd_repair(db: &mut Database, dry_run: bool, fix_hashes: bool) -> Result<()> 
     let mut dangling: Vec<(String, String)> = Vec::new(); // (id, preview)
     for (id, hash, ext, path) in &rows {
         if !path.exists() {
-            dangling.push((id.clone(), format!("{}.{}", &hash[..8.min(hash.len())], ext)));
+            dangling.push((
+                id.clone(),
+                format!("{}.{}", &hash[..8.min(hash.len())], ext),
+            ));
         }
     }
 
     // 2. Orphan files: on disk but no live row points at them.
-    let referenced: HashSet<(String, String)> =
-        db.referenced_image_blobs()?.into_iter().collect();
+    let referenced: HashSet<(String, String)> = db.referenced_image_blobs()?.into_iter().collect();
     let files = db.scan_image_files()?;
     let mut orphans: Vec<std::path::PathBuf> = Vec::new();
     for f in &files {
@@ -404,11 +406,7 @@ fn cmd_repair(db: &mut Database, dry_run: bool, fix_hashes: bool) -> Result<()> 
         for (_id, db_hash, ext, path, actual) in &mismatched {
             match Database::quarantine_file(path, db_hash, actual, ext) {
                 Ok(dest) => println!("  quarantined {} -> {}", path.display(), dest.display()),
-                Err(e) => eprintln!(
-                    "warn: could not quarantine {}: {}",
-                    path.display(),
-                    e
-                ),
+                Err(e) => eprintln!("warn: could not quarantine {}: {}", path.display(), e),
             }
         }
     }
@@ -464,9 +462,11 @@ fn cmd_collection(db: &Database, subcmd: CollectionCommands) -> Result<()> {
             cmd_collection_add(db, &entry, &collection)
         }
         CollectionCommands::Remove { entry } => cmd_collection_remove(db, &entry),
-        CollectionCommands::Show { target, limit, json } => {
-            cmd_collection_show(db, &target, limit, json)
-        }
+        CollectionCommands::Show {
+            target,
+            limit,
+            json,
+        } => cmd_collection_show(db, &target, limit, json),
     }
 }
 
@@ -586,11 +586,7 @@ fn cmd_collection_add(db: &Database, entry_target: &str, collection_target: &str
     match (entry, collection) {
         (Some(entry), Some(col)) => {
             db.set_entry_collection(&entry.id, Some(&col.id))?;
-            println!(
-                "Added '{}' to collection '{}'",
-                entry.preview(30),
-                col.name
-            );
+            println!("Added '{}' to collection '{}'", entry.preview(30), col.name);
             Ok(())
         }
         (None, _) => Err(DitoxError::NotFound(format!(
@@ -642,9 +638,7 @@ fn cmd_collection_show(db: &Database, target: &str, limit: usize, json: bool) ->
                     "{:>3} │ {:^4} │ {:^3} │ {:<40} │ {:>6}",
                     "#", "Type", "Pin", "Content", "Age"
                 );
-                println!(
-                    "────┼──────┼─────┼──────────────────────────────────────────┼────────"
-                );
+                println!("────┼──────┼─────┼──────────────────────────────────────────┼────────");
 
                 for (i, entry) in entries.iter().enumerate() {
                     println!(

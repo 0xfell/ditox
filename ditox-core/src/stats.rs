@@ -57,7 +57,10 @@ impl Stats {
         if self.total_entries > 0 {
             let text_pct = (self.text_count as f64 / self.total_entries as f64 * 100.0) as u32;
             let image_pct = (self.image_count as f64 / self.total_entries as f64 * 100.0) as u32;
-            output.push_str(&format!("  Text:            {} ({}%)\n", self.text_count, text_pct));
+            output.push_str(&format!(
+                "  Text:            {} ({}%)\n",
+                self.text_count, text_pct
+            ));
             output.push_str(&format!(
                 "  Images:          {} ({}%)\n",
                 self.image_count, image_pct
@@ -69,7 +72,10 @@ impl Stats {
 
         // Storage
         output.push_str("Storage:\n");
-        output.push_str(&format!("  Database:        {}\n", format_bytes(self.db_size_bytes)));
+        output.push_str(&format!(
+            "  Database:        {}\n",
+            format_bytes(self.db_size_bytes)
+        ));
         output.push_str(&format!(
             "  Images:          {}\n",
             format_bytes(self.images_size_bytes)
@@ -93,9 +99,15 @@ impl Stats {
 
         // Activity
         output.push_str("Activity:\n");
-        output.push_str(&format!("  Today:           {} copies\n", self.copies_today));
+        output.push_str(&format!(
+            "  Today:           {} copies\n",
+            self.copies_today
+        ));
         output.push_str(&format!("  This week:       {} copies\n", self.copies_week));
-        output.push_str(&format!("  This month:      {} copies\n", self.copies_month));
+        output.push_str(&format!(
+            "  This month:      {} copies\n",
+            self.copies_month
+        ));
         output.push_str(&format!("  Total:           {} copies\n", self.total_usage));
 
         output

@@ -3,8 +3,8 @@
 //! This module handles parsing key strings from config and resolving
 //! key events to actions.
 
-use ditox_core::actions::Action;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ditox_core::actions::Action;
 use std::collections::HashMap;
 
 /// Represents a parsed key combination
@@ -26,10 +26,8 @@ impl KeyCombo {
         let parts: Vec<&str> = s.split('+').collect();
 
         let mut modifiers = KeyModifiers::empty();
-        let key_part;
-
-        if parts.len() == 1 {
-            key_part = parts[0];
+        let key_part = if parts.len() == 1 {
+            parts[0]
         } else {
             // Parse modifiers (case-insensitive)
             for part in &parts[..parts.len() - 1] {
@@ -40,8 +38,8 @@ impl KeyCombo {
                     _ => return None, // Unknown modifier
                 }
             }
-            key_part = parts[parts.len() - 1];
-        }
+            parts[parts.len() - 1]
+        };
 
         // Parse the key code (preserves case for single chars)
         let code = parse_key_code(key_part)?;
@@ -256,10 +254,7 @@ impl KeybindingResolver {
     fn bind_default(&mut self, key_str: &str, action: Action) {
         if let Some(combo) = KeyCombo::parse(key_str) {
             self.bindings.insert(combo.clone(), action);
-            self.reverse_bindings
-                .entry(action)
-                .or_default()
-                .push(combo);
+            self.reverse_bindings.entry(action).or_default().push(combo);
         }
     }
 
@@ -275,10 +270,7 @@ impl KeybindingResolver {
             }
 
             self.bindings.insert(combo.clone(), action);
-            self.reverse_bindings
-                .entry(action)
-                .or_default()
-                .push(combo);
+            self.reverse_bindings.entry(action).or_default().push(combo);
             true
         } else {
             tracing::warn!("Failed to parse keybinding: {}", key_str);
@@ -435,10 +427,7 @@ mod tests {
             Some(KeyCombo::new(KeyCode::Char('L'), KeyModifiers::empty()))
         );
         // Verify 'd' and 'D' are different
-        assert_ne!(
-            KeyCombo::parse("d"),
-            KeyCombo::parse("D")
-        );
+        assert_ne!(KeyCombo::parse("d"), KeyCombo::parse("D"));
     }
 
     #[test]

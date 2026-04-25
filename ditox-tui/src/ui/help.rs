@@ -1,6 +1,6 @@
-use ditox_core::actions::Action;
 use crate::keybindings::KeybindingResolver;
 use crate::ui::theme::Theme;
+use ditox_core::actions::Action;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
@@ -82,7 +82,8 @@ fn generate_help(keybindings: &KeybindingResolver) -> String {
         key_for(keybindings, Action::GoBottom),
         key_for(keybindings, Action::PrevPage),
         key_for(keybindings, Action::NextPage),
-        format!("{}/{}",
+        format!(
+            "{}/{}",
             key_for(keybindings, Action::PrevTab),
             key_for(keybindings, Action::NextTab)
         ),

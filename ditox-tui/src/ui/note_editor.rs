@@ -11,7 +11,7 @@ pub fn render(frame: &mut Frame, note: &str, theme: &Theme) {
     let area = frame.area();
 
     // Calculate centered modal size (60% width, 7 lines height)
-    let modal_width = (area.width * 60 / 100).max(40).min(80);
+    let modal_width = (area.width * 60 / 100).clamp(40, 80);
     let modal_height = 7;
 
     let modal_x = (area.width.saturating_sub(modal_width)) / 2;
@@ -40,12 +40,7 @@ pub fn render(frame: &mut Frame, note: &str, theme: &Theme) {
     frame.render_widget(paragraph, modal_area);
 
     // Render help text below the input
-    let help_area = Rect::new(
-        modal_x,
-        modal_y + modal_height,
-        modal_width,
-        1,
-    );
+    let help_area = Rect::new(modal_x, modal_y + modal_height, modal_width, 1);
 
     if help_area.y < area.height {
         let help = Paragraph::new("Enter: Save  Esc: Cancel")

@@ -1,7 +1,7 @@
 //! Confirmation dialog UI component
 
-use ditox_core::app::App;
 use crate::ui::theme::Theme;
+use ditox_core::app::App;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
@@ -42,7 +42,11 @@ pub fn draw(frame: &mut Frame, app: &App, theme: &Theme) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Yellow))
                 .title(" Confirm ")
-                .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                .title_style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
         );
 
     frame.render_widget(dialog, popup_area);

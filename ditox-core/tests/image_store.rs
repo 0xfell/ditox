@@ -158,9 +158,7 @@ fn scan_image_files_ignores_quarantine_and_tmp() {
     std::fs::write(images.join(".quarantine/should-ignore.png"), b"x").unwrap();
     std::fs::write(images.join("ab/somefile.tmp"), b"x").unwrap();
     std::fs::write(
-        images
-            .join("ab")
-            .join(format!("{}.png", "a".repeat(64))),
+        images.join("ab").join(format!("{}.png", "a".repeat(64))),
         b"x",
     )
     .unwrap();

@@ -76,42 +76,40 @@ impl ContentType {
 }
 
 // Pre-compiled regex patterns for content detection
-static URL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(https?|ftp|file)://[^\s]+$").unwrap()
-});
+static URL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(https?|ftp|file)://[^\s]+$").unwrap());
 
-static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap()
-});
+static EMAIL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap());
 
 static UNIX_PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     // Match Unix-style absolute paths
     Regex::new(r"^(/[^/]+)+/?$").unwrap()
 });
 
-static WINDOWS_PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[a-zA-Z]:[/\\]").unwrap()
-});
+static WINDOWS_PATH_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[a-zA-Z]:[/\\]").unwrap());
 
 static UUID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$").unwrap()
+    Regex::new(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+        .unwrap()
 });
 
-static HEX_COLOR_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$").unwrap()
-});
+static HEX_COLOR_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$").unwrap());
 
-static IPV4_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^([0-9]{1,3}\.){3}[0-9]{1,3}$").unwrap()
-});
+static IPV4_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^([0-9]{1,3}\.){3}[0-9]{1,3}$").unwrap());
 
-static IPV6_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$").unwrap()
-});
+static IPV6_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$").unwrap());
 
 static PHONE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     // Matches various phone formats: +1234567890, (123) 456-7890, 123-456-7890, etc.
-    Regex::new(r"^[+]?[(]?[0-9]{1,4}[)]?[-\s.]?[(]?[0-9]{1,4}[)]?[-\s.]?[0-9]{1,4}[-\s.]?[0-9]{1,9}$").unwrap()
+    Regex::new(
+        r"^[+]?[(]?[0-9]{1,4}[)]?[-\s.]?[(]?[0-9]{1,4}[)]?[-\s.]?[0-9]{1,4}[-\s.]?[0-9]{1,9}$",
+    )
+    .unwrap()
 });
 
 /// Detect the content type of a text string
@@ -167,12 +165,11 @@ pub fn detect(content: &str) -> ContentType {
     // Multi-line or complex content detection
 
     // JSON detection (try to parse as JSON)
-    if (trimmed.starts_with('{') && trimmed.ends_with('}'))
-        || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+    if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']')))
+        && serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
     {
-        if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
-            return ContentType::Json;
-        }
+        return ContentType::Json;
     }
 
     // YAML detection (check for YAML-like structure)
@@ -202,16 +199,21 @@ fn is_yaml_like(content: &str) -> bool {
 
     // Check for YAML-specific patterns
     let yaml_patterns = [
-        "---",  // YAML document start
-        "...",  // YAML document end
+        "---", // YAML document start
+        "...", // YAML document end
     ];
 
-    if lines.first().map(|l| yaml_patterns.contains(l)).unwrap_or(false) {
+    if lines
+        .first()
+        .map(|l| yaml_patterns.contains(l))
+        .unwrap_or(false)
+    {
         return true;
     }
 
     // Check for key: value patterns with consistent indentation
-    let key_value_count = lines.iter()
+    let key_value_count = lines
+        .iter()
         .filter(|l| {
             let trimmed = l.trim();
             !trimmed.is_empty()
@@ -232,12 +234,46 @@ fn is_shell_command(content: &str) -> bool {
 
     // Common shell command prefixes
     let shell_prefixes = [
-        "sudo ", "cd ", "ls ", "cat ", "grep ", "find ", "sed ", "awk ",
-        "echo ", "export ", "source ", "chmod ", "chown ", "mkdir ", "rm ",
-        "cp ", "mv ", "touch ", "curl ", "wget ", "git ", "docker ", "npm ",
-        "cargo ", "python ", "pip ", "node ", "make ", "cmake ", "apt ",
-        "brew ", "yum ", "dnf ", "pacman ", "systemctl ", "journalctl ",
-        "./", "sh ", "bash ", "zsh ",
+        "sudo ",
+        "cd ",
+        "ls ",
+        "cat ",
+        "grep ",
+        "find ",
+        "sed ",
+        "awk ",
+        "echo ",
+        "export ",
+        "source ",
+        "chmod ",
+        "chown ",
+        "mkdir ",
+        "rm ",
+        "cp ",
+        "mv ",
+        "touch ",
+        "curl ",
+        "wget ",
+        "git ",
+        "docker ",
+        "npm ",
+        "cargo ",
+        "python ",
+        "pip ",
+        "node ",
+        "make ",
+        "cmake ",
+        "apt ",
+        "brew ",
+        "yum ",
+        "dnf ",
+        "pacman ",
+        "systemctl ",
+        "journalctl ",
+        "./",
+        "sh ",
+        "bash ",
+        "zsh ",
     ];
 
     // Check for shebang
@@ -268,23 +304,53 @@ fn is_code_like(content: &str) -> bool {
     // Check for common code patterns
     let code_indicators = [
         // Function/method definitions
-        "fn ", "def ", "func ", "function ", "async fn ",
+        "fn ",
+        "def ",
+        "func ",
+        "function ",
+        "async fn ",
         // Class/struct definitions
-        "class ", "struct ", "interface ", "enum ",
+        "class ",
+        "struct ",
+        "interface ",
+        "enum ",
         // Control flow
-        "if (", "if(", "for (", "for(", "while (", "while(",
-        "switch (", "switch(", "match {", "match(",
+        "if (",
+        "if(",
+        "for (",
+        "for(",
+        "while (",
+        "while(",
+        "switch (",
+        "switch(",
+        "match {",
+        "match(",
         // Variable declarations
-        "let ", "const ", "var ", "mut ",
+        "let ",
+        "const ",
+        "var ",
+        "mut ",
         // Imports
-        "import ", "from ", "use ", "require(",
-        "#include", "using namespace",
+        "import ",
+        "from ",
+        "use ",
+        "require(",
+        "#include",
+        "using namespace",
         // Return statements
-        "return ", "return;", "return(",
+        "return ",
+        "return;",
+        "return(",
         // Common syntax
-        "=> {", "=> (", "() {", "() =>",
+        "=> {",
+        "=> (",
+        "() {",
+        "() =>",
         // Comments
-        "//", "/*", "*/", "# ",
+        "//",
+        "/*",
+        "*/",
+        "# ",
     ];
 
     for indicator in code_indicators {
@@ -294,7 +360,8 @@ fn is_code_like(content: &str) -> bool {
     }
 
     // Check for high density of special characters (code-like)
-    let special_chars: usize = trimmed.chars()
+    let special_chars: usize = trimmed
+        .chars()
         .filter(|c| matches!(c, '{' | '}' | '(' | ')' | '[' | ']' | ';' | '=' | '<' | '>'))
         .count();
 
@@ -306,7 +373,8 @@ fn is_code_like(content: &str) -> bool {
     // Check for indentation patterns (common in code)
     let lines: Vec<&str> = trimmed.lines().collect();
     if lines.len() >= 3 {
-        let indented_lines = lines.iter()
+        let indented_lines = lines
+            .iter()
             .filter(|l| l.starts_with("    ") || l.starts_with('\t'))
             .count();
         if indented_lines > lines.len() / 3 {
@@ -336,8 +404,14 @@ mod tests {
 
     #[test]
     fn test_detect_uuid() {
-        assert_eq!(detect("550e8400-e29b-41d4-a716-446655440000"), ContentType::Uuid);
-        assert_eq!(detect("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"), ContentType::Uuid);
+        assert_eq!(
+            detect("550e8400-e29b-41d4-a716-446655440000"),
+            ContentType::Uuid
+        );
+        assert_eq!(
+            detect("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"),
+            ContentType::Uuid
+        );
     }
 
     #[test]
@@ -376,9 +450,18 @@ mod tests {
 
     #[test]
     fn test_detect_code() {
-        assert_eq!(detect("fn main() {\n    println!(\"Hello\");\n}"), ContentType::Code);
-        assert_eq!(detect("def hello():\n    print('world')"), ContentType::Code);
-        assert_eq!(detect("const x = () => {\n    return 42;\n}"), ContentType::Code);
+        assert_eq!(
+            detect("fn main() {\n    println!(\"Hello\");\n}"),
+            ContentType::Code
+        );
+        assert_eq!(
+            detect("def hello():\n    print('world')"),
+            ContentType::Code
+        );
+        assert_eq!(
+            detect("const x = () => {\n    return 42;\n}"),
+            ContentType::Code
+        );
     }
 
     #[test]

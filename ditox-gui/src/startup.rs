@@ -67,11 +67,7 @@ mod imp {
             .map(|al| al.is_enabled().unwrap_or(false))
             .unwrap_or(false);
 
-        tracing::debug!(
-            "Checking startup enabled for {}: {}",
-            exe_path_str,
-            result
-        );
+        tracing::debug!("Checking startup enabled for {}: {}", exe_path_str, result);
         result
     }
 }
@@ -85,9 +81,7 @@ mod imp {
         // Respect XDG_CONFIG_HOME, fall back to ~/.config
         let base = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))
-            })?;
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
         Some(base.join("autostart").join("ditox-gui.desktop"))
     }
 
@@ -133,9 +127,7 @@ mod imp {
     }
 
     pub fn is_startup_enabled() -> bool {
-        autostart_path()
-            .map(|p| p.exists())
-            .unwrap_or(false)
+        autostart_path().map(|p| p.exists()).unwrap_or(false)
     }
 }
 

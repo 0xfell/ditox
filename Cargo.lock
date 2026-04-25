@@ -1373,7 +1373,7 @@ dependencies = [
 
 [[package]]
 name = "ditox-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "arboard",
  "chrono",
@@ -1397,7 +1397,7 @@ dependencies = [
 
 [[package]]
 name = "ditox-gui"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "auto-launch",
  "clap",
@@ -1421,7 +1421,7 @@ dependencies = [
 
 [[package]]
 name = "ditox-tui"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "assert_cmd",
  "clap",

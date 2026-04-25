@@ -3,10 +3,10 @@
 
 #define MyAppName "Ditox Clipboard Manager"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.0"
+  #define MyAppVersion "0.3.0"
 #endif
-#define MyAppPublisher "Oxfell"
-#define MyAppURL "https://github.com/oxfell/ditox"
+#define MyAppPublisher "0xfell"
+#define MyAppURL "https://github.com/0xfell/ditox"
 #define MyAppExeName "ditox-gui.exe"
 
 [Setup]

@@ -40,11 +40,7 @@ impl Action {
 }
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "ditox-gui",
-    about = "Ditox clipboard manager (GUI)",
-    version
-)]
+#[command(name = "ditox-gui", about = "Ditox clipboard manager (GUI)", version)]
 pub struct Cli {
     /// Toggle the window (show if hidden, hide if shown).
     #[arg(long, conflicts_with_all = ["show", "hide", "quit"])]

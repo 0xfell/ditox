@@ -1,6 +1,6 @@
+use crate::ui::theme::Theme;
 use ditox_core::app::{App, PreviewMode};
 use ditox_core::entry::EntryType;
-use crate::ui::theme::Theme;
 use image::DynamicImage;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
@@ -163,10 +163,7 @@ pub fn draw(
     match app.selected_entry() {
         Some(entry) => {
             // Get match indices for current entry
-            let entry_idx = app
-                .filtered
-                .get(app.selected)
-                .copied();
+            let entry_idx = app.filtered.get(app.selected).copied();
             let match_indices = entry_idx.and_then(|idx| app.match_indices.get(&idx));
 
             match entry.entry_type {
@@ -291,9 +288,7 @@ fn create_highlighted_text<'a>(content: &str, indices: &[u32], theme: &Theme) ->
         // Calculate the starting char index for this line in the full content
         // Note: This is a simplified version - for very long content with many lines,
         // we'd need to track the cumulative character offset properly
-        let line_start_idx = content
-            .find(line_content)
-            .unwrap_or(0);
+        let line_start_idx = content.find(line_content).unwrap_or(0);
 
         for (i, ch) in line_content.chars().enumerate() {
             let global_idx = (line_start_idx + i) as u32;
@@ -329,7 +324,8 @@ fn create_highlighted_text<'a>(content: &str, indices: &[u32], theme: &Theme) ->
     Text::from(lines)
 }
 
-/// Render text preview based on the current preview mode
+/// Render text preview based on the current preview mode.
+#[allow(clippy::too_many_arguments)]
 fn render_text_preview(
     frame: &mut Frame,
     app: &App,
@@ -342,7 +338,15 @@ fn render_text_preview(
 ) {
     match app.preview_mode {
         PreviewMode::Wrap => {
-            render_wrap_mode(frame, theme, area, block, content, match_indices, show_line_numbers);
+            render_wrap_mode(
+                frame,
+                theme,
+                area,
+                block,
+                content,
+                match_indices,
+                show_line_numbers,
+            );
         }
         PreviewMode::Scroll => {
             render_scroll_mode(frame, app, theme, area, block, content, show_line_numbers);
@@ -391,9 +395,7 @@ fn render_wrap_mode(
         Text::styled(sanitized, theme.normal())
     };
 
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
 
     frame.render_widget(paragraph, area);
 }
@@ -507,13 +509,7 @@ fn render_truncate_mode(
 }
 
 /// Hex mode - hex dump view
-fn render_hex_mode(
-    frame: &mut Frame,
-    theme: &Theme,
-    area: Rect,
-    block: Block,
-    content: &str,
-) {
+fn render_hex_mode(frame: &mut Frame, theme: &Theme, area: Rect, block: Block, content: &str) {
     let bytes = content.as_bytes();
     let inner = block.inner(area);
     let max_lines = inner.height as usize;
@@ -570,13 +566,7 @@ fn render_hex_mode(
 }
 
 /// Raw mode - show escape sequences and control chars literally
-fn render_raw_mode(
-    frame: &mut Frame,
-    theme: &Theme,
-    area: Rect,
-    block: Block,
-    content: &str,
-) {
+fn render_raw_mode(frame: &mut Frame, theme: &Theme, area: Rect, block: Block, content: &str) {
     // Convert control characters to visible representations
     let mut visible = String::new();
     for ch in content.chars() {
@@ -594,9 +584,7 @@ fn render_raw_mode(
     }
 
     let text = Text::styled(visible, theme.normal());
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
 
     frame.render_widget(paragraph, area);
 }
@@ -612,7 +600,7 @@ fn sanitize_for_display(content: &str) -> String {
             // Skip ANSI escape sequence
             if chars.peek() == Some(&'[') {
                 chars.next(); // consume '['
-                // Skip until we hit a letter (end of sequence)
+                              // Skip until we hit a letter (end of sequence)
                 while let Some(&c) = chars.peek() {
                     chars.next();
                     if c.is_ascii_alphabetic() {

@@ -9,11 +9,6 @@ mod snippets;
 mod tabs;
 mod theme;
 
-use ditox_core::actions::Action;
-use ditox_core::app::{App, InputMode, PreviewMode};
-use ditox_core::config::Config;
-use ditox_core::db::Database;
-use ditox_core::error::Result;
 use crate::keybindings::{KeybindingResolver, KeybindingsConfigExt};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -23,6 +18,11 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use ditox_core::actions::Action;
+use ditox_core::app::{App, InputMode, PreviewMode};
+use ditox_core::config::Config;
+use ditox_core::db::Database;
+use ditox_core::error::Result;
 use preview::{ImageCache, ImageLoader};
 use ratatui::prelude::*;
 use ratatui_image::picker::{Picker, ProtocolType};
@@ -52,7 +52,8 @@ fn create_picker(
     } else {
         match Picker::from_query_stdio() {
             Ok(p) => p,
-            Err(_) => {
+            Err(_) =>
+            {
                 #[allow(deprecated)]
                 Picker::from_fontsize((9, 18))
             }
@@ -159,6 +160,7 @@ impl MouseState {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_loop<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
@@ -229,7 +231,11 @@ fn handle_key(app: &mut App, key: KeyEvent, keybindings: &KeybindingResolver) ->
     }
 }
 
-fn handle_normal_mode(app: &mut App, key: KeyEvent, keybindings: &KeybindingResolver) -> Result<()> {
+fn handle_normal_mode(
+    app: &mut App,
+    key: KeyEvent,
+    keybindings: &KeybindingResolver,
+) -> Result<()> {
     // Resolve key to action
     let action = keybindings.resolve(key);
 
@@ -368,7 +374,11 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent, keybindings: &KeybindingReso
     Ok(())
 }
 
-fn handle_search_mode(app: &mut App, key: KeyEvent, keybindings: &KeybindingResolver) -> Result<()> {
+fn handle_search_mode(
+    app: &mut App,
+    key: KeyEvent,
+    keybindings: &KeybindingResolver,
+) -> Result<()> {
     // In search mode, we handle text input directly, but some keys trigger actions
     match key.code {
         KeyCode::Esc => app.end_search(),

@@ -71,7 +71,7 @@ impl Drop for InstanceLock {
 
 #[cfg(unix)]
 mod unix_impl {
-    use super::{IpcCommand, InstanceLock};
+    use super::{InstanceLock, IpcCommand};
     use crate::cli::Action;
     use std::io::{self, BufRead, BufReader, Write};
     use std::os::fd::AsRawFd;
@@ -147,10 +147,8 @@ mod unix_impl {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(
-                &lock.socket_path,
-                std::fs::Permissions::from_mode(0o600),
-            );
+            let _ =
+                std::fs::set_permissions(&lock.socket_path, std::fs::Permissions::from_mode(0o600));
         }
 
         thread::Builder::new()
@@ -210,11 +208,7 @@ mod unix_impl {
         let mut stream = UnixStream::connect(&socket_path).map_err(|e| {
             io::Error::new(
                 e.kind(),
-                format!(
-                    "no running ditox-gui on {}: {}",
-                    socket_path.display(),
-                    e
-                ),
+                format!("no running ditox-gui on {}: {}", socket_path.display(), e),
             )
         })?;
         let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(2)));
@@ -227,7 +221,6 @@ mod unix_impl {
         let _ = reader.read_line(&mut response);
         Ok(())
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +229,7 @@ mod unix_impl {
 
 #[cfg(not(unix))]
 mod stub_impl {
-    use super::{IpcCommand, InstanceLock};
+    use super::{InstanceLock, IpcCommand};
     use crate::cli::Action;
     use std::io;
     use std::sync::mpsc::Sender;

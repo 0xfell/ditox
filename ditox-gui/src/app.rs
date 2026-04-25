@@ -7,22 +7,23 @@ use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
+use iced::widget::scrollable::RelativeOffset;
+use iced::widget::Id as WidgetId;
 use iced::widget::{
-    button, column, container, image as iced_image, mouse_area, operation, row, scrollable,
-    text, text_input, Column, Row, Space,
-};
-use iced::{
-    event, keyboard, window, ContentFit, Element, Font, Length, Point, Size, Subscription, Task, Theme,
+    button, column, container, image as iced_image, mouse_area, operation, row, scrollable, text,
+    text_input, Column, Row, Space,
 };
 use iced::window::Direction;
-use iced::widget::Id as WidgetId;
-use iced::widget::scrollable::RelativeOffset;
+use iced::{
+    event, keyboard, window, ContentFit, Element, Font, Length, Point, Size, Subscription, Task,
+    Theme,
+};
 
 // Bootstrap Icons font
 const ICONS: Font = Font::with_name("bootstrap-icons");
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::collections::HashMap;
 use tray_icon::{
     menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     Icon, TrayIcon, TrayIconBuilder,
@@ -50,7 +51,13 @@ fn scroll_to_selected(selected_index: usize, total_entries: usize) -> Task<Messa
     }
     // Calculate the relative position (0.0 = top, 1.0 = bottom)
     let relative_pos = selected_index as f32 / (total_entries.saturating_sub(1).max(1)) as f32;
-    operation::snap_to(ENTRY_LIST_ID, RelativeOffset { x: 0.0, y: relative_pos })
+    operation::snap_to(
+        ENTRY_LIST_ID,
+        RelativeOffset {
+            x: 0.0,
+            y: relative_pos,
+        },
+    )
 }
 
 /// Check if the selected item is visible and scroll only if needed
@@ -90,7 +97,13 @@ fn scroll_if_needed(
         } else {
             0.0
         };
-        return operation::snap_to(ENTRY_LIST_ID, RelativeOffset { x: 0.0, y: relative_y });
+        return operation::snap_to(
+            ENTRY_LIST_ID,
+            RelativeOffset {
+                x: 0.0,
+                y: relative_y,
+            },
+        );
     } else if direction > 0 && item_bottom > visible_bottom {
         // Scrolling down and item is below visible area - scroll to show it at bottom
         let target_offset = (item_bottom - viewport_height).max(0.0);
@@ -99,7 +112,13 @@ fn scroll_if_needed(
         } else {
             0.0
         };
-        return operation::snap_to(ENTRY_LIST_ID, RelativeOffset { x: 0.0, y: relative_y });
+        return operation::snap_to(
+            ENTRY_LIST_ID,
+            RelativeOffset {
+                x: 0.0,
+                y: relative_y,
+            },
+        );
     }
 
     Task::none()
@@ -138,16 +157,15 @@ const MIN_WINDOW_SIZE: Size = Size::new(320.0, 300.0);
 
 #[cfg(windows)]
 fn force_restore_window(width: u32, height: u32) {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowThreadProcessId, ShowWindow, SetForegroundWindow,
-        SetWindowPos, IsWindowVisible, GetWindowLongW, IsIconic, GWL_STYLE, GWL_EXSTYLE,
-        WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE, WS_SIZEBOX, GetForegroundWindow,
-        BringWindowToTop, SW_RESTORE, SW_SHOWNORMAL,
-        HWND_TOPMOST, HWND_NOTOPMOST, SWP_SHOWWINDOW, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE,
-        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    };
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
     use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
-    use windows::Win32::Foundation::{HWND, BOOL, LPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindowLongW,
+        GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow, SetWindowPos,
+        ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE, SW_SHOWNORMAL,
+        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_SIZEBOX,
+    };
 
     struct CallbackData {
         target_pid: u32,
@@ -191,7 +209,9 @@ fn force_restore_window(width: u32, height: u32) {
             let is_visible = IsWindowVisible(hwnd).as_bool();
             tracing::info!(
                 "force_restore_window: Found window {:?}, iconic={}, visible={}",
-                hwnd, is_iconic, is_visible
+                hwnd,
+                is_iconic,
+                is_visible
             );
 
             // 1. Prepare for focus stealing
@@ -206,9 +226,13 @@ fn force_restore_window(width: u32, height: u32) {
             // Only attach if foreground thread is different and valid
             if fg_thread_id != 0 && fg_thread_id != current_thread_id {
                 // Try System::Threading
-                let _ = windows::Win32::System::Threading::AttachThreadInput(current_thread_id, fg_thread_id, BOOL::from(true));
+                let _ = windows::Win32::System::Threading::AttachThreadInput(
+                    current_thread_id,
+                    fg_thread_id,
+                    BOOL::from(true),
+                );
 
-                attached = true; 
+                attached = true;
                 tracing::info!("force_restore_window: Attempted AttachThreadInput");
             }
 
@@ -219,14 +243,14 @@ fn force_restore_window(width: u32, height: u32) {
                 windows::Win32::UI::WindowsAndMessaging::SPI_GETFOREGROUNDLOCKTIMEOUT,
                 0,
                 Some(&mut original_timeout as *mut _ as *mut _),
-                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
             );
             // SPI_SETFOREGROUNDLOCKTIMEOUT to 0
             let _ = windows::Win32::UI::WindowsAndMessaging::SystemParametersInfoW(
                 windows::Win32::UI::WindowsAndMessaging::SPI_SETFOREGROUNDLOCKTIMEOUT,
                 0,
                 Some(0 as *mut _),
-                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
             );
 
             // 3. Restore window state
@@ -240,8 +264,8 @@ fn force_restore_window(width: u32, height: u32) {
                 tracing::info!("force_restore_window: Window is minimized/offscreen (iconic={}, left={}), restoring...", is_iconic, rect.left);
                 let _ = ShowWindow(hwnd, SW_RESTORE);
             } else {
-                 // Even if not iconic, ensure we are visible
-                 let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
+                // Even if not iconic, ensure we are visible
+                let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
             }
 
             // Make TOPMOST to ensure it's above everything including desktop
@@ -249,7 +273,7 @@ fn force_restore_window(width: u32, height: u32) {
             let mut rect = windows::Win32::Foundation::RECT::default();
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &mut rect);
             let still_offscreen = rect.left <= -30000;
-            
+
             let mut flags = SWP_SHOWWINDOW | SWP_NOSIZE;
             let mut x = 0;
             let mut y = 0;
@@ -265,17 +289,15 @@ fn force_restore_window(width: u32, height: u32) {
                 flags |= SWP_NOMOVE; // Only preserve position if ON SCREEN
             }
 
-            let _ = SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                x, y, width as i32, height as i32,
-                flags
-            );
+            let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width as i32, height as i32, flags);
 
             // 4. Force focus
             let _ = BringWindowToTop(hwnd);
             let fg_result = SetForegroundWindow(hwnd);
-            tracing::info!("force_restore_window: SetForegroundWindow = {:?}", fg_result);
+            tracing::info!(
+                "force_restore_window: SetForegroundWindow = {:?}",
+                fg_result
+            );
 
             // 5. Restore settings
             // Restore foreground lock timeout
@@ -283,12 +305,16 @@ fn force_restore_window(width: u32, height: u32) {
                 windows::Win32::UI::WindowsAndMessaging::SPI_SETFOREGROUNDLOCKTIMEOUT,
                 0,
                 Some(original_timeout as usize as *mut _),
-                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
             );
 
             // Detach input
             if attached {
-                 let _ = windows::Win32::System::Threading::AttachThreadInput(current_thread_id, fg_thread_id, BOOL::from(false));
+                let _ = windows::Win32::System::Threading::AttachThreadInput(
+                    current_thread_id,
+                    fg_thread_id,
+                    BOOL::from(false),
+                );
             }
 
             // Remove TOPMOST after a brief moment
@@ -296,8 +322,11 @@ fn force_restore_window(width: u32, height: u32) {
             let _ = SetWindowPos(
                 hwnd,
                 HWND_NOTOPMOST,
-                0, 0, 0, 0,
-                SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                0,
+                0,
+                0,
+                0,
+                SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
 
             // Final state check
@@ -307,7 +336,9 @@ fn force_restore_window(width: u32, height: u32) {
             let is_fg = fg == hwnd;
             tracing::info!(
                 "force_restore_window: Done. iconic={}, visible={}, foreground={}",
-                is_iconic, is_visible, is_fg
+                is_iconic,
+                is_visible,
+                is_fg
             );
         } else {
             tracing::warn!("force_restore_window: No main window found!");
@@ -323,14 +354,13 @@ fn force_restore_window(_width: u32, _height: u32) {
 /// Remove TOPMOST flag from our window (called when hiding)
 #[cfg(windows)]
 fn remove_topmost() {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowThreadProcessId, SetWindowPos,
-        GetWindowLongW, GWL_STYLE, GWL_EXSTYLE,
-        WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE, WS_SIZEBOX,
-        HWND_NOTOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE,
-    };
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
     use windows::Win32::System::Threading::GetCurrentProcessId;
-    use windows::Win32::Foundation::{HWND, BOOL, LPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowLongW, GetWindowThreadProcessId, SetWindowPos, GWL_EXSTYLE,
+        GWL_STYLE, HWND_NOTOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW, WS_SIZEBOX,
+    };
 
     struct CallbackData {
         target_pid: u32,
@@ -370,8 +400,11 @@ fn remove_topmost() {
             let _ = SetWindowPos(
                 hwnd,
                 HWND_NOTOPMOST,
-                0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
             tracing::info!("remove_topmost: Removed TOPMOST flag");
         }
@@ -387,13 +420,12 @@ fn remove_topmost() {
 /// This helps detect when Win+D has hidden us but our visible flag is still true
 #[cfg(windows)]
 fn is_window_actually_visible() -> bool {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowThreadProcessId, IsWindowVisible, GetWindowLongW,
-        GWL_STYLE, GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE, WS_SIZEBOX,
-        GetForegroundWindow,
-    };
-    use windows::Win32::Foundation::{HWND, BOOL, LPARAM};
     use std::process;
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetForegroundWindow, GetWindowLongW, GetWindowThreadProcessId,
+        IsWindowVisible, GWL_EXSTYLE, GWL_STYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_SIZEBOX,
+    };
 
     struct CallbackData {
         target_pid: u32,
@@ -444,7 +476,8 @@ fn is_window_actually_visible() -> bool {
 
         tracing::info!(
             "is_window_actually_visible: visible={}, is_foreground={}",
-            data.found_visible, is_foreground
+            data.found_visible,
+            is_foreground
         );
 
         // Consider visible only if both visible AND we have foreground
@@ -496,7 +529,10 @@ impl WindowState {
         {
             tracing::warn!(
                 "Invalid window state detected ({}, {}) {}x{}, using defaults",
-                state.x, state.y, state.width, state.height
+                state.x,
+                state.y,
+                state.width,
+                state.height
             );
             return Self::default();
         }
@@ -563,22 +599,22 @@ mod colors {
 // ============================================================================
 mod icons {
     // Window controls
-    pub const X: char = '\u{F62A}';          // x mark
+    pub const X: char = '\u{F62A}'; // x mark
     pub const GRIP_VERTICAL: char = '\u{F3FF}'; // grip-vertical (resize handle)
 
     // Actions
-    pub const GEAR: char = '\u{F3E5}';       // settings gear
-    pub const QUESTION: char = '\u{F505}';   // question circle
-    pub const TRASH: char = '\u{F5DE}';      // trash can
-    pub const STAR: char = '\u{F588}';       // star outline
-    pub const STAR_FILL: char = '\u{F586}';  // star filled
+    pub const GEAR: char = '\u{F3E5}'; // settings gear
+    pub const QUESTION: char = '\u{F505}'; // question circle
+    pub const TRASH: char = '\u{F5DE}'; // trash can
+    pub const STAR: char = '\u{F588}'; // star outline
+    pub const STAR_FILL: char = '\u{F586}'; // star filled
 
     // Status
     pub const CIRCLE_FILL: char = '\u{F287}'; // filled circle (status indicator)
 
     // Types
-    pub const FILE_TEXT: char = '\u{F3C1}';   // text file
-    pub const IMAGE: char = '\u{F40D}';       // image
+    pub const FILE_TEXT: char = '\u{F3C1}'; // text file
+    pub const IMAGE: char = '\u{F40D}'; // image
 }
 
 /// Create an icon text widget
@@ -762,7 +798,9 @@ mod styles {
     // Scrollable - minimal scrollbar
     pub fn scrollable_style(_theme: &iced::Theme, status: scrollable::Status) -> scrollable::Style {
         let scroller_color = match status {
-            scrollable::Status::Hovered { .. } | scrollable::Status::Dragged { .. } => colors::ACCENT_DIM,
+            scrollable::Status::Hovered { .. } | scrollable::Status::Dragged { .. } => {
+                colors::ACCENT_DIM
+            }
             _ => colors::BG_HOVER,
         };
         scrollable::Style {
@@ -866,7 +904,10 @@ mod styles {
     pub fn badge_text(_theme: &iced::Theme) -> container::Style {
         container::Style {
             background: Some(Background::Color(Color::from_rgba(
-                colors::INFO.r, colors::INFO.g, colors::INFO.b, 0.15,
+                colors::INFO.r,
+                colors::INFO.g,
+                colors::INFO.b,
+                0.15,
             ))),
             border: Border {
                 color: colors::INFO,
@@ -941,7 +982,7 @@ pub enum ViewMode {
     Main,
     Settings,
     Help,
-    ImagePreview(String), // entry_id
+    ImagePreview(String),  // entry_id
     ConfirmDelete(String), // entry_id - confirmation for deleting favorites
 }
 
@@ -1062,7 +1103,10 @@ impl DitoxApp {
 
         tracing::info!(
             "Loaded window state: {}x{} at ({}, {})",
-            window_state.width, window_state.height, window_state.x, window_state.y
+            window_state.width,
+            window_state.height,
+            window_state.x,
+            window_state.y
         );
 
         #[cfg(windows)]
@@ -1133,11 +1177,13 @@ impl DitoxApp {
             is_searching: false,
         };
 
-        let initial_task = window::oldest().and_then(move |id| {
-            window::move_to(id, Point::new(window_state.x, window_state.y))
-                .chain(window::resize(id, Size::new(window_state.width, window_state.height)))
-        })
-        .chain(delayed_focus_search());
+        let initial_task = window::oldest()
+            .and_then(move |id| {
+                window::move_to(id, Point::new(window_state.x, window_state.y)).chain(
+                    window::resize(id, Size::new(window_state.width, window_state.height)),
+                )
+            })
+            .chain(delayed_focus_search());
 
         (app, initial_task)
     }
@@ -1170,8 +1216,7 @@ impl DitoxApp {
                 }
                 self.save_window_state();
                 self.visible = false;
-                return window::oldest()
-                    .and_then(|id| window::set_mode(id, window::Mode::Hidden));
+                return window::oldest().and_then(|id| window::set_mode(id, window::Mode::Hidden));
             }
 
             Message::CopySelected => {
@@ -1232,8 +1277,8 @@ impl DitoxApp {
                 if query.is_empty() {
                     self.refresh_entries();
                     return Task::none();
-                } 
-                
+                }
+
                 // Debounce: wait 20ms (virtually instant but handles key mash)
                 // We pass the query content so we can verify if it's still current when the task completes
                 let query_to_search = query.clone();
@@ -1248,37 +1293,43 @@ impl DitoxApp {
             Message::PerformSearch(query) => {
                 // Only search if the query is still the current one (handles debouncing)
                 if query == self.search_query {
-                     if query.is_empty() {
+                    if query.is_empty() {
                         self.refresh_entries();
                         return Task::none();
-                     }
+                    }
 
-                     self.is_searching = true;
+                    self.is_searching = true;
 
-                     let db = self.db.clone();
-                     let filter = self.active_tab_filter().clone();
-                     let (filter_str_ref, collection_id_ref) = filter.db_filter();
-                     let filter_str = filter_str_ref.to_string();
-                     let collection_id = collection_id_ref.map(|s| s.to_string());
-                     
-                     // Offload to background thread
-                     return Task::perform(
+                    let db = self.db.clone();
+                    let filter = self.active_tab_filter().clone();
+                    let (filter_str_ref, collection_id_ref) = filter.db_filter();
+                    let filter_str = filter_str_ref.to_string();
+                    let collection_id = collection_id_ref.map(|s| s.to_string());
+
+                    // Offload to background thread
+                    return Task::perform(
                         async move {
                             tokio::task::spawn_blocking(move || {
                                 let db = db.lock().unwrap();
-                                db.search_entries_filtered(&query, 50, &filter_str, collection_id.as_deref())
-                                    .map_err(|e| e.to_string())
-                            }).await.unwrap()
+                                db.search_entries_filtered(
+                                    &query,
+                                    50,
+                                    &filter_str,
+                                    collection_id.as_deref(),
+                                )
+                                .map_err(|e| e.to_string())
+                            })
+                            .await
+                            .unwrap()
                         },
-                        Message::SearchCompleted
-                     );
+                        Message::SearchCompleted,
+                    );
                 }
-
             }
 
             Message::SearchCompleted(result) => {
-                 self.is_searching = false;
-                 match result {
+                self.is_searching = false;
+                match result {
                     Ok(results) => {
                         self.entries = results;
                         self.selected_index = 0;
@@ -1302,7 +1353,8 @@ impl DitoxApp {
             }
 
             Message::MoveDown => {
-                if self.view_mode == ViewMode::Main && self.selected_index + 1 < self.entries.len() {
+                if self.view_mode == ViewMode::Main && self.selected_index + 1 < self.entries.len()
+                {
                     self.selected_index += 1;
                     return scroll_if_needed(
                         self.selected_index,
@@ -1367,7 +1419,8 @@ impl DitoxApp {
                 let actually_visible = is_window_actually_visible();
                 tracing::info!(
                     "ToggleWindow: self.visible={}, actually_visible={}",
-                    self.visible, actually_visible
+                    self.visible,
+                    actually_visible
                 );
 
                 // If we're visible AND actually visible (have foreground), hide
@@ -1392,19 +1445,20 @@ impl DitoxApp {
 
                 let ws = self.window_state.clone();
                 // Then let Iced configure the window
-                return window::oldest().and_then(move |id| {
-                    window::set_mode(id, window::Mode::Windowed)
-                        .chain(window::minimize(id, false))
-                        .chain(window::resize(id, Size::new(ws.width, ws.height)))
-                        .chain(window::move_to(id, Point::new(ws.x, ws.y)))
-                        .chain(window::gain_focus(id))
-                        .chain(operation::snap_to(
-                            ENTRY_LIST_ID,
-                            scrollable::RelativeOffset { x: 0.0, y: 0.0 },
-                        ))
-                })
-                .chain(delayed_force_focus())  // Call again after Iced finishes
-                .chain(delayed_focus_search());
+                return window::oldest()
+                    .and_then(move |id| {
+                        window::set_mode(id, window::Mode::Windowed)
+                            .chain(window::minimize(id, false))
+                            .chain(window::resize(id, Size::new(ws.width, ws.height)))
+                            .chain(window::move_to(id, Point::new(ws.x, ws.y)))
+                            .chain(window::gain_focus(id))
+                            .chain(operation::snap_to(
+                                ENTRY_LIST_ID,
+                                scrollable::RelativeOffset { x: 0.0, y: 0.0 },
+                            ))
+                    })
+                    .chain(delayed_force_focus()) // Call again after Iced finishes
+                    .chain(delayed_focus_search());
             }
 
             Message::ForceWindowFocus => {
@@ -1443,12 +1497,11 @@ impl DitoxApp {
                 self.visible = false;
                 // Remove TOPMOST flag before hiding
                 remove_topmost();
-                return window::oldest()
-                    .and_then(|id| window::set_mode(id, window::Mode::Hidden));
+                return window::oldest().and_then(|id| window::set_mode(id, window::Mode::Hidden));
             }
 
             Message::StartDrag => {
-                return window::oldest().and_then(|id| window::drag(id));
+                return window::oldest().and_then(window::drag);
             }
 
             Message::StartResize(direction) => {
@@ -1506,8 +1559,7 @@ impl DitoxApp {
                 }
                 self.save_window_state();
                 self.visible = false;
-                return window::oldest()
-                    .and_then(|id| window::set_mode(id, window::Mode::Hidden));
+                return window::oldest().and_then(|id| window::set_mode(id, window::Mode::Hidden));
             }
 
             Message::TrayMenuEvent(menu_id) => {
@@ -1546,7 +1598,11 @@ impl DitoxApp {
 
             Message::ToggleStartup => {
                 let currently_enabled = crate::startup::is_startup_enabled();
-                tracing::info!("Toggling startup: currently={}, setting to {}", currently_enabled, !currently_enabled);
+                tracing::info!(
+                    "Toggling startup: currently={}, setting to {}",
+                    currently_enabled,
+                    !currently_enabled
+                );
                 match crate::startup::set_startup_enabled(!currently_enabled) {
                     Ok(()) => tracing::info!("Startup setting changed successfully"),
                     Err(e) => tracing::error!("Failed to change startup setting: {}", e),
@@ -1591,8 +1647,7 @@ impl DitoxApp {
                 self.view_mode = ViewMode::Main;
                 self.save_window_state();
                 self.visible = false;
-                return window::oldest()
-                    .and_then(|id| window::set_mode(id, window::Mode::Hidden));
+                return window::oldest().and_then(|id| window::set_mode(id, window::Mode::Hidden));
             }
 
             Message::Scrolled(viewport) => {
@@ -1608,14 +1663,23 @@ impl DitoxApp {
     }
 
     fn total_pages(&self) -> usize {
-        if self.total_count == 0 { 1 } else { (self.total_count + PAGE_SIZE - 1) / PAGE_SIZE }
+        if self.total_count == 0 {
+            1
+        } else {
+            self.total_count.div_ceil(PAGE_SIZE)
+        }
     }
 
     fn load_current_page(&mut self) {
         let filter = self.active_tab_filter().clone();
         let (filter_str, collection_id) = filter.db_filter();
         let offset = self.current_page * PAGE_SIZE;
-        self.entries = self.db.lock().unwrap().get_page_filtered(offset, PAGE_SIZE, filter_str, collection_id).unwrap_or_default();
+        self.entries = self
+            .db
+            .lock()
+            .unwrap()
+            .get_page_filtered(offset, PAGE_SIZE, filter_str, collection_id)
+            .unwrap_or_default();
         self.selected_index = 0;
     }
 
@@ -1665,14 +1729,8 @@ impl DitoxApp {
         let entry_list = self.view_entries();
         let status_bar = self.view_status();
 
-        let content = column![
-            title_bar,
-            search_section,
-            tab_bar,
-            entry_list,
-            status_bar,
-        ]
-        .spacing(0);
+        let content =
+            column![title_bar, search_section, tab_bar, entry_list, status_bar,].spacing(0);
 
         container(content)
             .width(Length::Fill)
@@ -1696,23 +1754,19 @@ impl DitoxApp {
         // Small resize grip in top-right corner (diagonal lines icon)
         let resize_grip = mouse_area(
             container(
-                icon(icons::GRIP_VERTICAL).size(10).color(colors::TEXT_MUTED)
+                icon(icons::GRIP_VERTICAL)
+                    .size(10)
+                    .color(colors::TEXT_MUTED),
             )
-            .padding([4, 8])
+            .padding([4, 8]),
         )
         .on_press(Message::StartResize(Direction::NorthEast));
 
-        container(
-            row![
-                title,
-                resize_grip,
-            ]
-            .align_y(iced::Alignment::Center),
-        )
-        .width(Length::Fill)
-        .padding([4, 0])
-        .style(styles::title_bar)
-        .into()
+        container(row![title, resize_grip,].align_y(iced::Alignment::Center))
+            .width(Length::Fill)
+            .padding([4, 0])
+            .style(styles::title_bar)
+            .into()
     }
 
     fn view_search(&self) -> Element<'_, Message> {
@@ -1753,7 +1807,11 @@ impl DitoxApp {
             .map(|(i, tab)| {
                 let is_active = i == self.active_tab;
                 button(text(tab.label()).size(11))
-                    .style(if is_active { styles::tab_active } else { styles::tab_inactive })
+                    .style(if is_active {
+                        styles::tab_active
+                    } else {
+                        styles::tab_inactive
+                    })
                     .on_press_maybe(interactive.then_some(Message::SelectTab(i)))
                     .padding([5, 12])
                     .into()
@@ -1819,7 +1877,9 @@ impl DitoxApp {
         };
 
         // Time
-        let time = text(entry.relative_time()).size(10).color(colors::TEXT_MUTED);
+        let time = text(entry.relative_time())
+            .size(10)
+            .color(colors::TEXT_MUTED);
 
         // Build entry content based on type
         let entry_content: Row<'_, Message> = match entry.entry_type {
@@ -1832,13 +1892,11 @@ impl DitoxApp {
                     .map(|p| p.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 let thumbnail = self.view_thumbnail(&path_string, 40, 40);
-                let filename = text(entry.preview(30))
-                    .size(12)
-                    .color(if is_selected {
-                        colors::TEXT_PRIMARY
-                    } else {
-                        colors::TEXT_SECONDARY
-                    });
+                let filename = text(entry.preview(30)).size(12).color(if is_selected {
+                    colors::TEXT_PRIMARY
+                } else {
+                    colors::TEXT_SECONDARY
+                });
 
                 row![
                     thumbnail,
@@ -1856,13 +1914,11 @@ impl DitoxApp {
                     .padding([2, 5])
                     .style(styles::badge_text);
 
-                let preview = text(entry.preview(45))
-                    .size(12)
-                    .color(if is_selected {
-                        colors::TEXT_PRIMARY
-                    } else {
-                        colors::TEXT_SECONDARY
-                    });
+                let preview = text(entry.preview(45)).size(12).color(if is_selected {
+                    colors::TEXT_PRIMARY
+                } else {
+                    colors::TEXT_SECONDARY
+                });
 
                 row![
                     type_badge,
@@ -1937,7 +1993,8 @@ impl DitoxApp {
             // Use cached handle if available, otherwise create from path
             // (iced internally caches the actual image data, but Handle::from_path
             // still involves string allocation on each call)
-            let handle = self.image_cache
+            let handle = self
+                .image_cache
                 .get(path)
                 .cloned()
                 .unwrap_or_else(|| iced_image::Handle::from_path(path));
@@ -1976,14 +2033,17 @@ impl DitoxApp {
         };
 
         let search_indicator: Element<'_, Message> = if self.is_searching {
-            text("Searching...").size(11).color(colors::TEXT_MUTED).into()
+            text("Searching...")
+                .size(11)
+                .color(colors::TEXT_MUTED)
+                .into()
         } else {
             Space::new().width(0).height(0).into()
         };
 
         // Status badge - using icon
-        let status_badge = container(icon(icons::CIRCLE_FILL).size(8).color(colors::SUCCESS))
-            .padding([0, 4]);
+        let status_badge =
+            container(icon(icons::CIRCLE_FILL).size(8).color(colors::SUCCESS)).padding([0, 4]);
 
         container(
             row![
@@ -2012,19 +2072,23 @@ impl DitoxApp {
             // Header
             text("Settings").size(16).color(colors::TEXT_PRIMARY),
             Space::new().height(16),
-
             // Startup toggle
             row![
-                text("Run on startup").size(12).color(colors::TEXT_SECONDARY),
+                text("Run on startup")
+                    .size(12)
+                    .color(colors::TEXT_SECONDARY),
                 Space::new().width(Length::Fill),
                 button(text(if startup_enabled { "ON" } else { "OFF" }).size(11))
-                    .style(if startup_enabled { styles::tab_active } else { styles::tab_inactive })
+                    .style(if startup_enabled {
+                        styles::tab_active
+                    } else {
+                        styles::tab_inactive
+                    })
                     .on_press(Message::ToggleStartup)
                     .padding([4, 12]),
             ]
             .align_y(iced::Alignment::Center),
             Space::new().height(10),
-
             // Poll interval
             row![
                 text("Poll interval").size(12).color(colors::TEXT_SECONDARY),
@@ -2035,7 +2099,6 @@ impl DitoxApp {
             ]
             .align_y(iced::Alignment::Center),
             Space::new().height(10),
-
             // Max entries
             row![
                 text("Max entries").size(12).color(colors::TEXT_SECONDARY),
@@ -2046,7 +2109,6 @@ impl DitoxApp {
             ]
             .align_y(iced::Alignment::Center),
             Space::new().height(20),
-
             // Close button
             button(text("Close").size(11))
                 .style(styles::primary_btn)
@@ -2056,16 +2118,16 @@ impl DitoxApp {
         .padding(20)
         .width(Length::Fixed(280.0));
 
-        container(content)
-            .style(styles::modal)
-            .into()
+        container(content).style(styles::modal).into()
     }
 
     fn view_help(&self) -> Element<'_, Message> {
         let content = column![
             // Header
             row![
-                text("Keyboard Shortcuts").size(16).color(colors::TEXT_PRIMARY),
+                text("Keyboard Shortcuts")
+                    .size(16)
+                    .color(colors::TEXT_PRIMARY),
                 Space::new().width(Length::Fill),
                 button(icon(icons::X).size(12))
                     .style(styles::action_btn)
@@ -2074,7 +2136,6 @@ impl DitoxApp {
             ]
             .align_y(iced::Alignment::Center),
             Space::new().height(16),
-
             text("Navigation").size(12).color(colors::TEXT_SECONDARY),
             row![
                 text("Up / Down").size(11).color(colors::ACCENT),
@@ -2102,7 +2163,6 @@ impl DitoxApp {
                 text("Navigate pages").size(11).color(colors::TEXT_MUTED),
             ],
             Space::new().height(12),
-
             text("Actions").size(12).color(colors::TEXT_SECONDARY),
             row![
                 text("?").size(11).color(colors::ACCENT),
@@ -2110,7 +2170,6 @@ impl DitoxApp {
                 text("Toggle help").size(11).color(colors::TEXT_MUTED),
             ],
             Space::new().height(12),
-
             text("Global").size(12).color(colors::TEXT_SECONDARY),
             row![
                 text("Ctrl+Shift+V").size(11).color(colors::ACCENT),
@@ -2118,7 +2177,6 @@ impl DitoxApp {
                 text("Show/Hide Ditox").size(11).color(colors::TEXT_MUTED),
             ],
             Space::new().height(20),
-
             button(text("Close").size(11))
                 .style(styles::primary_btn)
                 .on_press(Message::ToggleHelp)
@@ -2128,9 +2186,7 @@ impl DitoxApp {
         .padding(20)
         .width(Length::Fixed(300.0));
 
-        container(content)
-            .style(styles::modal)
-            .into()
+        container(content).style(styles::modal).into()
     }
 
     fn view_image_preview(&self, entry_id: &str) -> Element<'_, Message> {
@@ -2206,7 +2262,9 @@ impl DitoxApp {
                     text(size_str).size(11).color(colors::TEXT_MUTED),
                 ],
                 row![
-                    text(entry.relative_time()).size(10).color(colors::TEXT_MUTED),
+                    text(entry.relative_time())
+                        .size(10)
+                        .color(colors::TEXT_MUTED),
                     Space::new().width(Length::Fill),
                     if entry.favorite {
                         icon(icons::STAR_FILL).size(10).color(colors::WARNING)
@@ -2260,28 +2318,23 @@ impl DitoxApp {
                 row![
                     icon(icons::STAR_FILL).size(16).color(colors::WARNING),
                     Space::new().width(8),
-                    text("Delete Favorite?").size(16).color(colors::TEXT_PRIMARY),
+                    text("Delete Favorite?")
+                        .size(16)
+                        .color(colors::TEXT_PRIMARY),
                 ]
                 .align_y(iced::Alignment::Center),
                 Space::new().height(16),
-
                 // Warning message
                 text("This entry is marked as a favorite.")
                     .size(12)
                     .color(colors::TEXT_SECONDARY),
                 Space::new().height(8),
-
                 // Entry preview
-                container(
-                    text(preview_text)
-                        .size(11)
-                        .color(colors::TEXT_MUTED)
-                )
-                .padding([8, 12])
-                .width(Length::Fill)
-                .style(styles::thumbnail_container),
+                container(text(preview_text).size(11).color(colors::TEXT_MUTED))
+                    .padding([8, 12])
+                    .width(Length::Fill)
+                    .style(styles::thumbnail_container),
                 Space::new().height(16),
-
                 // Action buttons
                 row![
                     button(text("Cancel").size(11))
@@ -2317,14 +2370,23 @@ impl DitoxApp {
 
     fn subscription(&self) -> Subscription<Message> {
         let keyboard_sub = event::listen_with(|event, _status, _window| {
-            if let iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event {
+            if let iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event
+            {
                 match key.as_ref() {
                     keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::HideWindow),
                     keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some(Message::MoveUp),
-                    keyboard::Key::Named(keyboard::key::Named::ArrowDown) => Some(Message::MoveDown),
-                    keyboard::Key::Named(keyboard::key::Named::Enter) => Some(Message::CopySelected),
-                    keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => Some(Message::PrevPage),
-                    keyboard::Key::Named(keyboard::key::Named::ArrowRight) => Some(Message::NextPage),
+                    keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                        Some(Message::MoveDown)
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                        Some(Message::CopySelected)
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                        Some(Message::PrevPage)
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                        Some(Message::NextPage)
+                    }
                     keyboard::Key::Named(keyboard::key::Named::Tab) => {
                         if modifiers.shift() {
                             Some(Message::PrevTab)
@@ -2352,17 +2414,20 @@ impl DitoxApp {
         // shortcut to `ditox-gui --toggle` which goes through the IPC socket.
         #[cfg(windows)]
         let hotkey_sub = Subscription::run(|| {
-            iced::stream::channel(10, |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
-                let receiver = GlobalHotKeyEvent::receiver();
-                loop {
-                    if let Ok(event) = receiver.try_recv() {
-                        if event.state == HotKeyState::Pressed {
-                            let _ = sender.try_send(Message::GlobalHotkeyPressed);
+            iced::stream::channel(
+                10,
+                |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
+                    let receiver = GlobalHotKeyEvent::receiver();
+                    loop {
+                        if let Ok(event) = receiver.try_recv() {
+                            if event.state == HotKeyState::Pressed {
+                                let _ = sender.try_send(Message::GlobalHotkeyPressed);
+                            }
                         }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
                     }
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-            })
+                },
+            )
         });
 
         // IPC subscription: drain commands from any `ditox-gui --toggle` etc.
@@ -2390,26 +2455,30 @@ impl DitoxApp {
         });
 
         let clipboard_sub = Subscription::run(|| {
-            iced::stream::channel(10, |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
-                loop {
-                    let changed = {
-                        if let Some(watcher) = CLIPBOARD_WATCHER.get() {
-                            if let Ok(mut w) = watcher.lock() {
-                                w.poll_once().unwrap_or(false)
+            iced::stream::channel(
+                10,
+                |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
+                    loop {
+                        let changed = {
+                            if let Some(watcher) = CLIPBOARD_WATCHER.get() {
+                                if let Ok(mut w) = watcher.lock() {
+                                    w.poll_once().unwrap_or(false)
+                                } else {
+                                    false
+                                }
                             } else {
                                 false
                             }
-                        } else {
-                            false
+                        };
+                        if changed {
+                            let _ = sender.try_send(Message::ClipboardChanged);
                         }
-                    };
-                    if changed {
-                        let _ = sender.try_send(Message::ClipboardChanged);
+                        let poll_interval =
+                            POLL_INTERVAL_MS.load(std::sync::atomic::Ordering::Relaxed);
+                        tokio::time::sleep(Duration::from_millis(poll_interval)).await;
                     }
-                    let poll_interval = POLL_INTERVAL_MS.load(std::sync::atomic::Ordering::Relaxed);
-                    tokio::time::sleep(Duration::from_millis(poll_interval)).await;
-                }
-            })
+                },
+            )
         });
 
         let focus_sub = event::listen_with(|event, _status, _window| {
@@ -2427,15 +2496,18 @@ impl DitoxApp {
         });
 
         let tray_sub = Subscription::run(|| {
-            iced::stream::channel(10, |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
-                let receiver = MenuEvent::receiver();
-                loop {
-                    if let Ok(event) = receiver.try_recv() {
-                        let _ = sender.try_send(Message::TrayMenuEvent(event.id.0.clone()));
+            iced::stream::channel(
+                10,
+                |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
+                    let receiver = MenuEvent::receiver();
+                    loop {
+                        if let Ok(event) = receiver.try_recv() {
+                            let _ = sender.try_send(Message::TrayMenuEvent(event.id.0.clone()));
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
                     }
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-            })
+                },
+            )
         });
 
         #[cfg(windows)]
@@ -2469,32 +2541,37 @@ impl DitoxApp {
         };
 
         if self.search_query.is_empty() {
-             // Normal pagination
-             if let Ok(entries) = self.db.lock().unwrap().get_page_filtered(
+            // Normal pagination
+            if let Ok(entries) = self.db.lock().unwrap().get_page_filtered(
                 self.current_page * self.config.general.max_entries,
                 self.config.general.max_entries,
                 filter,
-                collection_id
+                collection_id,
             ) {
                 self.entries = entries;
             }
-            // Update counts 
-             if let Ok(count) = self.db.lock().unwrap().count_filtered(filter, collection_id) {
+            // Update counts
+            if let Ok(count) = self
+                .db
+                .lock()
+                .unwrap()
+                .count_filtered(filter, collection_id)
+            {
                 self.total_count = count;
             }
         } else {
             // Search mode - use new search_entries_filtered
-             match self.db.lock().unwrap().search_entries_filtered(
-                &self.search_query, 
+            match self.db.lock().unwrap().search_entries_filtered(
+                &self.search_query,
                 self.config.general.max_entries,
                 filter,
-                collection_id
+                collection_id,
             ) {
                 Ok(entries) => {
                     self.total_count = entries.len();
                     self.entries = entries;
                     // Reset to first page for search results
-                    self.current_page = 0; 
+                    self.current_page = 0;
                 }
                 Err(e) => {
                     eprintln!("Search error: {}", e);
@@ -2503,11 +2580,11 @@ impl DitoxApp {
                 }
             }
         }
-        
+
         if self.selected_index >= self.entries.len() {
             self.selected_index = self.entries.len().saturating_sub(1);
         }
-        
+
         self.update_image_cache();
     }
 
@@ -2660,8 +2737,7 @@ fn load_window_icon() -> Option<iced::window::Icon> {
 
 /// Global storage for app config (iced 0.14 requires Fn boot closure, Database is not Sync)
 static APP_CONFIG: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
-static APP_START_HIDDEN: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static APP_START_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn boot_app() -> (DitoxApp, Task<Message>) {
     let config = APP_CONFIG
@@ -2680,28 +2756,33 @@ pub fn run_with(_db: Database, config: Config, start_hidden: bool) -> Result<()>
     let _ = APP_CONFIG.set(config);
     APP_START_HIDDEN.store(start_hidden, std::sync::atomic::Ordering::Relaxed);
 
-    let mut settings = iced::window::Settings::default();
-    settings.size = Size::new(window_state.width, window_state.height);
-    settings.position = window::Position::Specific(Point::new(window_state.x, window_state.y));
-    settings.icon = load_window_icon();
-    // On Windows we draw our own title bar + resize zones because the custom
-    // dark styling can't be applied to the native chrome. On Linux/macOS the
-    // native compositor chrome integrates much better with each DE's theme,
-    // so we enable it there.
-    #[cfg(windows)]
-    {
-        settings.decorations = false;
-    }
-    #[cfg(not(windows))]
-    {
-        settings.decorations = true;
-    }
-    settings.transparent = false;
-    settings.resizable = true;
-    settings.min_size = Some(MIN_WINDOW_SIZE);
-    // `--hide` / autostart: the window should come up already hidden; the user
-    // will summon it later via `ditox-gui --toggle`.
-    settings.visible = !start_hidden;
+    // Incremental construction reads more naturally with the #[cfg] gate
+    // for `decorations` than a single struct literal would.
+    #[allow(clippy::field_reassign_with_default)]
+    let settings = {
+        let mut settings = iced::window::Settings::default();
+        settings.size = Size::new(window_state.width, window_state.height);
+        settings.position = window::Position::Specific(Point::new(window_state.x, window_state.y));
+        settings.icon = load_window_icon();
+        // On Windows we draw our own title bar + resize zones because the
+        // custom dark styling can't be applied to the native chrome. On
+        // Linux the compositor chrome integrates with each DE's theme.
+        #[cfg(windows)]
+        {
+            settings.decorations = false;
+        }
+        #[cfg(not(windows))]
+        {
+            settings.decorations = true;
+        }
+        settings.transparent = false;
+        settings.resizable = true;
+        settings.min_size = Some(MIN_WINDOW_SIZE);
+        // `--hide` / autostart: the window comes up already hidden; the user
+        // will summon it later via `ditox-gui --toggle`.
+        settings.visible = !start_hidden;
+        settings
+    };
 
     iced::application(boot_app, DitoxApp::update, DitoxApp::view)
         .subscription(DitoxApp::subscription)

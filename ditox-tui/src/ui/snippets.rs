@@ -5,9 +5,9 @@
 
 #![allow(dead_code)]
 
+use crate::ui::theme::Theme;
 use ditox_core::app::App;
 use ditox_core::db::Database;
-use crate::ui::theme::Theme;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 

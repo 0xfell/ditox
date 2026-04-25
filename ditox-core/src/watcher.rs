@@ -98,7 +98,10 @@ impl Watcher {
 
     /// Main loop - runs forever, polling clipboard
     pub fn run(&mut self) -> Result<()> {
-        info!("Starting clipboard watcher (poll interval: {}ms)", self.config.general.poll_interval_ms);
+        info!(
+            "Starting clipboard watcher (poll interval: {}ms)",
+            self.config.general.poll_interval_ms
+        );
 
         // Write PID file
         write_pid_file()?;
@@ -165,11 +168,8 @@ impl Watcher {
                 // Store the blob ONLY after we've decided we'll keep it.
                 let (_path, _new) =
                     Database::store_image_blob(&img.hash, &img.extension, &img.bytes)?;
-                let entry = Entry::new_image(
-                    img.hash.clone(),
-                    img.bytes.len(),
-                    img.extension.clone(),
-                );
+                let entry =
+                    Entry::new_image(img.hash.clone(), img.bytes.len(), img.extension.clone());
                 self.db.insert(&entry)?;
                 info!(
                     "Captured image entry: {} bytes ({}.{})",
