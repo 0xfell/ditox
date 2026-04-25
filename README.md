@@ -221,7 +221,6 @@ declaratively — see the install example above.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — status, version, what's next.
 - [`docs/notes/`](docs/notes/) — architecture notes (image storage, Linux GUI).
 - [`docs/tasks/`](docs/tasks/) — per-feature work logs.
-- [`CLAUDE.md`](CLAUDE.md) — contributor guide for AI agents working on this repo.
 - [`docs/RELEASING.md`](docs/RELEASING.md) — release process.
 
 ## Contributing
