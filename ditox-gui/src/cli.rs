@@ -28,7 +28,10 @@ pub enum Action {
 }
 
 impl Action {
-    /// Serialised form sent over the IPC socket.
+    /// Serialised form sent over the IPC socket. Only used by the
+    /// Linux IPC client today; on Windows the GUI relies on the
+    /// global hotkey path and the wire form is never read.
+    #[cfg_attr(windows, allow(dead_code))]
     pub fn wire(&self) -> Option<&'static str> {
         match self {
             Action::Launch | Action::Toggle => Some("TOGGLE"),

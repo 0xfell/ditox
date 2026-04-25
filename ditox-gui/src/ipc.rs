@@ -25,7 +25,12 @@ use std::sync::mpsc::Sender;
 use crate::cli::Action;
 
 /// Command carried over the IPC socket after parsing.
+///
+/// Only constructed by the Linux IPC server (`unix_impl`); on Windows the
+/// type exists but is never instantiated, so we silence dead-code warnings
+/// rather than dropping the type entirely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(windows, allow(dead_code))]
 pub enum IpcCommand {
     Toggle,
     Show,
@@ -34,6 +39,7 @@ pub enum IpcCommand {
 }
 
 impl IpcCommand {
+    #[cfg_attr(windows, allow(dead_code))]
     fn parse(line: &str) -> Option<Self> {
         match line.trim().to_ascii_uppercase().as_str() {
             "TOGGLE" => Some(Self::Toggle),

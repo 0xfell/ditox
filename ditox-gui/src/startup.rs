@@ -18,10 +18,13 @@ mod imp {
             exe_path_str
         );
 
+        // Note: `set_use_launch_agent` was deprecated in auto-launch 0.6;
+        // it only affects macOS, which we do not ship for. On Windows
+        // `auto-launch` always uses the Run registry key, so we don't need
+        // to configure macOS launch mode here.
         let auto_launch = AutoLaunchBuilder::new()
             .set_app_name("Ditox")
             .set_app_path(&exe_path_str)
-            .set_use_launch_agent(false) // Use registry on Windows
             .build()
             .map_err(|e| format!("Failed to create auto-launch: {}", e))?;
 
