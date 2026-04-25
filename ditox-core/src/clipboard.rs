@@ -1,5 +1,6 @@
 use crate::error::{DitoxError, Result};
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
 use std::path::Path;
 
 /// In-memory image read from the clipboard. Crucially, this type holds the
