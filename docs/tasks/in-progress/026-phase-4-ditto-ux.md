@@ -1,6 +1,6 @@
 # Task: Phase 4 — Ditto UX replication (long-running GUI + layer-shell)
 
-> **Status:** in-progress (2/12 sub-tasks done — 4.1 plumbing, 4.2 plumbing, 4.3 layer-shell dispatch)
+> **Status:** in-progress (3/12 sub-tasks done — 4.1, 4.2, 4.3 layer-shell, 4.8 hide-on-blur + paste-and-hide)
 > **Priority:** high
 > **Phase:** 4 — Ditto UX
 > **Created:** 2026-04-26
@@ -485,3 +485,67 @@ Daemon binds IPC socket, detects Hyprland, dispatches to
 **Workspace test count after this session: 495 tests** (unchanged;
 4.3 is wiring + cfg-gated dispatch with no new pure-logic surface
 area). All clippy `-D warnings` + fmt clean.
+
+### 2026-04-26 — sub-task 4.8 (hide-on-blur + paste-and-hide) landed
+
+**4.8 — Hide-on-blur with grace; paste-and-hide.**
+
+The defining behavioural change for the daemon model. The
+launcher no longer exits on click / Esc / unfocus — it hides,
+the daemon stays alive, and the next IPC summon reuses the
+same process.
+
+`ditox-gui/src/app.rs`:
+- New `hide_window(&mut self) -> Task<Message>` helper. Sets
+  `self.visible = false` and issues
+  `iced::window::set_mode(id, Mode::Hidden)` if the main window's
+  `Id` was captured (via `WindowOpened` subscription). When the
+  Id isn't yet known (very early startup), returns `Task::none()`
+  and logs at debug — Phase 4 polish will retry on the next
+  iced tick.
+- `paste_and_exit` renamed to `paste_and_hide`, return type
+  changed from `-> !` (divergent) to `-> Task<Message>`. Body
+  unchanged through clipboard-write / sentinel / focus-restore /
+  keystroke-synth; final `process::exit(0)` becomes
+  `self.hide_window()`.
+- `Message::CopyEntry`, `Message::CopyFromPreview`, and the
+  `Message::HideWindow` arm now `return self.paste_and_hide(entry)`
+  / `return self.hide_window()` instead of `process::exit`.
+- `Message::WindowUnfocused` (the actual hide-on-blur arm):
+  preserves the existing 500 ms grace-window check (avoids the
+  brief unfocus some compositors emit during animation), but on
+  expiry calls `self.hide_window()` instead of exiting. Phase 4
+  polish will surface the grace duration as
+  `Config.gui.hide_on_blur_grace_ms` (sub-task 4.8 follow-up).
+- Explicit Quit paths preserved as `process::exit(0)`:
+  - `Message::QuitApp` (tray menu "Quit").
+  - `Command::Quit` IPC handler.
+  Both save_window_state then defer-and-exit so the user's
+  intent ("quit the daemon") is honoured.
+
+**Foreground refresh on every Show / Toggle.** New
+`refresh_foreground_snapshot(&mut self)` helper. Called from
+the IPC `Show` and `Toggle` (when going visible) handlers
+**before** flipping `set_mode(Windowed)`. Without this, the
+daemon's `previous_foreground` would stay frozen at the value
+captured in `main.rs::run` at process start — meaning every
+post-first-launch paste-back would target whichever app was
+focused when the daemon started, not the one the user is
+summoning from. The `ForegroundFilter` wrapping the tracker
+already drops self-snapshots, so the daemon never picks up its
+own window as the foreground.
+
+`Message::Show` / `Toggle` (going visible): also reset
+`self.last_show_time = Instant::now()` so the hide-on-blur
+grace window starts fresh on each summon.
+
+**Live verification deferred** — requires interactive layer-shell
+testing (click → window hides + paste-back lands → re-summon →
+new foreground tracked). User can run
+`RUST_LOG=ditox_gui=info ./target/release/ditox-gui` then
+`ditox-gui --toggle` from a different app to verify the round
+trip.
+
+**Workspace test count after this session: 495 tests** (still
+unchanged; 4.8 is a behavioural refactor with no new
+pure-logic surface area). All clippy `-D warnings` + fmt clean.

@@ -1751,7 +1751,12 @@ impl DitoxApp {
 
             match cmd.command {
                 Command::Show => {
+                    // Snapshot the previously-focused app BEFORE
+                    // showing — once we're visible, the foreground
+                    // is the daemon itself.
+                    self.refresh_foreground_snapshot();
                     self.visible = true;
+                    self.last_show_time = Instant::now();
                     cmd.reply_ok();
                     if let Some(id) = APP_MAIN_WINDOW_ID.get() {
                         tasks.push(iced::window::set_mode(*id, iced::window::Mode::Windowed));
@@ -1765,6 +1770,12 @@ impl DitoxApp {
                     }
                 }
                 Command::Toggle => {
+                    let was_visible = self.visible;
+                    if !was_visible {
+                        // About to show: refresh foreground first.
+                        self.refresh_foreground_snapshot();
+                        self.last_show_time = Instant::now();
+                    }
                     self.visible = !self.visible;
                     cmd.reply_ok();
                     if let Some(id) = APP_MAIN_WINDOW_ID.get() {
@@ -1812,15 +1823,65 @@ impl DitoxApp {
         }
     }
 
-    /// Phase 2 paste-back: write `entry` to the clipboard, record a
-    /// sentinel hash so the watcher skips the inevitable re-capture,
-    /// optionally restore the previously-focused window and
-    /// synthesise the paste keystroke, then `save_window_state` and
-    /// `process::exit(0)`.
+    /// Phase 4 sub-task 4.3: hide the main window via
+    /// `iced::window::set_mode(id, Hidden)`. The daemon process
+    /// stays alive and accepts subsequent `--show` / `--toggle` IPC
+    /// commands. If the window's `Id` hasn't been captured yet
+    /// (rare race during very early startup) returns `Task::none()`
+    /// and the window stays visible — Phase 4 polish will retry on
+    /// the next iced tick.
+    fn hide_window(&mut self) -> Task<Message> {
+        self.visible = false;
+        if let Some(id) = APP_MAIN_WINDOW_ID.get() {
+            iced::window::set_mode(*id, iced::window::Mode::Hidden)
+        } else {
+            tracing::debug!("hide_window: window id not captured yet; skipping set_mode");
+            Task::none()
+        }
+    }
+
+    /// Phase 4 sub-task 4.3: re-snapshot the foreground app right
+    /// before showing the window. The original `previous_foreground`
+    /// captured in `main.rs::run` was stale after the first
+    /// hide/show cycle — paste-back would target whichever app was
+    /// focused when the daemon first launched, not the one the user
+    /// is summoning from now. Called from the IPC `Show` / `Toggle`
+    /// handlers immediately before flipping `set_mode(Windowed)`.
     ///
-    /// Diverges (`-> !`); replaces the inline `Clipboard::set_*` →
-    /// `exit(0)` pair that was the entire `Message::CopyEntry`
-    /// handler before sub-task 2.8.
+    /// `ForegroundFilter` (wrapping the tracker) drops self-snapshots
+    /// (the `ditox-gui` process), so we always get the previously-active
+    /// app — never the daemon itself.
+    fn refresh_foreground_snapshot(&mut self) {
+        match self.foreground_tracker.snapshot() {
+            Ok(Some(snap)) => {
+                tracing::info!(
+                    process = %snap.process_basename,
+                    title = %snap.title,
+                    kind = %snap.identifier.kind(),
+                    "refreshed foreground snapshot for paste-back"
+                );
+                self.previous_foreground = Some(snap);
+            }
+            Ok(None) => {
+                tracing::debug!("foreground tracker returned None; clearing previous snapshot");
+                self.previous_foreground = None;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "foreground refresh failed; keeping previous snapshot");
+            }
+        }
+    }
+
+    /// Phase 2 paste-back (post-Phase-4): write `entry` to the
+    /// clipboard, record a sentinel hash so the watcher skips the
+    /// inevitable re-capture, optionally restore the previously-focused
+    /// window and synthesise the paste keystroke, then **hide** the
+    /// daemon's window (post-4.3) — formerly `paste_and_exit` which
+    /// `process::exit(0)`-ed.
+    ///
+    /// Returns a `Task<Message>` so call sites compose with iced's
+    /// command stream; non-divergent so the daemon can serve
+    /// follow-up summons.
     ///
     /// Per-step error handling:
     ///
@@ -1829,7 +1890,7 @@ impl DitoxApp {
     /// - Sentinel record fails → already swallowed inside
     ///   `PasteSentinel::record` (best-effort log).
     /// - Paste-back fails → log; user pastes manually.
-    fn paste_and_exit(&mut self, entry: Entry) -> ! {
+    fn paste_and_hide(&mut self, entry: Entry) -> Task<Message> {
         // 1. Write clipboard.
         let write_result = match entry.entry_type {
             EntryType::Text => Clipboard::set_text(&entry.content),
@@ -1931,24 +1992,28 @@ impl DitoxApp {
         }
 
         self.save_window_state();
-        std::process::exit(0);
+        // Phase 4: hide the daemon's window instead of exiting so
+        // the next `--show` / `--toggle` IPC summon (or compositor
+        // keybind) re-uses this process.
+        self.hide_window()
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::CopyEntry(index) => {
-                // Phase 2 paste-back: clipboard write + sentinel
-                // record + foreground restore + keystroke synthesis,
-                // all in `paste_and_exit` (which diverges).
+                // Phase 2 paste-back + Phase 4 daemon: clipboard
+                // write + sentinel + restore + keystroke synthesis,
+                // then HIDE the window (was `process::exit` in the
+                // one-shot model).
                 if let Some(entry) = self.entries.get(index).cloned() {
-                    self.paste_and_exit(entry);
+                    return self.paste_and_hide(entry);
                 }
-                // Index out of bounds (extremely unlikely): preserve
-                // the previous "exit even on no-op" behaviour so
-                // misbehaving keybinds don't leave the launcher
-                // hanging open.
+                // Index out of bounds (extremely unlikely): just
+                // hide. Previous one-shot model exited even on
+                // no-op; keeping the daemon alive is the better
+                // default now that it owns the IPC socket.
                 self.save_window_state();
-                std::process::exit(0);
+                return self.hide_window();
             }
 
             Message::CopySelected => {
@@ -2177,7 +2242,7 @@ impl DitoxApp {
                     return Task::none();
                 }
                 self.save_window_state();
-                std::process::exit(0);
+                return self.hide_window();
             }
 
             Message::StartDrag => {
@@ -2243,15 +2308,20 @@ impl DitoxApp {
             }
 
             Message::WindowUnfocused => {
-                // Auto-close on focus loss. Grace period prevents the brief
-                // unfocus that some compositors emit while the window is still
-                // animating in from killing us before the user can interact.
+                // Phase 4 sub-task 4.8: hide-on-blur with grace
+                // period. Replaces the one-shot model's
+                // `process::exit(0)` with `hide_window()` so the
+                // daemon stays alive across blur events. The grace
+                // window prevents the brief unfocus that some
+                // compositors emit while the window is animating
+                // in from killing the launcher before the user
+                // can interact.
                 let elapsed = self.last_show_time.elapsed();
                 if elapsed < Duration::from_millis(500) {
                     return Task::none();
                 }
                 self.save_window_state();
-                std::process::exit(0);
+                return self.hide_window();
             }
 
             Message::TrayMenuEvent(menu_id) => {
@@ -2343,10 +2413,10 @@ impl DitoxApp {
                     None
                 };
                 if let Some(entry) = entry_clone {
-                    self.paste_and_exit(entry);
+                    return self.paste_and_hide(entry);
                 }
                 self.save_window_state();
-                std::process::exit(0);
+                return self.hide_window();
             }
 
             Message::Scrolled(viewport) => {
