@@ -9,6 +9,7 @@ pub mod app;
 pub mod capture;
 pub mod clipboard;
 pub mod collection;
+pub mod color;
 pub mod config;
 pub mod content_type;
 pub mod db;

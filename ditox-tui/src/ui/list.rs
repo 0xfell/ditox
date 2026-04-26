@@ -121,9 +121,18 @@ fn format_entry_row(
         "   "
     };
 
+    // Phase 3 sub-task 3.3: scan the entry's content for the first
+    // CSS-style color literal so we can render a swatch alongside
+    // the preview. Performed against the full content (not the
+    // truncated preview) so e.g. `#ff5500` past the preview cutoff
+    // still gets a swatch.
+    let swatch_color = ditox_core::color::detect_first_color(&entry.content);
+
     // Calculate available width for content preview
-    // Format: " {marker} {idx} │ {type} │ {content...} │ {time} "
-    let fixed_width = 5 + 4 + 3 + 2 + 3 + 6 + 2; // marker + idx + sep + type(1) + sep + time + padding
+    // Format: " {marker} {idx} │ {type} │ [swatch ]{content...} │ {time} "
+    // Swatch occupies 3 cells (`██ `) when present.
+    let swatch_width = if swatch_color.is_some() { 3 } else { 0 };
+    let fixed_width = 5 + 4 + 3 + 2 + 3 + 6 + 2 + swatch_width; // marker + idx + sep + type(1) + sep + time + padding + swatch
     let content_width = (width as usize).saturating_sub(fixed_width).max(10);
 
     let base_style = if selected {
@@ -192,6 +201,19 @@ fn format_entry_row(
 
     // Combine all spans into a line
     let mut all_spans = vec![Span::styled(prefix, base_style)];
+
+    // Phase 3 sub-task 3.3: prepend a 2-block swatch when a color
+    // was detected. We use ratatui `Color::Rgb` as the foreground
+    // colour of two `█` (full-block) characters — more reliable
+    // than `bg` because some terminals don't render arbitrary RGB
+    // backgrounds. The trailing space separates the swatch from
+    // the preview text.
+    if let Some(c) = swatch_color {
+        let swatch_style = Style::default().fg(Color::Rgb(c.r, c.g, c.b));
+        all_spans.push(Span::styled("██", swatch_style));
+        all_spans.push(Span::styled(" ", base_style));
+    }
+
     all_spans.extend(content_spans);
     all_spans.push(Span::styled(suffix, base_style));
 

@@ -2504,7 +2504,7 @@ impl DitoxApp {
                 .align_y(iced::Alignment::Center)
             }
             EntryType::Text => {
-                // Text entry: type badge + preview text
+                // Text entry: type badge + (optional color swatch) + preview text
                 let type_badge = container(icon(icons::FILE_TEXT).size(10))
                     .padding([2, 5])
                     .style(styles::badge_text);
@@ -2515,15 +2515,42 @@ impl DitoxApp {
                     colors::TEXT_SECONDARY
                 });
 
-                row![
-                    type_badge,
-                    container(fav_star).width(Length::Fixed(18.0)),
-                    preview,
-                    Space::new().width(Length::Fill),
-                    time,
-                ]
-                .spacing(8)
-                .align_y(iced::Alignment::Center)
+                // Phase 3 sub-task 3.3: scan the entry's text for a
+                // CSS-style color literal and render a 12×12 px
+                // filled square before the preview when one's
+                // found. The Container's `bg` is set via a per-row
+                // style closure that captures the parsed RGBA.
+                let swatch: Option<Element<'_, Message>> =
+                    ditox_core::color::detect_first_color(&entry.content).map(|c| {
+                        let bg = iced::Color::from_rgba8(c.r, c.g, c.b, c.a as f32 / 255.0);
+                        container(Space::new())
+                            .width(Length::Fixed(12.0))
+                            .height(Length::Fixed(12.0))
+                            .style(move |_theme: &iced::Theme| container::Style {
+                                background: Some(iced::Background::Color(bg)),
+                                border: iced::Border {
+                                    color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+                                    width: 1.0,
+                                    radius: 2.0.into(),
+                                },
+                                ..container::Style::default()
+                            })
+                            .into()
+                    });
+
+                let mut row_items: Row<'_, Message> =
+                    row![type_badge, container(fav_star).width(Length::Fixed(18.0)),]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center);
+
+                if let Some(s) = swatch {
+                    row_items = row_items.push(s);
+                }
+
+                row_items
+                    .push(preview)
+                    .push(Space::new().width(Length::Fill))
+                    .push(time)
             }
         };
 
