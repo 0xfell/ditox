@@ -31,8 +31,8 @@ and picking the next free number.
 
 | Range | Phase | Status |
 |---|---|---|
-| 014-022 | Phase 0 — Foundation | planned |
-| 023 | Phase 1 — Multi-format capture | planned |
+| 014-022 | Phase 0 — Foundation | completed |
+| 023 | Phase 1 — Multi-format capture (epic) | completed (8/9; 1.4 → 032) |
 | 024 | Phase 2 — Paste-back | planned |
 | 025 | Phase 3 — Power-user features | planned |
 | 026 | Phase 4 — Ditto UX | planned |
@@ -41,4 +41,5 @@ and picking the next free number.
 | 029 | Phase 6 — LAN sync | planned |
 | 030 | Phase 7 — Distribution & i18n | planned |
 | 031 | Phase 8 — macOS | planned |
-| 032+ | Future | unallocated |
+| 032 | Phase 1 carry-over — Windows multi-format capture (`AddClipboardFormatListener`) | planned (spawned from 023 sub-task 1.4) |
+| 033+ | Future | unallocated |

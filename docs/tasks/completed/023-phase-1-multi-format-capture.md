@@ -1,10 +1,12 @@
 # Task: Phase 1 — Multi-format clipboard capture
 
-> **Status:** planned
+> **Status:** completed (8/9 sub-tasks; 1.4 spun out as task 032)
 > **Priority:** high
 > **Phase:** 1 — Multi-format capture
 > **Created:** 2026-04-26
+> **Completed:** 2026-04-26
 > **Estimated:** 6-8 weeks
+> **Actual:** ~1 day (8/9 sub-tasks; 1.4 deferred to Windows-side work)
 
 ## Description
 
@@ -543,3 +545,38 @@ active wayland, +1 ignored). All clippy `-D warnings` + fmt clean.
 `AddClipboardFormatListener`). That work needs to be done on
 Windows (or against a Windows VM) — not feasible from this
 Linux-only session.
+
+### 2026-04-26 — closing 023; sub-task 1.4 spun out as task 032
+
+Decision: Phase 1 is functionally complete from the Linux side
+(8/9 sub-tasks: schema v3, format identity, canonicalisation,
+multi-format DB writes, search, limits, atomic blob writes,
+Wayland multi-format capture, FormatAggregator). Sub-task 1.4
+(Windows event-driven capture) is the only outstanding item and
+**fundamentally cannot be validated** from this Linux-only
+iteration. Rather than block all of Phase 2 on it (which is also
+mostly Linux-testable), 1.4 has been excised into its own task:
+
+- **`docs/tasks/planned/032-phase-1-windows-multi-format.md`** —
+  full design, sub-tasks, acceptance criteria, risks, and the
+  prerequisite `Watcher::run` refactor that 023's original 1.4
+  spec didn't surface.
+
+032 also documents the **prerequisite watcher refactor**: the
+current `Watcher::poll_internal` only calls `current_snapshot()`,
+which works fine for the polling Wayland source today but isn't
+suitable for an event-driven `AddClipboardFormatListener`. 032's
+design includes the refactor to consume `subscribe()`'s
+`mpsc::Receiver<RawClip>` alongside (or instead of) the synchronous
+poll. Doing it as part of 032 keeps the Windows work
+self-contained.
+
+This task (023) is moved to `completed/` because the eight done
+sub-tasks are independently mergeable and don't degrade the
+existing Windows behaviour (the legacy `legacy_clipboard_snapshot`
++ arboard polling source remains on Windows until 032 ships).
+Total effort spanning both Phase 0 + 1: ~3 days end-to-end.
+
+**Final workspace test count: 159 tests** (start of session: 72;
++87 across Phase 0 + Phase 1). All clippy `-D warnings` + fmt
+clean. Zero regressions in pre-existing tests.
