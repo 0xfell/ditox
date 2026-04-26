@@ -1,0 +1,21 @@
+[package]
+name = "a1-iced-layershell-spike"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "Path A1 prototype for ditox task 022 — wlr-layer-shell launcher via iced_layershell"
+
+[[bin]]
+name = "a1-spike"
+path = "src/main.rs"
+
+[dependencies]
+iced = { version = "0.14.0", features = ["image", "tokio"] }
+iced_layershell = "0.17"
+iced_runtime = "0.14"
+iced_core = "0.14"
+
+# Standalone — does NOT join the ditox workspace so we can iterate
+# without touching production Cargo.lock.
+
+[workspace]
