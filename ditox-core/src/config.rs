@@ -93,6 +93,120 @@ pub struct Config {
     /// Phase 3 sub-task 3.8: per-clip URL templates for the
     /// "Translate" / "Search the web" actions.
     pub actions: crate::url_template::ActionsConfig,
+    /// Phase 4 sub-task 4.4: GUI launcher behaviour.
+    pub gui: GuiConfig,
+}
+
+/// Phase 4 sub-task 4.4 — GUI launcher behaviour.
+///
+/// Today's surface area:
+/// - `position`: where the launcher panel appears.
+/// - `hide_on_blur` + `hide_on_blur_grace_ms`: 4.8.
+/// - `pinned_layer`: 4.6 (always-on-top toggle).
+///
+/// Phase 5 will add per-clip hotkey config; that lives in its
+/// own block.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(default)]
+pub struct GuiConfig {
+    /// Where to anchor the launcher when shown. Defaults to
+    /// bottom-left of the active monitor with a 24 px margin
+    /// (matches the post-013 floating-launcher visual reference).
+    pub position: GuiPosition,
+    /// When `true` (default) the launcher hides on focus loss
+    /// after the grace window. Set to `false` to disable
+    /// auto-hide entirely (pin-by-config rather than per-summon).
+    pub hide_on_blur: bool,
+    /// Grace period in ms before a focus-loss event triggers
+    /// hide. Some compositors emit a brief unfocus during the
+    /// show animation; the grace prevents that from killing the
+    /// summon. Defaults to 250 ms.
+    pub hide_on_blur_grace_ms: u64,
+    /// When `true`, the launcher uses the layer-shell `Overlay`
+    /// layer instead of `Top` so it draws above the rest of the
+    /// session including fullscreen windows. Off by default; the
+    /// in-launcher pin button (sub-task 4.6) toggles this at
+    /// runtime.
+    pub pinned: bool,
+}
+
+impl Default for GuiConfig {
+    fn default() -> Self {
+        Self {
+            position: GuiPosition::default(),
+            hide_on_blur: true,
+            hide_on_blur_grace_ms: 250,
+            pinned: false,
+        }
+    }
+}
+
+impl GuiConfig {
+    /// Resolved blur-grace as a `Duration`. Falls back to 250 ms
+    /// when `hide_on_blur_grace_ms == 0`.
+    pub fn hide_on_blur_grace(&self) -> std::time::Duration {
+        if self.hide_on_blur_grace_ms == 0 {
+            std::time::Duration::from_millis(250)
+        } else {
+            std::time::Duration::from_millis(self.hide_on_blur_grace_ms)
+        }
+    }
+}
+
+/// Position modes for the launcher panel. Matches
+/// `docs/notes/ui-replication.md::A4`.
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(rename_all = "snake_case", tag = "mode")]
+pub enum GuiPosition {
+    /// Bottom-left of the active monitor, 24 px margin. The
+    /// post-013 default.
+    #[default]
+    Default,
+    /// At the last-known-good geometry for the active resolution
+    /// (sub-task 3.7's `window_state.json` map). Falls back to
+    /// `Default` on first launch / unknown resolution.
+    AtPrevious,
+    /// At the current text-cursor / mouse-cursor position. On
+    /// Windows the cursor is the text caret (`GetCaretPos`); on
+    /// Hyprland it's the mouse cursor (`hyprctl cursorpos`). On
+    /// other compositors falls back to
+    /// [`AtActiveWindowCentre`](Self::AtActiveWindowCentre).
+    AtCursor,
+    /// Centred over the last-tracked foreground window. On
+    /// platforms without a foreground tracker
+    /// (`Platform::supports_layer_shell` is `false`) falls back
+    /// to `Default`.
+    AtActiveWindowCentre,
+    /// Fixed anchor + offset. The verbose form exists so users
+    /// can pin to e.g. the top-right of their primary monitor.
+    Fixed {
+        #[serde(default)]
+        horizontal: HorizontalAnchor,
+        #[serde(default)]
+        vertical: VerticalAnchor,
+        /// Offset from the anchor in DIPs. `[x, y]`. Positive `x`
+        /// is rightward, positive `y` is downward.
+        #[serde(default)]
+        offset: [i32; 2],
+    },
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum HorizontalAnchor {
+    #[default]
+    Left,
+    Centre,
+    Right,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum VerticalAnchor {
+    Top,
+    Middle,
+    #[default]
+    Bottom,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -944,5 +1058,138 @@ mod paste_config_tests {
         let parsed: Config = toml::from_str(toml).unwrap();
         assert!(!parsed.paste.disabled);
         assert!(parsed.paste.keystrokes.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod gui_config_tests {
+    use super::*;
+
+    #[test]
+    fn default_gui_config_has_sensible_values() {
+        let g = GuiConfig::default();
+        assert!(matches!(g.position, GuiPosition::Default));
+        assert!(g.hide_on_blur);
+        assert_eq!(g.hide_on_blur_grace_ms, 250);
+        assert!(!g.pinned);
+    }
+
+    #[test]
+    fn hide_on_blur_grace_falls_back_to_250_on_zero() {
+        let g = GuiConfig {
+            hide_on_blur_grace_ms: 0,
+            ..GuiConfig::default()
+        };
+        assert_eq!(g.hide_on_blur_grace().as_millis(), 250);
+    }
+
+    #[test]
+    fn hide_on_blur_grace_uses_explicit_value() {
+        let g = GuiConfig {
+            hide_on_blur_grace_ms: 1000,
+            ..GuiConfig::default()
+        };
+        assert_eq!(g.hide_on_blur_grace().as_millis(), 1000);
+    }
+
+    #[test]
+    fn parses_default_position_from_toml() {
+        let toml = r#"
+            [gui]
+            [gui.position]
+            mode = "default"
+        "#;
+        let parsed: Config = toml::from_str(toml).unwrap();
+        assert!(matches!(parsed.gui.position, GuiPosition::Default));
+    }
+
+    #[test]
+    fn parses_at_previous_position() {
+        let toml = r#"
+            [gui.position]
+            mode = "at_previous"
+        "#;
+        let parsed: Config = toml::from_str(toml).unwrap();
+        assert!(matches!(parsed.gui.position, GuiPosition::AtPrevious));
+    }
+
+    #[test]
+    fn parses_at_cursor_position() {
+        let toml = r#"
+            [gui.position]
+            mode = "at_cursor"
+        "#;
+        let parsed: Config = toml::from_str(toml).unwrap();
+        assert!(matches!(parsed.gui.position, GuiPosition::AtCursor));
+    }
+
+    #[test]
+    fn parses_fixed_position() {
+        let toml = r#"
+            [gui.position]
+            mode = "fixed"
+            horizontal = "right"
+            vertical = "top"
+            offset = [-20, 40]
+        "#;
+        let parsed: Config = toml::from_str(toml).unwrap();
+        match parsed.gui.position {
+            GuiPosition::Fixed {
+                horizontal,
+                vertical,
+                offset,
+            } => {
+                assert_eq!(horizontal, HorizontalAnchor::Right);
+                assert_eq!(vertical, VerticalAnchor::Top);
+                assert_eq!(offset, [-20, 40]);
+            }
+            other => panic!("expected Fixed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_fixed_with_default_anchors() {
+        let toml = r#"
+            [gui.position]
+            mode = "fixed"
+        "#;
+        let parsed: Config = toml::from_str(toml).unwrap();
+        match parsed.gui.position {
+            GuiPosition::Fixed {
+                horizontal,
+                vertical,
+                offset,
+            } => {
+                assert_eq!(horizontal, HorizontalAnchor::Left);
+                assert_eq!(vertical, VerticalAnchor::Bottom);
+                assert_eq!(offset, [0, 0]);
+            }
+            other => panic!("expected Fixed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_pinned_and_hide_on_blur_overrides() {
+        let toml = r#"
+            [gui]
+            hide_on_blur = false
+            hide_on_blur_grace_ms = 500
+            pinned = true
+        "#;
+        let parsed: Config = toml::from_str(toml).unwrap();
+        assert!(!parsed.gui.hide_on_blur);
+        assert_eq!(parsed.gui.hide_on_blur_grace().as_millis(), 500);
+        assert!(parsed.gui.pinned);
+    }
+
+    #[test]
+    fn missing_gui_section_uses_defaults() {
+        let toml = r#"
+            [general]
+            max_entries = 1000
+        "#;
+        let parsed: Config = toml::from_str(toml).unwrap();
+        assert!(matches!(parsed.gui.position, GuiPosition::Default));
+        assert!(parsed.gui.hide_on_blur);
     }
 }

@@ -3934,32 +3934,34 @@ pub fn run_with(
 /// impl are auto-generated. The catch-all `_ => {}` in `update`
 /// soaks up the unhandled control variants.
 ///
-/// Settings (per `docs/notes/ui-replication.md::A3`):
-/// - 420x520 panel anchored to bottom-left of the active monitor.
-/// - 24px margin on bottom and left.
-/// - Top layer (above normal windows; below system overlays).
+/// Settings translation (Phase 4 sub-task 4.4):
+/// - `[gui.position]` mode → Anchor + margin + initial size.
+/// - `[gui.pinned]` → Layer::Top vs Layer::Overlay.
+/// - Window size is fixed at 420x520 (the launcher's intent;
+///   user-resizable would conflict with a layer-shell anchor).
 /// - Exclusive keyboard interactivity so the launcher captures
-///   key events (Esc, Enter, search input) without depending on
-///   compositor focus.
-///
-/// Phase 4 sub-task 4.4 will make `anchor` / `margin` / `layer`
-/// configurable; this commit hard-codes the bottom-left default.
+///   key events without depending on compositor focus.
 #[cfg(target_os = "linux")]
 fn run_layer_shell(_start_hidden: bool) -> ditox_core::Result<()> {
-    use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
+    use iced_layershell::reexport::{KeyboardInteractivity, Layer};
     use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
 
+    let config = APP_CONFIG.get().cloned().unwrap_or_default();
+    let (anchor, margin) = layer_anchor_and_margin_for(&config.gui.position);
+
     let layer_settings = LayerShellSettings {
-        anchor: Anchor::Bottom | Anchor::Left,
-        layer: Layer::Top,
+        anchor,
+        layer: if config.gui.pinned {
+            Layer::Overlay
+        } else {
+            Layer::Top
+        },
         size: Some((
             DEFAULT_WINDOW_SIZE.width as u32,
             DEFAULT_WINDOW_SIZE.height as u32,
         )),
-        // (top, right, bottom, left) per layershellev. Default
-        // floating-launcher offset is 24 px from the bottom-left
-        // corner.
-        margin: (0, 0, 24, 24),
+        // (top, right, bottom, left) per layershellev.
+        margin,
         keyboard_interactivity: KeyboardInteractivity::Exclusive,
         // exclusive_zone = -1 means "no zone reserved" (we float over
         // other windows rather than push them).
@@ -3986,4 +3988,71 @@ fn run_layer_shell(_start_hidden: bool) -> ditox_core::Result<()> {
     .map_err(|e| ditox_core::DitoxError::Other(e.to_string()))?;
 
     Ok(())
+}
+
+/// Phase 4 sub-task 4.4: translate a [`ditox_core::config::GuiPosition`]
+/// to a `(layer-shell Anchor, margin)` pair.
+///
+/// Margin tuple is `(top, right, bottom, left)` per `layershellev`.
+///
+/// Modes that need runtime queries (`AtCursor` /
+/// `AtActiveWindowCentre`) are reduced here to their nearest
+/// static equivalent — the daemon repositions per-summon via
+/// IPC `AnchorChange`/`MarginChange` messages once Phase 4
+/// polish lands those queries (next iteration).
+#[cfg(target_os = "linux")]
+fn layer_anchor_and_margin_for(
+    pos: &ditox_core::config::GuiPosition,
+) -> (iced_layershell::reexport::Anchor, (i32, i32, i32, i32)) {
+    use ditox_core::config::{GuiPosition, HorizontalAnchor, VerticalAnchor};
+    use iced_layershell::reexport::Anchor;
+
+    match pos {
+        GuiPosition::Default => (Anchor::Bottom | Anchor::Left, (0, 0, 24, 24)),
+        // AtPrevious + AtCursor + AtActiveWindowCentre fall back
+        // to the bottom-left default for the initial layer-shell
+        // creation. The daemon repositions on each summon via
+        // `AnchorChange`/`MarginChange` messages once the runtime
+        // query path lands (Phase 4 follow-up).
+        GuiPosition::AtPrevious | GuiPosition::AtCursor | GuiPosition::AtActiveWindowCentre => {
+            (Anchor::Bottom | Anchor::Left, (0, 0, 24, 24))
+        }
+        GuiPosition::Fixed {
+            horizontal,
+            vertical,
+            offset,
+        } => {
+            // Build the anchor from the chosen edges. Layer-shell
+            // semantics: anchoring to two perpendicular edges
+            // pins the corresponding corner. The bitflags-style
+            // `Anchor::empty()` plus `|=` lets us add edges
+            // selectively (Centre / Middle = no edge bits, which
+            // means "centred along that axis").
+            let mut anchor = Anchor::empty();
+            let (off_x_left, off_x_right) = match horizontal {
+                HorizontalAnchor::Left => {
+                    anchor |= Anchor::Left;
+                    (offset[0], 0)
+                }
+                HorizontalAnchor::Right => {
+                    anchor |= Anchor::Right;
+                    (0, -offset[0])
+                }
+                HorizontalAnchor::Centre => (0, 0),
+            };
+            let (off_y_top, off_y_bottom) = match vertical {
+                VerticalAnchor::Top => {
+                    anchor |= Anchor::Top;
+                    (offset[1], 0)
+                }
+                VerticalAnchor::Bottom => {
+                    anchor |= Anchor::Bottom;
+                    (0, -offset[1])
+                }
+                VerticalAnchor::Middle => (0, 0),
+            };
+            // (top, right, bottom, left)
+            (anchor, (off_y_top, off_x_right, off_y_bottom, off_x_left))
+        }
+    }
 }
