@@ -1755,6 +1755,9 @@ impl DitoxApp {
                     // showing — once we're visible, the foreground
                     // is the daemon itself.
                     self.refresh_foreground_snapshot();
+                    // Phase 4 sub-task 4.7: fire the cycling cursor
+                    // so rapid re-summons advance the selection.
+                    self.fire_cursor_for_summon();
                     self.visible = true;
                     self.last_show_time = Instant::now();
                     cmd.reply_ok();
@@ -1772,8 +1775,10 @@ impl DitoxApp {
                 Command::Toggle => {
                     let was_visible = self.visible;
                     if !was_visible {
-                        // About to show: refresh foreground first.
+                        // About to show: refresh foreground first,
+                        // then advance the cycling cursor.
                         self.refresh_foreground_snapshot();
+                        self.fire_cursor_for_summon();
                         self.last_show_time = Instant::now();
                     }
                     self.visible = !self.visible;
@@ -1838,6 +1843,41 @@ impl DitoxApp {
             tracing::debug!("hide_window: window id not captured yet; skipping set_mode");
             Task::none()
         }
+    }
+
+    /// Phase 4 sub-task 4.7: fire the persistent selection cursor
+    /// (sub-task 2.9 groundwork) on each daemon summon and pre-select
+    /// the resulting entry. Modifier-held cycling: rapid re-summons
+    /// (within `paste.cursor_refire_window_ms`, default 800 ms)
+    /// advance the index by one; idle past the window resets to 0.
+    ///
+    /// Called from the IPC `Show` / `Toggle` (going-visible) handlers
+    /// after `refresh_foreground_snapshot`.
+    fn fire_cursor_for_summon(&mut self) {
+        use ditox_core::paste::cursor::PersistentSelectionCursor;
+
+        let persistent = match PersistentSelectionCursor::at_default_path() {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::debug!(error = %e, "selection cursor unavailable on summon");
+                return;
+            }
+        };
+
+        let cursor = persistent.fire_and_persist(
+            std::time::SystemTime::now(),
+            self.config.paste.cursor_refire_window(),
+        );
+        let entries_len = self.entries.len();
+        let new_index = cursor.index_for_list(entries_len);
+        tracing::debug!(
+            cursor_index = cursor.index(),
+            window_ms = self.config.paste.cursor_refire_window().as_millis(),
+            entries = entries_len,
+            selected = new_index,
+            "fired selection cursor on summon"
+        );
+        self.selected_index = new_index;
     }
 
     /// Phase 4 sub-task 4.3: re-snapshot the foreground app right
