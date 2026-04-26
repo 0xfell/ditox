@@ -1048,6 +1048,10 @@ mod icons {
     pub const STAR: char = '\u{F588}'; // star outline
     pub const STAR_FILL: char = '\u{F586}'; // star filled
 
+    // Phase 4 sub-task 4.6: pin button (always-on-top toggle).
+    pub const PIN: char = '\u{F4D7}'; // pin angle
+    pub const PIN_FILL: char = '\u{F4D5}'; // pin angle fill
+
     // Status
     pub const CIRCLE_FILL: char = '\u{F287}'; // filled circle (status indicator)
 
@@ -1189,6 +1193,29 @@ mod styles {
                 color: Color::from_rgba(colors::ACCENT.r, colors::ACCENT.g, colors::ACCENT.b, 0.4),
                 width: 1.0,
                 radius: Radius::new(8.0),
+            },
+            shadow: Shadow::default(),
+            snap: false,
+        }
+    }
+
+    // Phase 4 sub-task 4.6: pin button in the title bar.
+    // Transparent background, accent on hover, no border. Visual
+    // state distinction (filled vs outlined icon) lives at the
+    // call site via the pin/pin-fill icon swap.
+    pub fn header_icon_button(_theme: &iced::Theme, status: button::Status) -> button::Style {
+        let bg = match status {
+            button::Status::Hovered => colors::BG_HOVER,
+            button::Status::Pressed => colors::BG_ELEVATED,
+            _ => Color::TRANSPARENT,
+        };
+        button::Style {
+            background: Some(Background::Color(bg)),
+            text_color: colors::TEXT_PRIMARY,
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: Radius::new(4.0),
             },
             shadow: Shadow::default(),
             snap: false,
@@ -1510,6 +1537,11 @@ pub enum Message {
     /// static so IPC handlers can target the window with
     /// `iced::window::set_mode`.
     WindowOpened(iced::window::Id),
+    /// Phase 4 sub-task 4.6: toggle the always-on-top pin. Flips
+    /// the launcher between `Layer::Top` and `Layer::Overlay`
+    /// (layer-shell only) and gates hide-on-blur — pinned
+    /// launchers don't auto-close.
+    TogglePin,
 
     // View modes
     ShowSettings,
@@ -1588,6 +1620,11 @@ pub struct DitoxApp {
     /// with `OffSynthesizer` so `paste_with_chain` never returns Err
     /// from this chain.
     synthesizer_chain: Vec<Box<dyn Synthesizer>>,
+    /// Phase 4 sub-task 4.6: always-on-top pin state. Initialised
+    /// from `Config.gui.pinned`; toggled at runtime via the header
+    /// pin button (`Message::TogglePin`) and persisted to config
+    /// only via explicit user edit.
+    pinned: bool,
 }
 
 impl DitoxApp {
@@ -1673,6 +1710,9 @@ impl DitoxApp {
             TabFilter::Today,
         ];
 
+        // Capture before `config` is moved into the struct.
+        let initial_pinned = config.gui.pinned;
+
         let app = DitoxApp {
             db,
             config,
@@ -1700,6 +1740,7 @@ impl DitoxApp {
             previous_foreground,
             foreground_tracker,
             synthesizer_chain,
+            pinned: initial_pinned,
         };
 
         // One-shot mode: don't override the bottom-left position picked by
@@ -2308,6 +2349,26 @@ impl DitoxApp {
                 tracing::debug!(?id, "main window opened");
             }
 
+            Message::TogglePin => {
+                self.pinned = !self.pinned;
+                tracing::info!(pinned = self.pinned, "pin toggled");
+                // Phase 4 sub-task 4.6: flip the layer-shell layer
+                // by emitting the auto-generated LayerChange
+                // variant. iced_layershell intercepts it via the
+                // TryInto<LayershellCustomActionWithId> impl and
+                // pushes the change to the compositor.
+                #[cfg(target_os = "linux")]
+                {
+                    use iced_layershell::reexport::Layer;
+                    let new_layer = if self.pinned {
+                        Layer::Overlay
+                    } else {
+                        Layer::Top
+                    };
+                    return Task::done(Message::LayerChange(new_layer));
+                }
+            }
+
             #[cfg(windows)]
             Message::GlobalHotkeyPressed => {
                 // Windows: the GUI is one-shot like Linux now, but the hotkey
@@ -2356,8 +2417,15 @@ impl DitoxApp {
                 // compositors emit while the window is animating
                 // in from killing the launcher before the user
                 // can interact.
+                //
+                // Phase 4 sub-task 4.6: pinned launchers don't
+                // auto-hide regardless of blur events. The user
+                // explicitly opted in to "stay visible".
+                if self.pinned || !self.config.gui.hide_on_blur {
+                    return Task::none();
+                }
                 let elapsed = self.last_show_time.elapsed();
-                if elapsed < Duration::from_millis(500) {
+                if elapsed < self.config.gui.hide_on_blur_grace() {
                     return Task::none();
                 }
                 self.save_window_state();
@@ -2583,7 +2651,11 @@ impl DitoxApp {
     }
 
     fn view_title_bar(&self) -> Element<'_, Message> {
-        // Draggable title area (fills most of the bar)
+        // Draggable title area (fills most of the bar). On
+        // layer-shell windows the drag is internal — see
+        // sub-task 4.5 below — but on xdg_toplevel the
+        // compositor moves the window when we issue
+        // `window::drag`.
         let title = mouse_area(
             row![
                 text("Ditox").size(13).color(colors::TEXT_SECONDARY),
@@ -2593,6 +2665,25 @@ impl DitoxApp {
             .align_y(iced::Alignment::Center),
         )
         .on_press(Message::StartDrag);
+
+        // Phase 4 sub-task 4.6: pin button. Toggles between
+        // `Layer::Top` (default; below system overlays) and
+        // `Layer::Overlay` (above everything including
+        // fullscreen). Visual feedback: filled vs outlined
+        // pushpin icon.
+        let pin_icon = if self.pinned {
+            icons::PIN_FILL
+        } else {
+            icons::PIN
+        };
+        let pin_button = button(icon(pin_icon).size(11).color(if self.pinned {
+            colors::ACCENT
+        } else {
+            colors::TEXT_MUTED
+        }))
+        .on_press(Message::TogglePin)
+        .padding([4, 6])
+        .style(styles::header_icon_button);
 
         // Small resize grip in top-right corner (diagonal lines icon)
         let resize_grip = mouse_area(
@@ -2605,7 +2696,7 @@ impl DitoxApp {
         )
         .on_press(Message::StartResize(Direction::NorthEast));
 
-        container(row![title, resize_grip,].align_y(iced::Alignment::Center))
+        container(row![title, pin_button, resize_grip,].align_y(iced::Alignment::Center))
             .width(Length::Fill)
             .padding([4, 0])
             .style(styles::title_bar)
