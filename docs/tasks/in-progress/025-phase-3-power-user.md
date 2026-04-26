@@ -1,6 +1,6 @@
 # Task: Phase 3 — Power-user features
 
-> **Status:** in-progress (1/8 sub-tasks done — 3.2)
+> **Status:** in-progress (2/8 sub-tasks done — 3.2, 3.6)
 > **Priority:** medium
 > **Phase:** 3 — Power-user features
 > **Created:** 2026-04-26
@@ -300,3 +300,60 @@ tests). All clippy `-D warnings` + fmt clean.
 cleanly (no panic from the new `Watcher::new` → tracker init path).
 Default exclusions don't fire because foreground is `brave-browser`,
 which doesn't match the password-manager globs.
+
+### 2026-04-26 — sub-task 3.6 landed
+
+**3.6 — Search-mode prefixes.**
+
+`ditox-core/src/search.rs`:
+- New `SearchScope` enum: `Default`/`Plain`/`Html`/`Rtf`/`Notes`/`FullText`.
+  Each non-default scope has a single-letter prefix code:
+  `p`/`h`/`r`/`q`/`f`. `format_name()` returns the canonical MIME for
+  the format-restricted scopes (`Plain` → `text/plain;charset=utf-8`,
+  etc.).
+- `ParsedQuery { scope, query }` returned by `parse(input)`.
+- `parse(input)` recognises strict `'/' SCOPE_LETTER ' ' BODY`. Anything
+  else (no slash, lone `/`, unknown letter, leading whitespace, double
+  slash) falls through to `Default` with the literal input — fail-soft
+  so unfortunate clip contents starting with `/` aren't silently
+  re-routed.
+- `dispatch(db, parsed, limit, filter, collection_id)` helper routes
+  to the right `Database` method based on scope. `Default`/`FullText`
+  honour the tab/collection filter via `search_entries_filtered`;
+  `Plain`/`Html`/`Rtf` use `search_entries_in_format` (filter
+  intentionally ignored — power-user mode); `Notes` uses
+  `search_notes_only`.
+- 25 unit tests covering: prefix-char round-trip; case-insensitive
+  parse; empty body (`"/p "` → `Plain { query: "" }`); fail-soft
+  paths (`"/pfoo"`, `"/p"` alone, `"/x foo"`, `"/3 foo"`, `"//foo"`,
+  `" /p hello"`); `format_name` correctness; `Display` impl.
+
+`ditox-core/src/app.rs::App::load_search_results`:
+- Calls `search::parse` first; routes the actual SQL to
+  `search_entries` / `search_entries_in_format` / `search_notes_only`
+  per scope. After loading, briefly swaps `search_query` to the
+  stripped post-prefix query so `apply_fuzzy_filter` /
+  `apply_regex_filter` highlight only the actual search term, not
+  the prefix; restores afterward so the search bar still shows the
+  user's input verbatim.
+
+`ditox-gui/src/app.rs`:
+- Both search call sites (the live `Message::SearchTriggered`
+  tokio-spawn path and the `refresh_entries` path) now call
+  `ditox_core::search::parse` then `dispatch(...)` — single
+  routing helper, identical behaviour across paths.
+
+**Default vs FullText semantics.** Both currently route to the same
+DB method (`search_entries_filtered` for the GUI, `search_entries`
+for the TUI's App). `FullText` is reserved as a future-extension
+point in case `Default` is ever narrowed to text+notes; documented
+in the doc comment.
+
+**Tab-filter limitation.** The format-restricted scopes ignore the
+tab filter today — `/h hello` on the Images tab returns
+HTML-format hits across all entry types, not zero. Documented in
+the module-level doc comment; Phase 3 polish or Phase 4 may
+revisit if the combination proves useful in practice.
+
+**Workspace test count after this session: 347 tests** (was 322;
++25 search.rs unit tests). All clippy `-D warnings` + fmt clean.

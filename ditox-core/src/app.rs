@@ -315,21 +315,55 @@ impl App {
         self.current_page + 1
     }
 
-    /// Load search results using DB pre-filtering + in-memory matching
+    /// Load search results using DB pre-filtering + in-memory matching.
+    ///
+    /// Phase 3 sub-task 3.6 added search-prefix routing via
+    /// [`crate::search::parse`]. `/p`, `/h`, `/r`, `/q`, `/f` route
+    /// to the format-restricted / notes-only / full-text DB methods;
+    /// everything else lands on the legacy `search_entries` UNION
+    /// across all FTS indexes.
     fn load_search_results(&mut self) -> Result<()> {
-        // Use DB LIKE to pre-filter, then apply search mode specific matching
         let max_search_results = self.config.general.max_entries;
-        self.entries = self
-            .db
-            .search_entries(&self.search_query, max_search_results)?;
+        let parsed = crate::search::parse(&self.search_query);
+
+        self.entries = match parsed.scope {
+            crate::search::SearchScope::Default | crate::search::SearchScope::FullText => {
+                self.db.search_entries(&parsed.query, max_search_results)?
+            }
+            crate::search::SearchScope::Plain => self.db.search_entries_in_format(
+                &parsed.query,
+                "text/plain;charset=utf-8",
+                max_search_results,
+            )?,
+            crate::search::SearchScope::Html => {
+                self.db
+                    .search_entries_in_format(&parsed.query, "text/html", max_search_results)?
+            }
+            crate::search::SearchScope::Rtf => {
+                self.db
+                    .search_entries_in_format(&parsed.query, "text/rtf", max_search_results)?
+            }
+            crate::search::SearchScope::Notes => self
+                .db
+                .search_notes_only(&parsed.query, max_search_results)?,
+        };
         self.total_count = self.entries.len();
         self.current_page = 0; // Reset to first page for search results
 
-        // Apply search mode specific filtering
+        // Apply search mode specific filtering. Note: when the
+        // user types a prefix, the in-memory fuzzy/regex match runs
+        // against the **stripped** query so highlighting matches
+        // the actual search string.
+        let prior_query = std::mem::replace(&mut self.search_query, parsed.query);
         match self.search_mode {
             SearchMode::Fuzzy => self.apply_fuzzy_filter(),
             SearchMode::Regex => self.apply_regex_filter(),
         }
+        // Restore the original query so the search bar still shows
+        // the user's full input (including the prefix). The
+        // filtered/match_indices are already computed against the
+        // stripped query.
+        self.search_query = prior_query;
 
         Ok(())
     }

@@ -20,6 +20,7 @@ pub mod format;
 pub mod logging;
 pub mod paste;
 pub mod platform;
+pub mod search;
 pub mod stats;
 pub mod watcher;
 

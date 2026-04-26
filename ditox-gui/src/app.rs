@@ -1504,6 +1504,12 @@ impl DitoxApp {
                     let filter_str = filter_str_ref.to_string();
                     let collection_id = collection_id_ref.map(|s| s.to_string());
 
+                    // Phase 3 sub-task 3.6: parse out any /p /h /r
+                    // /q /f search-mode prefix BEFORE handing off to
+                    // the actor. The dispatch helper routes to the
+                    // right DB method based on the parsed scope.
+                    let parsed = ditox_core::search::parse(&query);
+
                     // Offload to a tokio blocking thread so the iced
                     // render loop doesn't stall on the actor
                     // round-trip. The actor itself runs the SQL on
@@ -1512,8 +1518,9 @@ impl DitoxApp {
                         async move {
                             tokio::task::spawn_blocking(move || {
                                 db.call(move |d| {
-                                    d.search_entries_filtered(
-                                        &query,
+                                    ditox_core::search::dispatch(
+                                        d,
+                                        &parsed,
                                         50,
                                         &filter_str,
                                         collection_id.as_deref(),
@@ -2762,13 +2769,23 @@ impl DitoxApp {
                 self.total_count = count;
             }
         } else {
-            // Search mode - use new search_entries_filtered
-            let query = self.search_query.clone();
+            // Search mode - parse search-prefix scope (Phase 3 sub-task 3.6)
+            // and route via the shared dispatch helper. /p /h /r /q /f
+            // resolve to format-restricted / notes-only / full-text DB
+            // methods; everything else lands on the tab-aware
+            // `search_entries_filtered`.
+            let parsed = ditox_core::search::parse(&self.search_query);
             let limit = self.config.general.max_entries;
             let filter_owned = filter.to_string();
             let collection_owned = collection_id.map(|s| s.to_string());
             let result = self.db.call(move |d| {
-                d.search_entries_filtered(&query, limit, &filter_owned, collection_owned.as_deref())
+                ditox_core::search::dispatch(
+                    d,
+                    &parsed,
+                    limit,
+                    &filter_owned,
+                    collection_owned.as_deref(),
+                )
             });
             match result {
                 Ok(Ok(entries)) => {
