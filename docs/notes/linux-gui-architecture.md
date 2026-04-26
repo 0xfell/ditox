@@ -1,5 +1,14 @@
 # Linux GUI architecture
 
+> **Status: historical & forward-looking.** The IPC layer described
+> below was removed in task `013-floating-launcher-redesign.md` (which
+> made each `ditox-gui` invocation a one-shot launcher). Phase 4 of
+> `docs/notes/master-plan-v1.md` reverts to the long-running daemon
+> model documented here, with a few refinements (layer-shell window,
+> per-clip hotkeys, modifier-held cycling). Treat this document as the
+> design we're returning to, not what's currently in `main` as of
+> v0.3.1.
+
 Notes on how `ditox-gui` runs on Linux. For the corresponding Windows
 decisions see `ditox-gui/src/app.rs` and `docs/notes/win-d-problem.md`.
 

@@ -1,26 +1,71 @@
 # Ditox Roadmap
 
 > **Current Version:** 0.3.1
+> **Target:** v1.0 — full Ditto feature parity, cross-platform first-class
+> **Plan:** see [`notes/master-plan-v1.md`](notes/master-plan-v1.md)
 
 ## Status Overview
 
 | Category | Count |
 |----------|-------|
-| Completed | 13 |
-| In Progress | 0 |
-| Planned | 0 |
+| Completed | 22 |
+| In Progress | 3 |
+| Planned (Phase 0 — Foundation) | 0 |
+| Planned (Phase 1-8 epics) | 9 |
+
+---
+
+## Plan summary
+
+The v0.4 → v1.0 master plan is in [`notes/master-plan-v1.md`](notes/master-plan-v1.md).
+Architectural comparison with Ditto in [`notes/ditto-comparison.md`](notes/ditto-comparison.md).
+Hyprland-specific user setup in [`notes/hyprland-setup.md`](notes/hyprland-setup.md).
+Internal UI design in [`notes/ui-replication.md`](notes/ui-replication.md).
+
+| Phase | Theme | Tasks | Schema |
+|---|---|---|---|
+| 0 | Foundation hardening | `014`-`022` | v1 → v2 |
+| 1 | Multi-format capture | `023` | v2 → v3 |
+| 2 | Paste-back UX (cross-platform) | `024` | none |
+| 3 | Power-user features | `025` | v3 → v4 |
+| 4 | Ditto UX replication (long-running, layer-shell) | `026` | none |
+| 4b | GUI parity (settings, collections, multi-select, tags) | `027` | v4 → v5 |
+| 5 | Hotkeys, IPC, Rhai scripting | `028` | v5 → v6 |
+| 6 | LAN sync (TOFU + Noise) | `029` | v6 → v7 |
+| 7 | Distribution & i18n | `030` | none |
+| 8 | macOS port | `031` | none |
 
 ---
 
 ## In Progress
 
-(None)
+| Task | Description |
+|------|-------------|
+| [Windows installer & distribution](tasks/in-progress/004-windows-installer-distribution.md) | Inno Setup installer + code-signing (signing pending cert) |
+| [Windows 11 support](tasks/in-progress/010-windows-11-support.md) | Largely complete; CLI-test gaps remain |
+| [GUI improvements](tasks/in-progress/gui-improvements.md) | Pre-Phase-4 punch list; some items folded into Phase 4 |
 
 ---
 
 ## Planned
 
-(None)
+### Phase 0 — Foundation (immediate)
+
+_All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; ready to tag and start Phase 1._
+
+### Phase 1-8 — Epics (one task per phase)
+
+| Task | Description | Schema |
+|------|-------------|--------|
+| [023 Multi-format clipboard capture](tasks/planned/023-phase-1-multi-format-capture.md) | HTML/RTF/files/all formats; `entry_formats` table; aggregator pattern | v2 → v3 |
+| [024 Paste-back UX](tasks/planned/024-phase-2-paste-back.md) | Foreground tracker + keystroke synthesis chain (Win/Hyprland/Sway) | none |
+| [025 Power-user features](tasks/planned/025-phase-3-power-user.md) | Special paste, exclusion, color swatch, filter rules, suspend/resume | v3 → v4 |
+| [026 Ditto UX replication](tasks/planned/026-phase-4-ditto-ux.md) | Long-running daemon + layer-shell + position modes + tooltip preview | none |
+| [027 GUI feature parity](tasks/planned/027-phase-4b-gui-parity.md) | Settings, collections, multi-select, tags, time chips, theming | v4 → v5 |
+| [028 Hotkeys, IPC, Rhai scripting](tasks/planned/028-phase-5-hotkeys-ipc-scripting.md) | Per-clip hotkeys, full IPC, sandboxed scripting hooks | v5 → v6 |
+| [029 LAN peer-to-peer sync](tasks/planned/029-phase-6-lan-sync.md) | mDNS + ed25519 TOFU + Noise transport, content-addressed | v6 → v7 |
+| [030 Distribution & i18n](tasks/planned/030-phase-7-distribution-i18n.md) | Choco/Winget/AUR/Flatpak/MSIX, signing, 5 locales, crash reporting | none |
+| [031 macOS port](tasks/planned/031-phase-8-macos.md) | NSPasteboard, Accessibility flow, .app bundle, Cask, notarisation | none |
 
 ---
 
@@ -28,7 +73,16 @@
 
 | Task | Date | Description |
 |------|------|-------------|
-| [Floating-launcher GUI redesign](tasks/completed/013-floating-launcher-redesign.md) | 2026-04-26 | One-shot GUI: each launch opens a 420×520 floating panel at bottom-left; copy/Esc/unfocus/close exits the process. Replaces the broken Wayland hide/show model. Tab key opens a side inspector panel for text & image entries. Versions bumped to 0.3.1. |
+| [022 Layer-shell research spike](tasks/completed/022-foundation-layer-shell-spike.md) | 2026-04-26 | Built A1 prototype (`spike/a1-iced-layershell/`, 179 LOC, builds in 1.71s); decision: adopt `iced_layershell = "=0.17.1"` over hand-rolled SCTK + tiny-skia. ADR at `docs/notes/adr/0001-layer-shell-strategy.md`. Verification checklist pending real Hyprland/Sway visual confirmation. |
+| [017 DB actor](tasks/completed/017-foundation-async-db-actor.md) | 2026-04-26 | Replaced GUI's `Arc<Mutex<Database>>` with closure-based actor on a dedicated thread; cheap-clone `DbHandle` exposes `call`/`try_call`/`dispatch`/`flush`; bounded queue (64) for backpressure; 8 tests including 1000-insert stress. |
+| [018 `CaptureSource` trait](tasks/completed/018-foundation-capture-trait.md) | 2026-04-26 | Generalised watcher to consume `Vec<Box<dyn CaptureSource>>`; sync trait + `RawClip`/`RawFormat` model + `PollingCaptureSource` adapter + `MockCaptureSource`; 13 new tests (7 unit + 6 integration). |
+| [021 Compositor / OS detection](tasks/completed/021-foundation-compositor-detection.md) | 2026-04-26 | `Platform` enum with cached `OnceLock` detect, capability flags, paste-chain heuristic, `ditox status` integration; 8 tests. |
+| [019 Schema v1 → v2 migration](tasks/completed/019-foundation-schema-v2.md) | 2026-04-26 | `entry_kind`/`format_count`/`source_app`/`captured_at` + `idx_entries_source_app` index; idempotent forward-only migration; 4 tests. |
+| [020 `tracing` everywhere](tasks/completed/020-foundation-tracing-logging.md) | 2026-04-26 | Replaced `eprintln!` with structured `tracing` events; `logging::init(Mode::{Stderr,File,Journald})` shared across binaries. |
+| [016 Watcher daemon hardening](tasks/completed/016-foundation-watcher-daemon-hardening.md) | 2026-04-26 | `fs2` flock + atomic heartbeat + `ctrlc` SIGTERM/SIGINT; `WatcherStatus`, `stop_watcher`; CLI flags `--stop --status --json --journal`; systemd user unit; 6 tests. |
+| [015 Reconcile docs with reality](tasks/completed/015-foundation-docs-reconciliation.md) | 2026-04-26 | Brought ROADMAP/AGENTS/notes in line with the post-013 GUI model and pruned legacy IPC references. |
+| [014 Honour `storage.data_dir`](tasks/completed/014-foundation-data-dir-fix.md) | 2026-04-26 | Fixed parsed-but-ignored config key; process-wide override via `set_data_dir_override`; 7 tests. |
+| [Floating-launcher GUI redesign](tasks/completed/013-floating-launcher-redesign.md) | 2026-04-26 | One-shot GUI: each launch opens a 420×520 floating panel at bottom-left; copy/Esc/unfocus/close exits the process. **Note:** Phase 4 (`026`) reverts the one-shot model to a long-running daemon with IPC; visual design retained. |
 | [Release Infrastructure](tasks/completed/012-release-infra.md) | 2026-04-25 | CI + release workflows (GitHub Actions), prebuilt Linux/Windows binaries (TUI tarball, musl static, AppImage, Windows zip), Cachix push, README rewrite, versions bumped to 0.3.0 |
 | [Image Storage Bug Fix](tasks/completed/011-image-storage-bug.md) | 2026-04-25 | Content-addressed image store, refcount prune queue, schema v1 migration, `ditox repair` command. Fixes 4 disk-leak bugs. |
 | [Linux GUI](tasks/completed/010-linux-gui.md) | 2026-04-24 | Cross-platform `ditox-gui` (Wayland/X11) with tray, `--toggle` IPC, XDG autostart |
@@ -89,6 +143,19 @@ exits the process. Tab opens a side inspector panel.
 | Page navigation | ~0.25ms/page |
 | Search (10k entries) | <2ms |
 
+### Cross-platform support matrix (target after Phase 4)
+
+| Feature | Windows | Hyprland | Sway | KDE Wayland | GNOME Wayland | macOS |
+|---|---|---|---|---|---|---|
+| Capture | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (Phase 8) |
+| Long-running launcher | ✅ | ✅ via layer-shell | ✅ via layer-shell | ✅ | 🟡 xdg_toplevel | ✅ |
+| Foreground tracking | ✅ | ✅ | ✅ | 🟡 | ❌ | ✅ |
+| Paste-back synthesis | ✅ SendInput | ✅ hyprctl | ✅ wtype | ✅ wtype | 🟡 ydotool | ✅ CGEvent |
+| Global hotkey (in-app) | ✅ | ❌ → compositor bind | ❌ → compositor bind | ❌ → KGlobalAccel (later) | ❌ → manual | ✅ |
+| Tray icon | ✅ | ✅ via waybar/hyprpanel | ✅ via waybar | ✅ Plasma | 🟡 needs extension | ✅ |
+| Run-at-login | ✅ registry | ✅ exec-once | ✅ exec | ✅ autostart | ✅ autostart | ✅ LaunchAgent |
+| Per-clip global hotkey | ✅ | ✅ via managed binds | ✅ via managed binds | ❌ (later) | ❌ (later) | ✅ |
+
 ### File Locations
 
 **Linux:**
@@ -96,12 +163,19 @@ exits the process. Tab opens a side inspector panel.
 - Notes: `docs/notes/`
 - Config: `~/.config/ditox/config.toml`
 - Data: `~/.local/share/ditox/`
-- GUI window state: `~/.local/share/ditox/window_state.json` (saved for
-  telemetry; size/position are forced to 420×520 bottom-left at boot)
-- GUI autostart: `~/.config/autostart/ditox-gui.desktop` (no longer
-  required for keybind summon — bind directly to `ditox-gui`)
+- Identity (Phase 6): `~/.config/ditox/identity.{key,pub}`
+- Hyprland helper output (Phase 4): `~/.config/hypr/conf.d/ditox.conf`,
+  `~/.config/hypr/conf.d/ditox-binds.conf`
+- IPC socket (Phase 4): `$XDG_RUNTIME_DIR/ditox-gui-${UID}.sock`
+- Watcher PID: `~/.local/share/ditox/watcher.pid`
+- Watcher heartbeat: `~/.local/share/ditox/watcher.heartbeat`
 
 **Windows:**
 - Config: `%APPDATA%/ditox/config.toml`
 - Data: `%APPDATA%/ditox/`
-- GUI window state: `%APPDATA%/ditox/window_state.json`
+- IPC named pipe (Phase 4): `\\.\pipe\ditox-gui-{Username}`
+- WER dumps: `%APPDATA%/ditox/Dumps/`
+
+**macOS (Phase 8):**
+- Config: `~/Library/Application Support/ditox/config.toml`
+- Data: `~/Library/Application Support/ditox/`
