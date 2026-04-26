@@ -1411,6 +1411,7 @@ dependencies = [
  "unicode-normalization",
  "uuid",
  "wl-clipboard-rs",
+ "zbus",
 ]
 
 [[package]]

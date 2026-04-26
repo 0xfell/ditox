@@ -37,6 +37,11 @@ wl-clipboard-rs = "0.9.3"
 libc = "0.2.186"
 arboard = "3.6.1"
 sysinfo = "0.38.4"
+# Linux suspend/resume awareness via logind PrepareForSleep
+# (Phase 3 sub-task 3.5). Pure Rust — no system libdbus dep.
+# Default features include async-io for the runtime; the
+# `blocking-api` wrapper lets us subscribe sync from a worker thread.
+zbus = { version = "5", features = ["blocking-api"] }
 # Cross-platform file locking (advisory flock on Unix, LockFileEx on Windows)
 fs2 = "0.4.3"
 # Signal handling (Unix-only; we use cfg gates)

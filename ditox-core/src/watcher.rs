@@ -435,12 +435,36 @@ impl Watcher {
     fn run_loop(&mut self, shutdown: Arc<AtomicBool>) -> Result<()> {
         self.initialize_hash();
 
+        // Phase 3 sub-task 3.5: subscribe to suspend/resume events
+        // so we can clear the in-memory `last_hash` after wake.
+        // Without this, anything the user copied during sleep that
+        // hashes identically to the pre-sleep clipboard is silently
+        // skipped.
+        let mut power_monitor = crate::power::build_default_monitor();
+        let power_rx = match power_monitor.subscribe() {
+            Ok(rx) => Some(rx),
+            Err(e) => {
+                tracing::debug!(error = %e, "power monitor unavailable; resume-aware reset disabled");
+                None
+            }
+        };
+
         let mut last_heartbeat = SystemTime::now();
         let heartbeat_period = Duration::from_secs(HEARTBEAT_INTERVAL_SECS);
 
         while !shutdown.load(Ordering::SeqCst) {
             if let Err(e) = self.poll_internal() {
                 error!("error polling clipboard: {}", e);
+            }
+
+            // Drain any pending power events. `try_recv` is
+            // non-blocking; we process every queued event before
+            // sleeping again so a flurry of suspend→resume during
+            // a single poll interval is handled in one pass.
+            if let Some(rx) = power_rx.as_ref() {
+                while let Ok(event) = rx.try_recv() {
+                    self.handle_power_event(event);
+                }
             }
 
             // Refresh heartbeat at most once per HEARTBEAT_INTERVAL_SECS.
@@ -455,7 +479,32 @@ impl Watcher {
             std::thread::sleep(Duration::from_millis(self.config.general.poll_interval_ms));
         }
 
+        // Best-effort cleanup of the power-monitor worker before we
+        // exit. Failures are logged and otherwise swallowed.
+        if let Err(e) = power_monitor.shutdown() {
+            tracing::debug!(error = %e, "power monitor shutdown failed");
+        }
+
         Ok(())
+    }
+
+    /// React to a [`crate::power::PowerEvent`]. On `Resumed`: clear
+    /// the in-memory `last_hash` and re-initialise it from the
+    /// active capture source so the next poll either captures a
+    /// genuinely-new clip or correctly skips an unchanged one.
+    /// `Suspending` is logged at info level today — Phase 4 may
+    /// extend this to flush pending DB writes pre-sleep.
+    fn handle_power_event(&mut self, event: crate::power::PowerEvent) {
+        match event {
+            crate::power::PowerEvent::Suspending => {
+                info!("system suspending; will clear watcher state on resume");
+            }
+            crate::power::PowerEvent::Resumed => {
+                info!("system resumed; resetting watcher hash + capture state");
+                self.last_hash = None;
+                self.initialize_hash();
+            }
+        }
     }
 
     /// Initialize the last hash with current clipboard content. We

@@ -1,6 +1,6 @@
 # Task: Phase 3 — Power-user features
 
-> **Status:** in-progress (5/8 sub-tasks done — 3.1, 3.2, 3.6, 3.7, 3.8)
+> **Status:** in-progress (6/8 sub-tasks done — 3.1, 3.2, 3.5 (Linux), 3.6, 3.7, 3.8)
 > **Priority:** medium
 > **Phase:** 3 — Power-user features
 > **Created:** 2026-04-26
@@ -637,3 +637,81 @@ PNG-stack composition.
 
 **Workspace test count after this session: 441 tests** (was 374;
 +67 transform tests). All clippy `-D warnings` + fmt clean.
+
+### 2026-04-26 — sub-task 3.5 landed (Linux logind; Windows deferred)
+
+**3.5 — Suspend/resume awareness.**
+
+ditox-core/src/power.rs:
+- `PowerEvent { Suspending, Resumed }` enum.
+- `PowerMonitor` trait — same shape as `ForegroundTracker` /
+  `CaptureSource` (sync, `Send`, worker thread + `mpsc::Receiver`).
+- `NoopPowerMonitor` for fallback (channel sender dropped
+  immediately so subscribers see `Disconnected`).
+- `build_default_monitor()` factory: tries logind on Linux,
+  Noop on every other platform. Never errors.
+
+ditox-core/src/power/logind.rs:
+- `LogindPowerMonitor::new()` opens
+  `zbus::blocking::Connection::system()` and pings the logind
+  DBus peer (`org.freedesktop.login1` / `Ping`) to confirm it's
+  registered. Returns `Err` on non-systemd Linux distros (Alpine,
+  Devuan with sysvinit, Void runit) so `build_default_monitor`
+  falls through to Noop.
+- `subscribe()` spawns a `ditox-logind` worker thread that owns
+  the connection and iterates the `PrepareForSleep` signal
+  stream. The signal carries a single `bool`:
+  `true` = about-to-suspend → `PowerEvent::Suspending`;
+  `false` = just-resumed → `PowerEvent::Resumed`.
+- `shutdown()` flips an `AtomicBool` flag and joins the worker.
+  `Drop` impl calls `shutdown` for safety.
+- `signal_loop` is tolerant of malformed payloads (logs +
+  continues) and exits cleanly when the subscriber drops the rx.
+
+`Cargo.toml`: `zbus = { version = "5", features = ["blocking-api"] }`
+workspace dep, gated behind `cfg(unix)` in `ditox-core`. Pure-Rust
+implementation — no system `libdbus` dep. `cargo build` on a
+non-Linux Unix (BSDs, macOS) still pulls in zbus but
+`build_default_monitor` returns Noop.
+
+ditox-core/src/watcher.rs:
+- `Watcher::run_loop` subscribes to a power monitor on entry,
+  drains pending events on each poll iteration via
+  `try_recv`, calls `handle_power_event` on each.
+- `handle_power_event(Resumed)`: clears `last_hash` and
+  re-initialises from the active capture source so the next poll
+  either captures a genuinely-new clip or correctly skips an
+  unchanged one. Without this, anything the user copied during
+  sleep that hashes identically to the pre-sleep clipboard is
+  silently skipped.
+- `handle_power_event(Suspending)`: logged at info level today;
+  Phase 4 may extend to flush pending DB writes pre-sleep.
+- Power-monitor `shutdown()` called before `run_loop` returns so
+  the worker thread doesn't outlive the watcher.
+
+8 unit tests on `power::tests`: NoopPowerMonitor disconnected-channel
+behaviour; idempotent shutdown; name; PowerEvent equality;
+build_default_monitor no-panic; trait object safety. Plus 2 unit
+tests on `power::logind::tests`: bus-less constructor sanity (test
+runs even on CI hosts without logind — accepts either Ok or Err);
+name returns `"logind"` independent of bus availability.
+
+**Live verification deferred** because it requires literal machine
+suspend (DBus signal only fires on `systemctl suspend` /
+laptop-lid-close / `loginctl suspend`). The unit tests + clean
+compile + trait-shape parity with verified `ForegroundTracker` /
+`CaptureSource` impls give us high confidence; runtime
+verification can happen the first time the user's machine sleeps
+with `RUST_LOG=ditox_core::power=info ditox watch` running.
+
+**Windows path deferred.** The Windows equivalent is
+`WM_POWERBROADCAST` with `PBT_APMRESUMEAUTOMATIC`, which requires
+either a message-only window with a wndproc or a service-style
+power-notification registration via
+`RegisterPowerSettingNotification`. Both are non-trivial Win32
+integration that needs a Windows test machine. Spawning that
+work is on the same path as task 033 (Windows paste-back) and
+should land alongside or in a Phase-2-style follow-up task.
+
+**Workspace test count after this session: 449 tests** (was 441;
++8 power module tests). All clippy `-D warnings` + fmt clean.
