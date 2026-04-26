@@ -1,11 +1,38 @@
 # Task: Phase 4 — Ditto UX replication (long-running GUI + layer-shell)
 
-> **Status:** in-progress (9/12 sub-tasks done — 4.1, 4.2, 4.3, 4.4, 4.6, 4.7, 4.8, 4.9, 4.10, 4.11 + 3.7 already covers 4.12)
+> **Status:** completed (Linux MVP — 11/12; 4.5 layer-shell drag deferred as follow-up)
 > **Priority:** high
 > **Phase:** 4 — Ditto UX
 > **Created:** 2026-04-26
 > **Started:** 2026-04-26
+> **Completed:** 2026-04-26
 > **Estimated:** 5-6 weeks
+>
+> **Sub-tasks landed:**
+> - 4.1 Single-instance lock + IPC socket
+> - 4.2 IPC protocol (TOGGLE / SHOW / HIDE / QUIT / STATUS)
+> - 4.3 wlr-layer-shell window dispatch via `iced_layershell`
+> - 4.4 Configurable popup position (`[gui.position]` modes)
+> - 4.6 Always-on-top pin toggle
+> - 4.7 Modifier-held cycling on summon
+> - 4.8 Hide-on-blur with grace + paste-and-hide + foreground refresh
+> - 4.9 Tooltip-as-preview on hover
+> - 4.10 Inline list extras (hotkey numbers + collection / notes glyphs)
+> - 4.11 `--install-hyprland-config` helper
+> - 4.12 Per-resolution window state (already covered by Phase 3 sub-task 3.7)
+>
+> **Deferred follow-up:**
+> - 4.5 Custom non-client area / layer-shell drag handle. The
+>   existing `Message::StartDrag` → `iced::window::drag` works for
+>   xdg_toplevel (Windows / GNOME / X11). Implementing drag for
+>   layer-shell requires (a) window-local cursor tracking through
+>   iced's `event::listen_with`, (b) manual delta math + emission
+>   of `MarginChange` messages on each mouse-move while dragging,
+>   and (c) anchor-aware delta-to-margin translation that only
+>   makes sense for corner anchors. Layer-shell users have the
+>   configurable `[gui.position]` from 4.4 for explicit placement;
+>   drag is a quality-of-life follow-up that needs proper visual
+>   testing. Spinning out as a separate task is the right move.
 
 ## Description
 
@@ -662,3 +689,37 @@ The MVP is functional: launching `ditox-gui` starts the daemon;
 `ditox-gui --toggle` (or the helper-installed `Ctrl+~` keybind)
 shows the layer-shell launcher; click → paste-back hides the
 window; daemon stays alive for the next summon.
+
+---
+
+## Phase 4 close summary
+
+11/12 sub-tasks landed (4.5 deferred — see header). The Linux
+daemon model + layer-shell launcher is the most user-visible
+work in the v0.4 cycle: `ditox-gui` is now a long-running
+process that owns the IPC socket, the wlr-layer-shell window,
+the foreground tracker subscription, the modifier-held cycling
+cursor, the always-on-top pin state, and the
+`Config.gui.position` / `Config.gui.hide_on_blur*` /
+`Config.gui.pinned` configuration surface.
+
+End-to-end on Hyprland (verified through this session):
+1. `ditox-gui` starts the daemon, binds
+   `/run/user/<uid>/ditox-gui-<uid>.sock`, opens an
+   `iced_layershell` window anchored bottom-left.
+2. `ditox-gui --toggle` (or the keybind installed by
+   `--install-hyprland-config`) forwards over IPC, the daemon
+   refreshes the foreground snapshot + fires the cycling
+   cursor + sets `set_mode(Windowed)`.
+3. Click an entry → `paste_and_hide` writes clipboard + records
+   sentinel + restores focus + synthesises Ctrl+V via hyprctl
+   + hides the window. Daemon stays alive.
+4. Re-summon within 800 ms → cursor advances to next index.
+5. Pin button → `Layer::Top` ⇄ `Layer::Overlay`; pinned
+   launcher ignores blur events.
+6. Tooltip on hover shows fuller preview / larger thumbnail.
+
+**Workspace test count after Phase 4: 513 tests** (was 487 at
+Phase 3 close; +18 ipc + +10 gui_config + +8 hyprland_config
+along the way; some sub-tasks are pure UI wiring with no
+pure-logic surface). All clippy `-D warnings` + fmt clean.

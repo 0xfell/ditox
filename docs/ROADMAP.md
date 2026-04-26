@@ -8,7 +8,7 @@
 
 | Category | Count |
 |----------|-------|
-| Completed | 25 |
+| Completed | 26 |
 | In Progress | 3 |
 | Planned (Phase 0 — Foundation) | 0 |
 | Planned (Phase 1-8 epics + carry-overs) | 9 |
@@ -57,7 +57,6 @@ _All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; rea
 
 | Task | Description | Schema |
 |------|-------------|--------|
-| [026 Ditto UX replication](tasks/planned/026-phase-4-ditto-ux.md) | Long-running daemon + layer-shell + position modes + tooltip preview | none |
 | [027 GUI feature parity](tasks/planned/027-phase-4b-gui-parity.md) | Settings, collections, multi-select, tags, time chips, theming | v4 → v5 |
 | [028 Hotkeys, IPC, Rhai scripting](tasks/planned/028-phase-5-hotkeys-ipc-scripting.md) | Per-clip hotkeys, full IPC, sandboxed scripting hooks | v5 → v6 |
 | [029 LAN peer-to-peer sync](tasks/planned/029-phase-6-lan-sync.md) | mDNS + ed25519 TOFU + Noise transport, content-addressed | v6 → v7 |
@@ -66,6 +65,7 @@ _All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; rea
 | [032 Windows multi-format capture](tasks/planned/032-phase-1-windows-multi-format.md) | Spun out from 023 sub-task 1.4: `AddClipboardFormatListener` event-driven capture; needs Windows-side validation | none |
 | [033 Windows paste-back](tasks/planned/033-phase-2-windows-paste-back.md) | Spun out from 024 sub-tasks 2.2 + 2.5: `Win32ForegroundTracker` + `Win32Synthesizer` (`SendInput` + stuck-modifier guard); needs Windows-side validation | none |
 | [034 wlr-foreign-toplevel subscription](tasks/planned/034-phase-2-wlr-foreign-toplevel.md) | Spun out from 024 sub-task 2.3: generic Wayland foreground tracker for non-Hyprland wlroots compositors (Sway, river); dedicated `wayland-client` event-loop thread | none |
+| [035 wlr-layer-shell drag handle](tasks/planned/035-phase-4-layershell-drag.md) | Spun out from 026 sub-task 4.5: drag the launcher's title bar to reposition the layer-shell window via runtime `MarginChange` events. Window-local cursor tracking + anchor-aware delta math. | none |
 
 ---
 
@@ -73,6 +73,7 @@ _All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; rea
 
 | Task | Date | Description |
 |------|------|-------------|
+| [026 Ditto UX replication](tasks/completed/026-phase-4-ditto-ux.md) | 2026-04-26 | Phase 4: 11/12 sub-tasks landed. Single-instance lock + Unix-socket IPC; `iced_layershell` window dispatch on Hyprland/Sway/wlroots; configurable `[gui.position]` (default/at_previous/at_cursor/at_active_window_centre/fixed); always-on-top pin button (Top↔Overlay); modifier-held cycling activated on each summon; hide-on-blur with grace + paste-and-hide; foreground refresh on every Show/Toggle; tooltip-as-preview on hover; inline list extras (hotkey numbers + collection/notes glyphs); `--install-hyprland-config` helper. The daemon model is the most user-visible change in v0.4 — `ditox-gui` is now a long-running process across summons. Sub-task 4.5 (layer-shell drag handle) spun out as task 035. +26 tests, 513 total. |
 | [025 Power-user features](tasks/completed/025-phase-3-power-user.md) | 2026-04-26 | Phase 3: 8/8 sub-tasks landed (Linux + cross-platform pure code). 21 special-paste transforms (case styles, slugify, typoglycemia, datetime, GUID, etc.) with `ditox transform` CLI; per-app capture exclusion via the Phase 2 ForegroundTracker; CSS color swatches in TUI + GUI list rendering; filter rules engine (schema v3→v4 + first-match-wins drop/transform/tag pipeline + `ditox rules` CLI); Linux suspend/resume awareness via logind PrepareForSleep DBus signal; search-mode prefixes `/p` `/h` `/r` `/q` `/f`; per-resolution window state with legacy auto-migration; translate/web-search URL templates with `ditox open` CLI. +186 tests, 487 total. Image-stitching transforms, filter-transform wiring, Windows power monitor, and GUI context menu deferred. |
 | [024 Paste-back UX (Linux MVP)](tasks/completed/024-phase-2-paste-back.md) | 2026-04-26 | Phase 2: 7/9 sub-tasks. `ForegroundTracker` trait + `HyprctlForegroundTracker`; Linux synthesis chain (`hyprctl` → `wtype` → `ydotool` → `off`) with per-app `KeystrokeSequence` parser (vim's `"+gp` etc.); cross-process `PasteSentinel` so the watcher skips the paste-back's own re-capture; full GUI integration with pre-iced foreground snapshot, `paste_and_exit(entry)` flow, and a `SelectionCursor` primitive that advances on rapid re-fires (groundwork for Phase 4 modifier-held cycling). End-to-end verified live on Hyprland: hyprctl `sendshortcut` pasted text into ghostty. Sub-tasks 2.2 + 2.5 (Windows) spun out as 033; 2.3 cont (wlr-foreign-toplevel) as 034. +94 tests, 301 total. |
 | [023 Multi-format clipboard capture](tasks/completed/023-phase-1-multi-format-capture.md) | 2026-04-26 | Phase 1: 8/9 sub-tasks. Schema v2→v3 with `entry_formats` table + `format_content_fts`; `FormatId` + Wayland/Win32 canonicalisation; HTML envelope + RTF \rsid stripping; per-format hashing; multi-format `Database::insert_multi` with rollback-on-failure; multi-format FTS5 search; `CaptureConfig` mode/size caps; `WaylandLibraryCapture` via `wl-clipboard-rs` (live-tested on Hyprland); `FormatAggregator` trait + 5 impls (PlainText/HtmlEnvelope/Rtf/UriList/ImageStack). Sub-task 1.4 (Windows event-driven capture) spun out as task 032. +87 tests, 153 total. |
