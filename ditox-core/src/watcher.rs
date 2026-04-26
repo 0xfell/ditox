@@ -6,6 +6,7 @@ use crate::config::Config;
 use crate::db::Database;
 use crate::entry::Entry;
 use crate::error::{DitoxError, Result};
+use crate::foreground::{ForegroundTracker, NoopForegroundTracker};
 use fs2::FileExt;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -22,6 +23,16 @@ pub struct Watcher {
     /// constructor installs a single legacy clipboard source; tests
     /// and Phase 1 backends inject their own via `with_sources`.
     sources: Vec<Box<dyn CaptureSource>>,
+    /// Foreground tracker consulted at each captured clip to evaluate
+    /// `[capture.exclude] processes` (Phase 3 sub-task 3.2). When the
+    /// foreground app's `process_basename` matches any configured
+    /// glob, the clip is dropped before insertion. Defaults to
+    /// [`NoopForegroundTracker`] (always returns `None`, which means
+    /// "no foreground info" → exclusion is silently skipped, all
+    /// clips are captured) — that's the right behaviour for tests
+    /// using `with_sources` and for platforms without a tracker
+    /// (GNOME Wayland).
+    foreground_tracker: Box<dyn ForegroundTracker>,
     /// Last `clip_hash` we processed. Used as a fast in-memory dedup
     /// short-circuit so we don't re-hash large images on every poll.
     /// Persistent dedup happens via `Database::exists_by_hash` against
@@ -320,22 +331,45 @@ impl Watcher {
                 ))
             }
         };
-        Self::with_sources(db, config, vec![source])
+        // Build the per-platform tracker so `[capture.exclude]`
+        // (Phase 3 sub-task 3.2) actually fires. On platforms without
+        // a tracker (GNOME Wayland) this is a `Noop` which silently
+        // disables exclusion.
+        let tracker = crate::foreground::build_default_tracker();
+        Self::with_sources_and_tracker(db, config, vec![source], tracker)
     }
 
     /// Build a watcher with explicit capture sources. Used by tests
     /// for `MockCaptureSource` injection and by Phase 1 backends that
     /// stack multiple sources (event-driven Windows + polling Wayland
     /// fallback, etc.).
+    ///
+    /// Equivalent to [`with_sources_and_tracker`](Self::with_sources_and_tracker)
+    /// with a [`NoopForegroundTracker`] — exclusion is disabled so
+    /// existing tests keep their semantics.
     pub fn with_sources(
         db: Database,
         config: Config,
         sources: Vec<Box<dyn CaptureSource>>,
     ) -> Self {
+        Self::with_sources_and_tracker(db, config, sources, Box::new(NoopForegroundTracker::new()))
+    }
+
+    /// Build a watcher with explicit capture sources AND a foreground
+    /// tracker. The 4-arg variant; tests that exercise `[capture.exclude]`
+    /// pass a `MockForegroundTracker` to control the reported
+    /// foreground basename.
+    pub fn with_sources_and_tracker(
+        db: Database,
+        config: Config,
+        sources: Vec<Box<dyn CaptureSource>>,
+        foreground_tracker: Box<dyn ForegroundTracker>,
+    ) -> Self {
         Self {
             db,
             config,
             sources,
+            foreground_tracker,
             last_hash: None,
             _lock: None,
         }
@@ -481,6 +515,38 @@ impl Watcher {
         let h = clip_hash(&clip);
         if self.last_hash.as_ref() == Some(&h) {
             return Ok(false);
+        }
+
+        // Per-app capture exclusion (Phase 3 sub-task 3.2). Snapshot
+        // the foreground app and skip the entire clip when its
+        // basename matches `[capture.exclude] processes`. This must
+        // happen BEFORE the sentinel + DB existence checks because
+        // the goal is "this app's clipboard activity should not exist
+        // in our history at all" — including not bumping `last_hash`,
+        // since a future clipboard-of-the-same-bytes from a different
+        // app should still be capturable.
+        if !self.config.capture.exclude.processes.is_empty() {
+            match self.foreground_tracker.snapshot() {
+                Ok(Some(fg)) if self.config.capture.exclude.excludes(&fg.process_basename) => {
+                    debug!(
+                        process = %fg.process_basename,
+                        "skipping clip: foreground app matches [capture.exclude]"
+                    );
+                    // Intentionally do NOT update `last_hash` — see
+                    // the rationale above.
+                    return Ok(false);
+                }
+                Ok(_) => {
+                    // Tracker available but no foreground / no match —
+                    // fall through to normal capture.
+                }
+                Err(e) => {
+                    debug!(
+                        error = %e,
+                        "foreground tracker error; capturing clip without exclusion check"
+                    );
+                }
+            }
         }
 
         // Paste-back sentinel: the launcher writes a hash + timestamp

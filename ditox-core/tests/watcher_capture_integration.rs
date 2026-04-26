@@ -6,8 +6,11 @@
 #![cfg(unix)]
 
 use ditox_core::capture::{CaptureSource, RawClip, RawFormat};
-use ditox_core::config::Config;
+use ditox_core::config::{CaptureExcludeConfig, Config};
 use ditox_core::db::{data_dir_override, set_data_dir_override, Database};
+use ditox_core::foreground::{
+    ForegroundId, ForegroundSnapshot, ForegroundTracker, MockForegroundTracker,
+};
 use ditox_core::watcher::Watcher;
 use ditox_core::EntryType;
 use std::error::Error as StdError;
@@ -273,6 +276,230 @@ fn watcher_initialize_hash_primes_from_first_nonempty_source() -> Result<(), Box
 
     let db2 = open_with_schema();
     assert_eq!(db2.get_all(1000)?.len(), 0);
+
+    reset_override();
+    Ok(())
+}
+
+// ============================================================================
+// Per-app capture exclusion (Phase 3 sub-task 3.2)
+// ============================================================================
+
+fn make_snap(basename: &str) -> ForegroundSnapshot {
+    ForegroundSnapshot {
+        identifier: ForegroundId::Hypr {
+            address: "0x1234".to_string(),
+        },
+        process_basename: basename.to_string(),
+        title: format!("{basename} window"),
+        captured_at: SystemTime::now(),
+    }
+}
+
+fn config_with_exclude(patterns: Vec<&str>) -> Config {
+    let mut c = Config::default();
+    c.capture.exclude = CaptureExcludeConfig {
+        processes: patterns.into_iter().map(String::from).collect(),
+    };
+    c
+}
+
+#[test]
+fn watcher_skips_clip_when_foreground_matches_exclude() -> Result<(), Box<dyn StdError>> {
+    let _g = OVERRIDE_LOCK.lock().unwrap();
+    reset_override();
+    let (_tmp, db) = setup_db();
+
+    // KeePassXC just briefly wrote credentials to the clipboard. The
+    // watcher must drop the clip and never insert a row.
+    let source = Box::new(QueueSource::new(
+        "keepass-source",
+        vec![RawClip::text("hunter2".to_string())],
+    ));
+    let tracker: Box<dyn ForegroundTracker> = Box::new(MockForegroundTracker::new(Some(
+        make_snap("org.keepassxc.KeePassXC"),
+    )));
+    let config = config_with_exclude(vec!["*KeePass*"]);
+
+    let mut watcher = Watcher::with_sources_and_tracker(db, config, vec![source], tracker);
+
+    let captured = watcher.poll_once()?;
+    assert!(!captured, "clip must be dropped when foreground excluded");
+
+    let db2 = open_with_schema();
+    assert_eq!(
+        db2.get_all(1000)?.len(),
+        0,
+        "no entry must reach the database for excluded apps"
+    );
+
+    reset_override();
+    Ok(())
+}
+
+#[test]
+fn watcher_captures_clip_when_foreground_not_in_exclude() -> Result<(), Box<dyn StdError>> {
+    let _g = OVERRIDE_LOCK.lock().unwrap();
+    reset_override();
+    let (_tmp, db) = setup_db();
+
+    let source = Box::new(QueueSource::new(
+        "browser",
+        vec![RawClip::text("hello from firefox".to_string())],
+    ));
+    let tracker: Box<dyn ForegroundTracker> =
+        Box::new(MockForegroundTracker::new(Some(make_snap("firefox"))));
+    let config = config_with_exclude(vec!["*KeePass*", "*1Password*"]);
+
+    let mut watcher = Watcher::with_sources_and_tracker(db, config, vec![source], tracker);
+
+    let captured = watcher.poll_once()?;
+    assert!(captured, "non-excluded foreground must allow capture");
+
+    let db2 = open_with_schema();
+    let entries = db2.get_all(1000)?;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].content, "hello from firefox");
+
+    reset_override();
+    Ok(())
+}
+
+#[test]
+fn watcher_captures_when_no_foreground_available() -> Result<(), Box<dyn StdError>> {
+    let _g = OVERRIDE_LOCK.lock().unwrap();
+    reset_override();
+    let (_tmp, db) = setup_db();
+
+    // Tracker returns None — typical of GNOME Wayland or platforms
+    // where the tracker is a Noop. The watcher must capture rather
+    // than silently drop everything just because foreground info is
+    // unavailable.
+    let source = Box::new(QueueSource::new(
+        "noop-fg",
+        vec![RawClip::text("captured anyway".to_string())],
+    ));
+    let tracker: Box<dyn ForegroundTracker> = Box::new(MockForegroundTracker::new(None));
+    let config = config_with_exclude(vec!["*KeePass*"]);
+
+    let mut watcher = Watcher::with_sources_and_tracker(db, config, vec![source], tracker);
+
+    let captured = watcher.poll_once()?;
+    assert!(
+        captured,
+        "missing foreground info must NOT block capture (fail-open)"
+    );
+
+    let db2 = open_with_schema();
+    assert_eq!(db2.get_all(1000)?.len(), 1);
+
+    reset_override();
+    Ok(())
+}
+
+#[test]
+fn excluded_clip_does_not_advance_last_hash() -> Result<(), Box<dyn StdError>> {
+    let _g = OVERRIDE_LOCK.lock().unwrap();
+    reset_override();
+    let (_tmp, db) = setup_db();
+
+    // Scenario: KeePass clipboard for "shared-content" is excluded.
+    // Then the same content "shared-content" appears via Firefox —
+    // we must capture it. If we'd advanced `last_hash` on the
+    // excluded poll, dedup would short-circuit the second poll.
+    let source = Box::new(QueueSource::new(
+        "alternating-fg",
+        vec![
+            RawClip::text("shared-content".to_string()),
+            RawClip::text("shared-content".to_string()),
+        ],
+    ));
+    let tracker = Arc::new(MockForegroundTracker::new(Some(make_snap("KeePassXC"))));
+    let tracker_box: Box<dyn ForegroundTracker> = Box::new(MockForegroundTrackerHandle {
+        inner: Arc::clone(&tracker),
+    });
+    let config = config_with_exclude(vec!["*KeePass*"]);
+
+    let mut watcher = Watcher::with_sources_and_tracker(db, config, vec![source], tracker_box);
+
+    // First poll: foreground = KeePassXC, clip dropped.
+    assert!(!watcher.poll_once()?);
+
+    // Switch foreground to Firefox.
+    tracker.set_snapshot(Some(make_snap("firefox")));
+
+    // Second poll: same content but allowed foreground. Must
+    // capture (we'd fail this if `last_hash` had been bumped).
+    assert!(watcher.poll_once()?);
+
+    let db2 = open_with_schema();
+    let entries = db2.get_all(1000)?;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].content, "shared-content");
+
+    reset_override();
+    Ok(())
+}
+
+/// Adapter so tests can share a single `Arc<MockForegroundTracker>`
+/// across the test body and the boxed-into-watcher tracker. The
+/// watcher takes `Box<dyn ForegroundTracker>`; we wrap an Arc so
+/// `set_snapshot` calls from the test body affect the watcher's view.
+struct MockForegroundTrackerHandle {
+    inner: Arc<MockForegroundTracker>,
+}
+
+impl ForegroundTracker for MockForegroundTrackerHandle {
+    fn name(&self) -> &str {
+        "mock-handle"
+    }
+
+    fn snapshot(&self) -> ditox_core::error::Result<Option<ForegroundSnapshot>> {
+        self.inner.snapshot()
+    }
+
+    fn restore(&self, snap: &ForegroundSnapshot) -> ditox_core::error::Result<()> {
+        self.inner.restore(snap)
+    }
+
+    fn subscribe(&mut self) -> ditox_core::error::Result<mpsc::Receiver<ForegroundSnapshot>> {
+        Err(ditox_core::error::DitoxError::Other(
+            "MockForegroundTrackerHandle does not support subscribe in this test".to_string(),
+        ))
+    }
+
+    fn shutdown(&mut self) -> ditox_core::error::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn empty_exclude_list_skips_foreground_check() -> Result<(), Box<dyn StdError>> {
+    let _g = OVERRIDE_LOCK.lock().unwrap();
+    reset_override();
+    let (_tmp, db) = setup_db();
+
+    // With an empty processes list, the watcher must not even call
+    // `snapshot()` on the tracker — capture proceeds unconditionally.
+    // We assert the behaviour indirectly: a tracker that errors on
+    // snapshot would surface the error if we called it; here we use
+    // a Mock that returns a basename that WOULD have matched if the
+    // exclude list had wildcard-matched it. Since the list is empty,
+    // we capture.
+    let source = Box::new(QueueSource::new(
+        "any",
+        vec![RawClip::text("uncensored".to_string())],
+    ));
+    let tracker: Box<dyn ForegroundTracker> =
+        Box::new(MockForegroundTracker::new(Some(make_snap("KeePassXC"))));
+    let mut config = Config::default();
+    config.capture.exclude.processes.clear();
+
+    let mut watcher = Watcher::with_sources_and_tracker(db, config, vec![source], tracker);
+
+    assert!(watcher.poll_once()?);
+    let db2 = open_with_schema();
+    assert_eq!(db2.get_all(1000)?.len(), 1);
 
     reset_override();
     Ok(())

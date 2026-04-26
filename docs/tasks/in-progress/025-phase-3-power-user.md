@@ -1,9 +1,10 @@
 # Task: Phase 3 — Power-user features
 
-> **Status:** planned
+> **Status:** in-progress (1/8 sub-tasks done — 3.2)
 > **Priority:** medium
 > **Phase:** 3 — Power-user features
 > **Created:** 2026-04-26
+> **Started:** 2026-04-26
 > **Estimated:** 4 weeks
 
 ## Description
@@ -222,5 +223,80 @@ non-systemd Linux distros.
 
 ## Work Log
 
-### 2026-04-26
-- Task file created (epic).
+### 2026-04-26 — task moved to in-progress; sub-task 3.2 landed
+
+Phase 3 begins. Started with sub-task 3.2 because it's small,
+high-value, and a natural closure on Phase 2's `ForegroundTracker`
+work — the first real consumer of the abstraction.
+
+**3.2 — Per-app capture exclusion.**
+
+`ditox-core/src/config.rs`:
+- New `CaptureExcludeConfig { processes: Vec<String> }` nested under
+  `CaptureConfig.exclude`. Defaults ship with a conservative
+  password-manager list: `*KeePass*`, `*1Password*`, `*Bitwarden*`,
+  `ydotoold` (the last one to break feedback loops with our own
+  paste-back synthesis).
+- `CaptureExcludeConfig::excludes(basename) -> bool` walks the
+  patterns and returns true on first glob match.
+- New module-local `glob_match(pattern, input) -> bool` —
+  ASCII-case-insensitive, supports `*` (zero-or-more chars) and `?`
+  (exactly one char). Standard two-pointer + last-star backtrack
+  algorithm; no recursion. ~25 LoC. No new workspace dep (would
+  have been `wildmatch` or `globset`; both overkill for the
+  use case).
+- 9 glob unit tests + 7 `CaptureExcludeConfig` tests, including TOML
+  round-trip and the "missing `[capture.exclude]` block must still
+  pick up the password-manager defaults" security check.
+
+`ditox-core/src/watcher.rs`:
+- `Watcher` gains `foreground_tracker: Box<dyn ForegroundTracker>`.
+- `Watcher::new` calls `crate::foreground::build_default_tracker()`
+  to pick the per-platform tracker (Hyprland → hyprctl, others →
+  Noop). Existing call sites (ditox-gui's in-process watcher,
+  ditox-tui's daemon path) get exclusion for free.
+- New `Watcher::with_sources_and_tracker(db, config, sources,
+  tracker)` 4-arg constructor for tests that want to inject a
+  `MockForegroundTracker`.
+- Existing 3-arg `Watcher::with_sources(db, config, sources)`
+  preserved as a thin wrapper that uses `NoopForegroundTracker` —
+  back-compat for the 6 existing tests in
+  `tests/watcher_capture_integration.rs`.
+- `process_clip` snapshots the foreground BEFORE the sentinel/dedup
+  checks. On glob match: log `debug!`, return `Ok(false)`, and
+  intentionally do NOT advance `last_hash`. The latter is
+  load-bearing — see the dedicated test
+  `excluded_clip_does_not_advance_last_hash`. Rationale: a future
+  clip with the same bytes from a NON-excluded app must still be
+  capturable; if we'd advanced `last_hash`, the second poll would
+  short-circuit on dedup before we even consulted the tracker.
+- Tracker-error case (e.g. hyprctl binary missing while platform
+  reported Hyprland): log `debug!` and fall through to capture.
+  Fail-open is the right default — exclusion is an
+  extra-conservative feature, not a correctness gate.
+
+`ditox-core/tests/watcher_capture_integration.rs`:
+- 5 new integration tests using `MockForegroundTracker`:
+  1. excluded foreground → clip dropped, no DB row.
+  2. allowed foreground → clip captured normally.
+  3. tracker returns None (GNOME Wayland scenario) → fail-open
+     captures.
+  4. excluded clip does not advance `last_hash` (the load-bearing
+     case described above).
+  5. empty `processes` list short-circuits the whole foreground
+     check.
+- Test 4 introduces a small `MockForegroundTrackerHandle` adapter
+  that wraps an `Arc<MockForegroundTracker>` so the test body and
+  the watcher-owned `Box<dyn ForegroundTracker>` can share the
+  same underlying mock and the test can flip the basename
+  mid-test.
+
+**Workspace test count after this session: 322 tests** (was 301;
++9 glob_tests + +7 capture_exclude_tests + +5 watcher integration
+tests). All clippy `-D warnings` + fmt clean.
+
+**Live smoke test (Hyprland):** `RUST_LOG=ditox=debug
+./target/release/ditox-gui` from a brave-browser context starts
+cleanly (no panic from the new `Watcher::new` → tracker init path).
+Default exclusions don't fire because foreground is `brave-browser`,
+which doesn't match the password-manager globs.

@@ -226,6 +226,9 @@ pub struct CaptureConfig {
     /// allow all). `exclude` is the denylist and is applied AFTER
     /// `include` for both `mode = "all"` and `mode = "custom"`.
     pub formats: CaptureFormatsConfig,
+    /// Per-app capture exclusion (Phase 3 sub-task 3.2).
+    /// See [`CaptureExcludeConfig`].
+    pub exclude: CaptureExcludeConfig,
 }
 
 impl Default for CaptureConfig {
@@ -241,6 +244,7 @@ impl Default for CaptureConfig {
             // text-URL caption plus html/rtf without dropping.
             max_clip_size_bytes: 25 * 1024 * 1024,
             formats: CaptureFormatsConfig::default(),
+            exclude: CaptureExcludeConfig::default(),
         }
     }
 }
@@ -270,6 +274,103 @@ pub struct CaptureFormatsConfig {
     /// Denylist applied to all modes. Use this to silence a noisy
     /// internal format from a specific app.
     pub exclude: Vec<String>,
+}
+
+/// Per-app capture exclusion (Phase 3 sub-task 3.2).
+///
+/// When the foreground app's `process_basename` matches any of the
+/// listed glob patterns at capture time, the entire clip is dropped
+/// before it reaches the database. Useful for password managers that
+/// briefly stage credentials on the system clipboard — KeePassXC,
+/// 1Password, Bitwarden, the `pass` CLI — and for `ydotoold`, whose
+/// own paste-back synthesis would otherwise feed the watcher its own
+/// output.
+///
+/// Patterns support `*` (zero or more characters) and `?` (one
+/// character); matching is **ASCII case-insensitive** (Windows
+/// reports basenames as `Firefox.exe`; Linux as `firefox`).
+///
+/// Matching uses the foreground tracker provided by
+/// [`crate::foreground::build_default_tracker`]; when no tracker is
+/// available (GNOME Wayland, etc.) the exclusion list is silently
+/// inactive and all clips are captured.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(default)]
+pub struct CaptureExcludeConfig {
+    /// Glob patterns matched against the foreground app's
+    /// `process_basename`. Defaults to a small built-in list
+    /// covering common password managers and `ydotoold`. Override
+    /// in TOML to extend or replace.
+    pub processes: Vec<String>,
+}
+
+impl Default for CaptureExcludeConfig {
+    fn default() -> Self {
+        Self {
+            // Kept short and conservative. Users in security-sensitive
+            // workflows should extend this list; we err on the side of
+            // capturing-by-default rather than silently dropping clips
+            // from apps the user actually wants in their history.
+            processes: vec![
+                "*KeePass*".to_string(),
+                "*1Password*".to_string(),
+                "*Bitwarden*".to_string(),
+                "ydotoold".to_string(),
+            ],
+        }
+    }
+}
+
+impl CaptureExcludeConfig {
+    /// Returns `true` iff `basename` matches any configured glob.
+    /// ASCII-case-insensitive.
+    pub fn excludes(&self, basename: &str) -> bool {
+        self.processes.iter().any(|pat| glob_match(pat, basename))
+    }
+}
+
+/// Match `input` against `pattern` where `*` matches zero or more
+/// characters and `?` matches exactly one. ASCII case-insensitive.
+///
+/// Implementation is the standard two-pointer + last-star backtrack
+/// algorithm (no recursion, O(p × i) worst case). Used by
+/// [`CaptureExcludeConfig::excludes`] and kept module-local; if a
+/// caller needs richer glob semantics they should pull in `globset`.
+pub(crate) fn glob_match(pattern: &str, input: &str) -> bool {
+    let p = pattern.to_ascii_lowercase();
+    let i = input.to_ascii_lowercase();
+    glob_match_bytes(p.as_bytes(), i.as_bytes())
+}
+
+fn glob_match_bytes(pattern: &[u8], input: &[u8]) -> bool {
+    let (mut pi, mut ii) = (0usize, 0usize);
+    // Last position where we matched a `*`, plus the position in
+    // `input` we resumed at. On mismatch we back up to here.
+    let (mut star_p, mut star_i) = (None::<usize>, 0usize);
+
+    while ii < input.len() {
+        if pi < pattern.len() && (pattern[pi] == input[ii] || pattern[pi] == b'?') {
+            pi += 1;
+            ii += 1;
+        } else if pi < pattern.len() && pattern[pi] == b'*' {
+            star_p = Some(pi);
+            star_i = ii;
+            pi += 1;
+        } else if let Some(sp) = star_p {
+            // Backtrack: consume one more char into the last `*`.
+            pi = sp + 1;
+            star_i += 1;
+            ii = star_i;
+        } else {
+            return false;
+        }
+    }
+
+    // Trailing `*`s in pattern still match.
+    while pi < pattern.len() && pattern[pi] == b'*' {
+        pi += 1;
+    }
+    pi == pattern.len()
 }
 
 impl CaptureConfig {
@@ -573,6 +674,163 @@ mod capture_config_tests {
             parsed.capture.formats.exclude,
             vec!["application/x-vnd.bad"]
         );
+    }
+}
+
+#[cfg(test)]
+mod glob_tests {
+    use super::*;
+
+    #[test]
+    fn empty_pattern_matches_only_empty_input() {
+        assert!(glob_match("", ""));
+        assert!(!glob_match("", "x"));
+        assert!(!glob_match("x", ""));
+    }
+
+    #[test]
+    fn literal_match_is_case_insensitive() {
+        assert!(glob_match("firefox", "firefox"));
+        assert!(glob_match("Firefox", "firefox"));
+        assert!(glob_match("FIREFOX", "firefox"));
+        assert!(glob_match("firefox", "FIREFOX"));
+        assert!(!glob_match("firefox", "chromium"));
+    }
+
+    #[test]
+    fn star_matches_zero_chars() {
+        assert!(glob_match("foo*", "foo"));
+        assert!(glob_match("*foo", "foo"));
+        assert!(glob_match("*foo*", "foo"));
+        assert!(glob_match("*", ""));
+    }
+
+    #[test]
+    fn star_matches_arbitrary_chars() {
+        assert!(glob_match("*KeePass*", "org.keepassxc.KeePassXC"));
+        assert!(glob_match("*KeePass*", "KeePass"));
+        assert!(glob_match("*KeePass*", "MyKeePassExtra"));
+        assert!(!glob_match("*KeePass*", "Firefox"));
+    }
+
+    #[test]
+    fn question_matches_exactly_one_char() {
+        assert!(glob_match("f?refox", "firefox"));
+        assert!(glob_match("f?refox", "fArefox"));
+        assert!(!glob_match("f?refox", "frefox")); // missing the char
+        assert!(!glob_match("f?refox", "firrrefox")); // too many chars
+    }
+
+    #[test]
+    fn double_star_does_not_explode() {
+        // Naive backtrackers can blow up on `**foo`. Make sure ours
+        // doesn't, both for matches and non-matches.
+        assert!(glob_match("**KeePass**", "MyKeePassDB"));
+        assert!(glob_match("a**b", "axxb"));
+        assert!(!glob_match("a**b", "axxc"));
+    }
+
+    #[test]
+    fn pattern_with_only_stars_matches_anything() {
+        assert!(glob_match("***", ""));
+        assert!(glob_match("***", "anything"));
+        assert!(glob_match("***", "🦀")); // even unicode (lowercased per char)
+    }
+
+    #[test]
+    fn complex_glob_with_mixed_wildcards() {
+        // Matches "1Password 8.exe" and "1Password CLI.exe".
+        assert!(glob_match("1Password*.exe", "1Password 8.exe"));
+        assert!(glob_match("1Password*.exe", "1Password CLI.exe"));
+        assert!(!glob_match("1Password*.exe", "Bitwarden.exe"));
+    }
+
+    #[test]
+    fn special_glob_chars_match_literally_when_no_pattern() {
+        // An exact-match pattern with no wildcards.
+        assert!(glob_match("ydotoold", "ydotoold"));
+        assert!(!glob_match("ydotoold", "ydotool"));
+    }
+}
+
+#[cfg(test)]
+mod capture_exclude_tests {
+    use super::*;
+
+    #[test]
+    fn default_excludes_password_managers_and_ydotoold() {
+        let c = CaptureExcludeConfig::default();
+        assert!(c.excludes("KeePassXC"));
+        assert!(c.excludes("org.keepassxc.KeePassXC"));
+        assert!(c.excludes("1Password"));
+        assert!(c.excludes("1Password 8.exe"));
+        assert!(c.excludes("Bitwarden.exe"));
+        assert!(c.excludes("ydotoold"));
+    }
+
+    #[test]
+    fn default_does_not_exclude_browsers_or_editors() {
+        let c = CaptureExcludeConfig::default();
+        assert!(!c.excludes("firefox"));
+        assert!(!c.excludes("chromium"));
+        assert!(!c.excludes("brave-browser"));
+        assert!(!c.excludes("nvim"));
+        assert!(!c.excludes("code"));
+    }
+
+    #[test]
+    fn match_is_case_insensitive() {
+        let c = CaptureExcludeConfig::default();
+        assert!(c.excludes("KEEPASSXC"));
+        assert!(c.excludes("keepassxc"));
+        assert!(c.excludes("1PASSWORD.EXE"));
+    }
+
+    #[test]
+    fn empty_processes_means_nothing_excluded() {
+        let c = CaptureExcludeConfig { processes: vec![] };
+        assert!(!c.excludes("KeePassXC"));
+        assert!(!c.excludes("1Password"));
+        assert!(!c.excludes(""));
+    }
+
+    #[test]
+    fn user_override_replaces_defaults() {
+        let c = CaptureExcludeConfig {
+            processes: vec!["my-secret-app".to_string()],
+        };
+        assert!(c.excludes("my-secret-app"));
+        // KeePass is no longer excluded — user took explicit ownership.
+        assert!(!c.excludes("KeePassXC"));
+    }
+
+    #[test]
+    fn parses_from_toml() {
+        let toml = r#"
+            [capture.exclude]
+            processes = ["*Vault*", "1pass-cli"]
+        "#;
+        let parsed: Config = toml::from_str(toml).unwrap();
+        assert_eq!(
+            parsed.capture.exclude.processes,
+            vec!["*Vault*".to_string(), "1pass-cli".to_string()]
+        );
+        assert!(parsed.capture.exclude.excludes("HashiVault"));
+        assert!(parsed.capture.exclude.excludes("1pass-cli"));
+        assert!(!parsed.capture.exclude.excludes("KeePassXC")); // overridden
+    }
+
+    #[test]
+    fn missing_capture_exclude_uses_defaults() {
+        // Existing TOML without a [capture.exclude] block still picks
+        // up the password-manager defaults — security-relevant default.
+        let toml = r#"
+            [capture]
+            mode = "all"
+        "#;
+        let parsed: Config = toml::from_str(toml).unwrap();
+        assert!(parsed.capture.exclude.excludes("KeePassXC"));
+        assert!(parsed.capture.exclude.excludes("1Password"));
     }
 }
 
