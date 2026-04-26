@@ -19,6 +19,7 @@ mod startup;
 use clap::Parser;
 use ditox_core::foreground::build_default_tracker;
 use ditox_core::logging;
+use ditox_core::paste::cursor::PersistentSelectionCursor;
 use ditox_core::paste::synthesize::pick_chain;
 use ditox_core::platform::detect as detect_platform;
 use ditox_core::{Config, Database, Result};
@@ -112,6 +113,39 @@ fn run() -> Result<()> {
         "constructed paste-back synthesizer chain"
     );
 
+    // ---------------------------------------------------------------
+    // Phase 2 paste-back sub-task 2.9: groundwork for modifier-held
+    // cycling. Persist a SelectionCursor across launcher invocations.
+    // Each launch fires the cursor: re-fires within
+    // `paste.cursor_refire_window_ms` (default 800 ms) advance the
+    // index by one, otherwise the index resets to 0. The launcher
+    // pre-selects the entry at that index, so rapid-firing
+    // Ctrl+Shift+V cycles through the most-recent clips even in the
+    // current one-shot model.
+    //
+    // Phase 4's daemon-mode revert will replace the filesystem
+    // round-trip with in-memory state, but the SelectionCursor
+    // primitive itself is unchanged.
+    // ---------------------------------------------------------------
+    let initial_selection = match PersistentSelectionCursor::at_default_path() {
+        Ok(persistent) => {
+            let cursor = persistent.fire_and_persist(
+                std::time::SystemTime::now(),
+                config.paste.cursor_refire_window(),
+            );
+            tracing::debug!(
+                index = cursor.index(),
+                window_ms = config.paste.cursor_refire_window().as_millis(),
+                "fired selection cursor"
+            );
+            cursor.index()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "selection cursor unavailable; defaulting to top of list");
+            0
+        }
+    };
+
     // Run the iced application
     app::run_with(
         db,
@@ -120,5 +154,6 @@ fn run() -> Result<()> {
         previous_foreground,
         foreground_tracker,
         synthesizer_chain,
+        initial_selection,
     )
 }

@@ -1146,6 +1146,7 @@ pub struct DitoxApp {
 }
 
 impl DitoxApp {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         db: Database,
         config: Config,
@@ -1153,6 +1154,7 @@ impl DitoxApp {
         previous_foreground: Option<ForegroundSnapshot>,
         foreground_tracker: Box<dyn ForegroundTracker>,
         synthesizer_chain: Vec<Box<dyn Synthesizer>>,
+        initial_selection: usize,
     ) -> (Self, Task<Message>) {
         // Move the Database onto its own thread; iced runs against
         // the cheap `DbHandle`. The `DbActorJoin` is dropped on the
@@ -1164,6 +1166,17 @@ impl DitoxApp {
             .call(|d| d.get_page(0, PAGE_SIZE).unwrap_or_default())
             .unwrap_or_default();
         let window_state = WindowState::load();
+
+        // Phase 2 paste-back sub-task 2.9: clamp the persisted cursor
+        // index to the visible list. Modulo wraps past-end values back
+        // to the top of the list (useful when a stale cursor was
+        // persisted before entries were deleted) — matches
+        // `SelectionCursor::index_for_list`.
+        let selected_index = if entries.is_empty() {
+            0
+        } else {
+            initial_selection % entries.len()
+        };
 
         tracing::info!(
             "Loaded window state: {}x{} at ({}, {})",
@@ -1219,7 +1232,7 @@ impl DitoxApp {
             db,
             config,
             search_query: String::new(),
-            selected_index: 0,
+            selected_index,
             entries,
             visible: !start_hidden,
             view_mode: ViewMode::Main,
@@ -3004,6 +3017,13 @@ fn load_window_icon() -> Option<iced::window::Icon> {
 static APP_CONFIG: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
 static APP_START_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Phase 2 paste-back sub-task 2.9: raw selection-cursor index passed
+/// in by `run_with`. Atomic because it's a plain `usize` and we don't
+/// need a `Mutex` round-trip — the value is only ever read once by
+/// `boot_app`. Default `0` (top of the list) when unset.
+static APP_INITIAL_SELECTION: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// Phase 2 paste-back state. Wrapped in `Mutex<Option<T>>` so
 /// `boot_app` can `take()` ownership into the `DitoxApp` instance —
 /// these aren't `Sync` (the trackers are `Send`-only) and even
@@ -3051,6 +3071,7 @@ fn boot_app() -> (DitoxApp, Task<Message>) {
                     as Box<dyn Synthesizer>,
             ]
         });
+    let initial_selection = APP_INITIAL_SELECTION.load(std::sync::atomic::Ordering::Relaxed);
 
     DitoxApp::new(
         db,
@@ -3059,9 +3080,11 @@ fn boot_app() -> (DitoxApp, Task<Message>) {
         previous_foreground,
         foreground_tracker,
         synthesizer_chain,
+        initial_selection,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_with(
     _db: Database,
     config: Config,
@@ -3069,10 +3092,12 @@ pub fn run_with(
     previous_foreground: Option<ForegroundSnapshot>,
     foreground_tracker: Box<dyn ForegroundTracker>,
     synthesizer_chain: Vec<Box<dyn Synthesizer>>,
+    initial_selection: usize,
 ) -> Result<()> {
     // Store config for the boot function (db will be opened fresh since it's not Sync)
     let _ = APP_CONFIG.set(config);
     APP_START_HIDDEN.store(start_hidden, std::sync::atomic::Ordering::Relaxed);
+    APP_INITIAL_SELECTION.store(initial_selection, std::sync::atomic::Ordering::Relaxed);
 
     // Phase 2 paste-back state. Wrapped in Mutex<Option<...>> so
     // boot_app can take ownership; subsequent invocations (shouldn't

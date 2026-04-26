@@ -342,6 +342,13 @@ pub struct PasteConfig {
     /// 2000 ms — long enough to absorb the round-trip through the
     /// compositor + synthesizer + the watcher's poll interval.
     pub sentinel_ttl_ms: u64,
+
+    /// Re-fire window for the [`crate::paste::cursor::SelectionCursor`]:
+    /// if the launcher is summoned again within this many milliseconds
+    /// of the previous summon, the cursor index is `+1`'d (cycling
+    /// through history); otherwise it resets to `0`. Defaults to
+    /// 800 ms — comfortable double-tap of `Ctrl+Shift+V`.
+    pub cursor_refire_window_ms: u64,
 }
 
 impl PasteConfig {
@@ -366,6 +373,19 @@ impl PasteConfig {
             std::time::Duration::from_millis(2000)
         } else {
             std::time::Duration::from_millis(self.sentinel_ttl_ms)
+        }
+    }
+
+    /// Resolved cursor re-fire window as a
+    /// [`std::time::Duration`]. Falls back to
+    /// [`crate::paste::cursor::DEFAULT_REFIRE_WINDOW`] (800 ms)
+    /// when `cursor_refire_window_ms` is `0` (the unset default in
+    /// TOML).
+    pub fn cursor_refire_window(&self) -> std::time::Duration {
+        if self.cursor_refire_window_ms == 0 {
+            crate::paste::cursor::DEFAULT_REFIRE_WINDOW
+        } else {
+            std::time::Duration::from_millis(self.cursor_refire_window_ms)
         }
     }
 }
@@ -568,6 +588,11 @@ mod paste_config_tests {
         assert!(p.keystrokes.is_empty());
         // The 0-default sentinel_ttl_ms maps to 2 seconds at use-site.
         assert_eq!(p.sentinel_ttl(), std::time::Duration::from_secs(2));
+        // The 0-default cursor_refire_window_ms maps to 800 ms.
+        assert_eq!(
+            p.cursor_refire_window(),
+            crate::paste::cursor::DEFAULT_REFIRE_WINDOW
+        );
     }
 
     #[test]
@@ -607,12 +632,25 @@ mod paste_config_tests {
     }
 
     #[test]
+    fn cursor_refire_window_uses_explicit_value() {
+        let p = PasteConfig {
+            cursor_refire_window_ms: 1500,
+            ..PasteConfig::default()
+        };
+        assert_eq!(
+            p.cursor_refire_window(),
+            std::time::Duration::from_millis(1500)
+        );
+    }
+
+    #[test]
     fn paste_config_toml_round_trip() {
         let toml = r#"
             [paste]
             disabled = false
             synthesizer_chain = ["wtype", "off"]
             sentinel_ttl_ms = 1500
+            cursor_refire_window_ms = 1200
 
             [paste.keystrokes]
             "gvim" = "\"+gp"
@@ -625,6 +663,11 @@ mod paste_config_tests {
             Some(&vec!["wtype".to_string(), "off".to_string()][..])
         );
         assert_eq!(parsed.paste.sentinel_ttl_ms, 1500);
+        assert_eq!(parsed.paste.cursor_refire_window_ms, 1200);
+        assert_eq!(
+            parsed.paste.cursor_refire_window(),
+            std::time::Duration::from_millis(1200)
+        );
         assert_eq!(parsed.paste.keystroke_for("gvim"), "\"+gp");
         assert_eq!(parsed.paste.keystroke_for("firefox.exe"), "ctrl+v");
     }
