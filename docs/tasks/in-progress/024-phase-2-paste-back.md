@@ -1,9 +1,10 @@
 # Task: Phase 2 — Paste-back UX (cross-platform)
 
-> **Status:** planned
+> **Status:** in-progress (2/9 sub-tasks done — 2.1, 2.6)
 > **Priority:** high
 > **Phase:** 2 — Paste-back
 > **Created:** 2026-04-26
+> **Started:** 2026-04-26
 > **Estimated:** 3 weeks
 
 ## Description
@@ -222,5 +223,121 @@ ctrl). Quoting matters; build the argv carefully.
 
 ## Work Log
 
-### 2026-04-26
-- Task file created (epic).
+### 2026-04-26 — task moved to in-progress; sub-tasks 2.1 + 2.6 landed
+
+Phase 2 begins. Two foundational sub-tasks done in this initial
+session — both Linux-testable, no platform-dep heavy lifting.
+
+**2.1 — `ForegroundTracker` abstraction.** New
+`ditox-core/src/foreground.rs` introduces:
+
+- `ForegroundSnapshot { identifier, process_basename, title,
+  captured_at }` — what the launcher remembers about the
+  previously-focused window.
+- `ForegroundId` enum — portable identifier carrying only scalar /
+  `String` fields per platform (`Win32 { hwnd: i64, pid: u32 }`,
+  `Hypr { address }`, `Wlr { app_id, title }`, `X11 { window }`,
+  `Macos { pid }`, `Unknown`). No platform-dep types leak into
+  `ditox-core`.
+- `ForegroundId::supports_restore()` — encodes the per-platform
+  matrix of "can we re-focus this window from a non-privileged
+  client". Win32 / Hypr / X11 / Macos = yes; Wlr / Unknown = no
+  (wlroots' foreign-toplevel-management protocol has no
+  client-driven activate request — documented in the doc comment).
+- `ForegroundTracker` trait — sync-only (no async) per the same
+  reasoning as `CaptureSource`: keep `ditox-core` runtime-agnostic;
+  event-driven backends spawn a thread and surface events through
+  `mpsc::Receiver`. Methods: `name`, `snapshot`, `restore`,
+  `subscribe`, `shutdown`.
+- `ForegroundFilter<T>` decorator — wraps any tracker and drops
+  any snapshot whose `process_basename` matches one of the
+  configured launcher names. Default self-names: `["ditox-gui",
+  "ditox", "ditox-gui.exe", "ditox.exe"]`. Comparison is ASCII
+  case-insensitive (Windows reports mixed-case basenames).
+  Subscription path spawns a filter thread that drops self-events
+  before forwarding.
+- `NoopForegroundTracker` — for GNOME Wayland and other
+  unsupported compositors. `snapshot` returns `None`, `restore`
+  is a successful no-op. Documented degraded-mode behaviour.
+- `MockForegroundTracker` (`#[doc(hidden)]`) — test helper with
+  `set_snapshot()`, `inject()` (push to subscriber), `restore_log()`.
+
+**Deviation from epic spec:** the spec used `async_trait` and
+`chrono::DateTime<Utc>`. Replaced both: sync trait per the
+established `CaptureSource` pattern; `SystemTime` for parity with
+`RawClip.captured_at`. Avoids pulling `tokio` and `chrono` into
+`ditox-core`.
+
+19 unit tests covering: ForegroundId variants + `supports_restore`
+matrix + `kind` labels + Hash/Eq; Noop returns/disconnect/idempotent
+shutdown; Mock snapshot/restore-log/inject; Filter drops self
+(basic + case-insensitive + custom self-names + default-includes-
+both-binaries); subscribe-side filtering; trait object-safety.
+
+**2.6 — Per-app keystroke override parser.** New
+`ditox-core/src/paste/keystroke.rs` (parent module
+`ditox-core/src/paste.rs`) introduces:
+
+- `Modifier` enum (`Ctrl`/`Shift`/`Alt`/`Super`) with synonym
+  parsing (`super`/`logo`/`win`/`meta`/`cmd` → Super;
+  `ctrl`/`control` → Ctrl). Case-insensitive.
+- `SpecialKey` enum covering 39 keys: enter/tab/escape/space/
+  backspace/delete/insert/home/end/pageup/pagedown/up/down/left/
+  right + F1-F24. Synonyms: return → enter, esc → escape,
+  bs → backspace, ins → insert, pgup → pageup, etc.
+- `Key { Special(SpecialKey), Char(char) }` — final key after
+  modifier resolution; `Char` carries any Unicode scalar.
+- `Chord { modifiers: Vec<Modifier>, key: Key }` — one
+  press-everything-at-once group.
+- `KeystrokeSequence { chords: Vec<Chord> }` — ordered chord
+  list, what the launcher's synthesizer iterates over.
+- `parse(&str) -> Result<KeystrokeSequence, ParseError>` plus
+  `FromStr` impl for `KeystrokeSequence`.
+- `DEFAULT_KEYSTROKE = "ctrl+v"` constant.
+
+**Disambiguation rules** (`+` is overloaded — both chord-joiner and
+literal char):
+
+1. Whitespace-separate input into "fragments".
+2. Per fragment:
+   a. Exact special-key name (`enter`, `f5`) → one Step(Special).
+   b. Starts with `<modifier>+` → parse as chord (split on `+`,
+      all-but-last are modifiers, last is the key).
+   c. Else → each character is its own one-key chord. This is
+      what makes the spec's vim example `"+gp` resolve to four
+      sequential keystrokes (`"`, `+`, `g`, `p`) — none of those
+      tokens before the first `+` is a modifier name, so rule 2
+      doesn't fire.
+
+`ParseError` variants: `Empty`, `DanglingPlus { fragment }`,
+`UnknownModifier { fragment, token }`, `ModifierAsKey { fragment,
+token }`, `UnknownKey { fragment, token }` — each carries the
+context for actionable error messages.
+
+`Display` for `KeystrokeSequence` produces a canonical
+representation (`"ctrl+v ctrl+s"`); round-trips for canonical
+inputs but normalises non-canonical ones (`"+gp` round-trips as
+`"\" + g p"`, four space-separated chords).
+
+31 unit tests covering: modifier parse (canonical + synonyms +
+case + rejection); special-key parse (canonical + synonyms +
+case + rejection — including `f0` and `f25` boundary checks);
+parse happy path (simple chord, multi-modifier, special key,
+two-chord sequence, special-key alone, vim register paste,
+single char, multi-char literal, ctrl+special, case
+insensitivity, super synonyms, extra whitespace, default
+constant); parse error path (empty input, dangling `+`,
+unknown modifier, modifier as key, multi-char unknown key);
+Display round-trip (canonical + two-chord + literal sequence);
+`FromStr` + `Default`.
+
+**Workspace test count after this session: 207 tests** (was 159;
++19 foreground + +31 keystroke + small adjustments). All clippy
+`-D warnings` + fmt clean.
+
+**Phase 2 status: 2/9 sub-tasks done.** Next: 2.3 (Wayland
+foreground tracker — needs `wayland-client` event loop on a
+dedicated thread; testable on Hyprland), then 2.4 (Linux
+synthesis chain — `hyprctl`/`wtype`/`ydotool` shell-outs;
+testable end-to-end). Windows trackers/synthesizer (2.2, 2.5)
+will follow the same defer-to-Windows pattern as task 032.
