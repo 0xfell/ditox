@@ -89,6 +89,7 @@ pub struct Config {
     pub ui: UiConfig,
     pub keybindings: KeybindingsConfig,
     pub capture: CaptureConfig,
+    pub paste: PasteConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -304,6 +305,71 @@ impl CaptureConfig {
     }
 }
 
+/// Phase 2 paste-back configuration.
+///
+/// Controls (a) per-app keystroke override, (b) explicit synthesizer
+/// chain override (otherwise the platform default is used), and
+/// (c) a kill-switch to disable paste-back entirely (the launcher
+/// then writes the clip to the clipboard but doesn't try to
+/// restore focus / synthesise keystrokes — user pastes manually).
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct PasteConfig {
+    /// Disable paste-back entirely. Clipboard is still written; the
+    /// user pastes manually with their own Ctrl+V. Useful when the
+    /// synthesizer interacts badly with a particular workflow.
+    pub disabled: bool,
+
+    /// Override the platform-default synthesizer chain. Each string
+    /// must be one of `"hyprctl"`, `"wtype"`, `"ydotool"`, `"off"`.
+    /// `None` (the default) defers to
+    /// [`crate::platform::Platform::paste_synthesizer_chain`].
+    pub synthesizer_chain: Option<Vec<String>>,
+
+    /// Per-app keystroke overrides keyed by `process_basename`.
+    /// Lookup is **ASCII-case-insensitive** — keys are normalised to
+    /// lowercase at config load. Values are parsed by
+    /// [`crate::paste::keystroke::parse`] (`"ctrl+v"`, `"ctrl+shift+v"`,
+    /// `"\"+gp"` for vim's register paste, etc.).
+    ///
+    /// Entries not in the map fall back to
+    /// [`crate::paste::keystroke::DEFAULT_KEYSTROKE`].
+    pub keystrokes: std::collections::HashMap<String, String>,
+
+    /// TTL for the [`crate::paste::sentinel::PasteSentinel`]: how
+    /// long after a paste-back the watcher should ignore a captured
+    /// clip whose hash matches the just-pasted hash. Defaults to
+    /// 2000 ms — long enough to absorb the round-trip through the
+    /// compositor + synthesizer + the watcher's poll interval.
+    pub sentinel_ttl_ms: u64,
+}
+
+impl PasteConfig {
+    /// Resolve the keystroke override for `process_basename`,
+    /// falling back to `DEFAULT_KEYSTROKE` when no entry matches.
+    /// ASCII-case-insensitive — `"FIREFOX"` matches a config key
+    /// of `"firefox"`.
+    pub fn keystroke_for(&self, process_basename: &str) -> String {
+        let lower = process_basename.to_ascii_lowercase();
+        self.keystrokes
+            .iter()
+            .find(|(k, _)| k.to_ascii_lowercase() == lower)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(|| crate::paste::keystroke::DEFAULT_KEYSTROKE.to_string())
+    }
+
+    /// Resolved sentinel TTL as a [`std::time::Duration`].
+    /// Falls back to 2 s when `sentinel_ttl_ms` is `0` (the unset
+    /// default in TOML).
+    pub fn sentinel_ttl(&self) -> std::time::Duration {
+        if self.sentinel_ttl_ms == 0 {
+            std::time::Duration::from_millis(2000)
+        } else {
+            std::time::Duration::from_millis(self.sentinel_ttl_ms)
+        }
+    }
+}
+
 /// `Minimal` mode keeps only the formats that ditox v0.3.1 captured:
 /// canonical UTF-8 text and the canonical image MIME types.
 fn is_minimal_format(format_name: &str) -> bool {
@@ -487,5 +553,92 @@ mod capture_config_tests {
             parsed.capture.formats.exclude,
             vec!["application/x-vnd.bad"]
         );
+    }
+}
+
+#[cfg(test)]
+mod paste_config_tests {
+    use super::*;
+
+    #[test]
+    fn default_paste_config_is_enabled_with_default_keystroke() {
+        let p = PasteConfig::default();
+        assert!(!p.disabled);
+        assert!(p.synthesizer_chain.is_none());
+        assert!(p.keystrokes.is_empty());
+        // The 0-default sentinel_ttl_ms maps to 2 seconds at use-site.
+        assert_eq!(p.sentinel_ttl(), std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn keystroke_for_unknown_basename_is_default() {
+        let p = PasteConfig::default();
+        assert_eq!(
+            p.keystroke_for("notepad.exe"),
+            crate::paste::keystroke::DEFAULT_KEYSTROKE
+        );
+    }
+
+    #[test]
+    fn keystroke_for_known_basename_returns_override() {
+        let mut p = PasteConfig::default();
+        p.keystrokes.insert("gvim".to_string(), "\"+gp".to_string());
+        assert_eq!(p.keystroke_for("gvim"), "\"+gp");
+    }
+
+    #[test]
+    fn keystroke_for_match_is_case_insensitive() {
+        // Windows reports basenames with mixed case
+        // (`Firefox.exe`); match the user's lowercase config key.
+        let mut p = PasteConfig::default();
+        p.keystrokes
+            .insert("firefox.exe".to_string(), "ctrl+v".to_string());
+        assert_eq!(p.keystroke_for("FIREFOX.EXE"), "ctrl+v");
+        assert_eq!(p.keystroke_for("Firefox.Exe"), "ctrl+v");
+    }
+
+    #[test]
+    fn sentinel_ttl_uses_explicit_value() {
+        let p = PasteConfig {
+            sentinel_ttl_ms: 5000,
+            ..PasteConfig::default()
+        };
+        assert_eq!(p.sentinel_ttl(), std::time::Duration::from_millis(5000));
+    }
+
+    #[test]
+    fn paste_config_toml_round_trip() {
+        let toml = r#"
+            [paste]
+            disabled = false
+            synthesizer_chain = ["wtype", "off"]
+            sentinel_ttl_ms = 1500
+
+            [paste.keystrokes]
+            "gvim" = "\"+gp"
+            "firefox.exe" = "ctrl+v"
+        "#;
+        let parsed: Config = toml::from_str(toml).unwrap();
+        assert!(!parsed.paste.disabled);
+        assert_eq!(
+            parsed.paste.synthesizer_chain.as_deref(),
+            Some(&vec!["wtype".to_string(), "off".to_string()][..])
+        );
+        assert_eq!(parsed.paste.sentinel_ttl_ms, 1500);
+        assert_eq!(parsed.paste.keystroke_for("gvim"), "\"+gp");
+        assert_eq!(parsed.paste.keystroke_for("firefox.exe"), "ctrl+v");
+    }
+
+    #[test]
+    fn paste_section_is_optional_in_toml() {
+        // Existing config files without a [paste] section must still
+        // parse; everything defaults.
+        let toml = r#"
+            [general]
+            max_entries = 1000
+        "#;
+        let parsed: Config = toml::from_str(toml).unwrap();
+        assert!(!parsed.paste.disabled);
+        assert!(parsed.paste.keystrokes.is_empty());
     }
 }

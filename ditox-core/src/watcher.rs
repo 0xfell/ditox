@@ -483,9 +483,27 @@ impl Watcher {
             return Ok(false);
         }
 
+        // Paste-back sentinel: the launcher writes a hash + timestamp
+        // file after each paste so the watcher can drop the inevitable
+        // re-capture. Best-effort across platforms — if the file
+        // doesn't exist or is corrupt, we just don't skip. See
+        // `crate::paste::sentinel`.
+        let sentinel = crate::paste::sentinel::PasteSentinel::at_default_path().ok();
+        let sentinel_ttl = self.config.paste.sentinel_ttl();
+
         let captured = if let Some(img_format) = clip.first_with_prefix("image/") {
             let extension = mime_to_extension(&img_format.mime);
             let inner_hash = Clipboard::hash(&img_format.bytes);
+            if let Some(s) = &sentinel {
+                if s.matches(&inner_hash, sentinel_ttl) {
+                    debug!(
+                        hash = %&inner_hash[..8.min(inner_hash.len())],
+                        "skipping recently-pasted image clip (sentinel match)"
+                    );
+                    self.last_hash = Some(h);
+                    return Ok(false);
+                }
+            }
             if !self.db.exists_by_hash(&inner_hash)? {
                 Database::store_image_blob(&inner_hash, extension, &img_format.bytes)?;
                 let entry = Entry::new_image(
@@ -511,6 +529,16 @@ impl Watcher {
             // text formats (Phase 1 RTF) take a different branch.
             let text = String::from_utf8_lossy(&text_format.bytes).into_owned();
             let inner_hash = Clipboard::hash(text.as_bytes());
+            if let Some(s) = &sentinel {
+                if s.matches(&inner_hash, sentinel_ttl) {
+                    debug!(
+                        hash = %&inner_hash[..8.min(inner_hash.len())],
+                        "skipping recently-pasted text clip (sentinel match)"
+                    );
+                    self.last_hash = Some(h);
+                    return Ok(false);
+                }
+            }
             if !self.db.exists_by_hash(&inner_hash)? {
                 let entry = Entry::new_text(text);
                 self.db.insert(&entry)?;

@@ -18,4 +18,5 @@
 //!   `Clipboard Viewer Ignore`).
 
 pub mod keystroke;
+pub mod sentinel;
 pub mod synthesize;

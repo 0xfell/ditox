@@ -1,11 +1,12 @@
 # Task: Phase 2 — Paste-back UX (cross-platform)
 
-> **Status:** in-progress (4/9 sub-tasks done — 2.1, 2.3 (Hyprland part), 2.4, 2.6)
+> **Status:** in-progress (6/9 sub-tasks done — 2.1, 2.3 (Hyprland part), 2.4, 2.6, 2.7 (Linux), 2.8)
 > **Priority:** high
 > **Phase:** 2 — Paste-back
 > **Created:** 2026-04-26
 > **Started:** 2026-04-26
 > **Estimated:** 3 weeks
+> **MVP working on Hyprland (verified 2026-04-26)**
 
 ## Description
 
@@ -341,3 +342,199 @@ dedicated thread; testable on Hyprland), then 2.4 (Linux
 synthesis chain — `hyprctl`/`wtype`/`ydotool` shell-outs;
 testable end-to-end). Windows trackers/synthesizer (2.2, 2.5)
 will follow the same defer-to-Windows pattern as task 032.
+
+### 2026-04-26 — sub-tasks 2.3 (Hyprland), 2.4, 2.7, 2.8 landed; MVP verified end-to-end on Hyprland
+
+Four more sub-tasks done in this session, taking Phase 2 from 2/9 to
+**6/9** with the click-to-paste flow now **verified working** on
+Hyprland.
+
+**2.3 — Hyprland foreground tracker.** New
+`ditox-core/src/foreground/hyprctl.rs` introduces
+`HyprctlForegroundTracker`:
+
+- `snapshot()` shells out `hyprctl activewindow -j`, parses JSON
+  via serde, returns `ForegroundSnapshot { identifier:
+  ForegroundId::Hypr { address }, process_basename, title,
+  captured_at }`.
+- `parse_activewindow()` is the pure JSON-text → snapshot helper
+  used by tests; the full `snapshot()` adds the `Command::output`
+  layer.
+- `process_basename` resolution: prefer the wayland `class` field
+  (always full app name like `brave-browser`); fall back to
+  `/proc/<pid>/comm`. The `/proc` path is necessary for non-Wayland
+  legacy clients and Nix-wrapped binaries (where `comm` is the
+  actual binary, prefixed `.foo-wrapped`). Truncation at 15 chars
+  (`TASK_COMM_LEN-1`) is documented in the doc comment.
+- `restore()` shells out `hyprctl dispatch focuswindow
+  address:<addr>` — Hyprland is the rare Wayland compositor that
+  exposes a client-driven activate request.
+- `subscribe()` is currently `Err(())` — wlr-foreign-toplevel
+  event loop deferred (would need a dedicated `wayland-client`
+  thread; not on the critical path for MVP).
+- `is_available()` checks `which hyprctl`; `name()` returns
+  `"hyprctl"`.
+
+10 unit tests covering: parse happy path (class + initialClass
+fallback + title + address); parse error paths (malformed JSON,
+missing fields); `process_basename` priority (class > comm);
+restore command shape; trait-object safety; subscribe returns
+`Err`.
+
+**2.4 — Linux synthesis chain.** New
+`ditox-core/src/paste/synthesize.rs` introduces:
+
+- `Synthesizer` trait — sync, `Send + Sync`. Methods: `name`,
+  `is_available`, `paste(target, sequence)`. No async (consistent
+  with rest of `ditox-core`).
+- `HyprctlSynthesizer` — uses `hyprctl dispatch sendshortcut ,
+  ctrl+v, address:<addr>`. Targeted at the specific window so no
+  race vs newly-focused popup. Only available on Hyprland.
+- `WtypeSynthesizer` — shells `wtype` with `-M ctrl v -m ctrl`
+  argv. Works on wlroots compositors (Sway, river). Builds
+  modifier press/release pairs around the key press from
+  `KeystrokeSequence`.
+- `YdotoolSynthesizer` — fallback. Shells `ydotool key` with
+  numeric keycodes (`29:1 47:1 47:0 29:0` for Ctrl+V). Requires
+  `ydotoold`; detection is `which ydotool` only (we don't probe
+  the daemon — paste failure surfaces it).
+- `OffSynthesizer` — no-op success. Used as the always-available
+  sentinel that terminates the chain. Lets the user paste manually
+  with Ctrl+V.
+- `pick_chain(platform: &Platform) -> Vec<Box<dyn Synthesizer>>`
+  — returns the per-platform ordered list. Hyprland: hyprctl →
+  wtype → ydotool → off. Other Wayland: wtype → ydotool → off.
+  Off always last.
+- `paste_with_chain(chain, target, sequence)` — iterates;
+  returns the first `Ok(synth_name)` or aggregated error.
+- Each impl exposes an inherent `argv()` (or analogous) that
+  returns the exact command-line — tests assert on this without
+  spawning subprocesses.
+
+24 unit tests covering: per-synthesizer argv shape (Ctrl+V, vim
+`"+gp` four-chord sequence, F-keys, Super+L); chain composition
+per platform (Hyprland vs Sway vs Windows-ignored vs Macos); `Off`
+always-available + always-success; chain-skip-when-unavailable;
+trait object safety; modifier release order (release after press,
+LIFO); special-key keycode tables for ydotool.
+
+**2.7 — Paste-back sentinel.** New `ditox-core/src/paste/sentinel.rs`
+introduces `PasteSentinel`:
+
+- Filesystem-backed at `<data_dir>/last-paste.json`. Atomic write
+  via tmp-file + rename. Best-effort: failures logged via
+  `tracing::warn!`, never propagated.
+- `record(hash: &str)` — write `{ hash, recorded_at: <unix_ms> }`.
+- `matches(hash, ttl: Duration)` — read; return `true` iff
+  `hash == stored.hash` AND `now - stored.recorded_at <= ttl`.
+- `clear()` — best-effort delete.
+- `Watcher::process_clip` (in `ditox-core/src/watcher.rs`)
+  consults the sentinel **before** `db.insert()` for both image
+  and text branches. On match: skip insert, update `last_hash`,
+  return `Ok(false)`. The hash to record matches what the watcher
+  computes: text = `Clipboard::hash(content.as_bytes())`; image
+  = `entry.content` (which IS the SHA hash per content-addressed
+  image storage).
+
+**Why filesystem instead of MIME-based sentinel** (deviation from
+epic spec): the multi-format clipboard write path is still
+write-side TODO. A filesystem sentinel works *today* for both text
+and image clips, doesn't depend on the watcher recognising a
+custom MIME type, and survives process boundaries (gui writes →
+watcher reads).
+
+8 unit tests covering: record + matches happy path; expired by
+TTL; non-matching hash; missing file → `false`; tmp-rename
+atomic write; concurrent-read tolerance; `clear` is idempotent;
+malformed JSON treated as missing.
+
+**2.8 — GUI integration.** End-to-end wiring across
+`ditox-core` + `ditox-gui`:
+
+- `Config.paste = PasteConfig { disabled, synthesizer_chain,
+  keystrokes, sentinel_ttl_ms }` in `ditox-core/src/config.rs`.
+  `keystroke_for(basename)` ASCII-case-insensitive lookup;
+  `sentinel_ttl()` defaults to 2 s when 0. 6 unit tests.
+- `build_default_tracker()` factory in `ditox-core/src/foreground.rs`
+  — per-platform: Hyprland → `HyprctlForegroundTracker`; other
+  Wayland/X11/Macos → `NoopForegroundTracker` for now (real
+  wlr/xdg/macos trackers are 2.3-cont/2.2/2.5). Always wrapped in
+  `ForegroundFilter` with default self-names.
+- `ditox-gui/src/main.rs::run` captures `previous_foreground`
+  **before** `app::run_with` is called — by the time iced opens
+  its window, ditox-gui itself becomes foreground, so the
+  snapshot must happen pre-iced.
+- `ditox-gui/src/app.rs::DitoxApp` extended with three fields:
+  `previous_foreground: Option<ForegroundSnapshot>`,
+  `foreground_tracker: Option<Box<dyn ForegroundTracker>>`,
+  `synthesizer_chain: Option<Vec<Box<dyn Synthesizer>>>`.
+- `paste_and_exit(&mut self, entry: Entry) -> !` helper at
+  `app.rs:1230`. Order: clipboard write → `db_handle.touch(id)`
+  fire-and-forget → `PasteSentinel::record(hash)` → `tracker.
+  restore(snap)` (if `supports_restore`) → 50 ms `thread::sleep`
+  → parse keystroke string → `paste_with_chain(chain, snap,
+  sequence)` → `save_window_state` → `process::exit(0)`. The 50 ms
+  sleep gives the compositor time to switch focus before the
+  keystroke is synthesised.
+- `Message::CopyEntry`/`CopyFromPreview` handlers replaced to
+  call `paste_and_exit`. (Names kept rather than renamed to
+  `PasteEntry` — smaller diff; semantic is `copy + paste-back`.)
+- iced 0.14 `boot_app` is `Fn` (not `FnOnce`) → state threaded
+  via three `OnceLock<Mutex<Option<T>>>` statics
+  (`APP_PREVIOUS_FOREGROUND` / `APP_FOREGROUND_TRACKER` /
+  `APP_SYNTHESIZER_CHAIN`); `boot_app` `take()`s ownership on
+  first call. `run_with` signature went from 3 args to 6 args.
+- Build error fixed during this iteration: removed stray
+  `.flatten()` at `app.rs:2973` (inner closure already returns
+  `Option<ForegroundSnapshot>`, not `Option<Option<...>>`).
+
+**Live verification on Hyprland 2026-04-26 (user-confirmed):**
+
+```
+RUST_LOG=ditox=debug,ditox_core=debug,ditox_gui=debug \
+  ./target/release/ditox-gui 2>/tmp/ditox.log
+```
+
+Log shows:
+
+```
+captured previous-foreground snapshot for paste-back
+  process=com.mitchellh.ghostty
+  title=RUST_LOG=...
+  kind=hypr
+constructed paste-back synthesizer chain
+  chain=["hyprctl", "wtype", "ydotool", "off"]
+Pasting: Diablo® IV: Lord of Hatred™...
+recorded paste sentinel hash=e975249e
+paste-back succeeded synth=hyprctl target=com.mitchellh.ghostty
+```
+
+End-to-end: pre-iced foreground snapshot → entry click →
+clipboard write → sentinel record → focus restore via hyprctl →
+keystroke synthesis via hyprctl `sendshortcut` → text "Diablo®
+IV: Lord of Hatred™..." appeared at the ghostty prompt. User
+confirmed visual paste effect. Watcher correctly skipped
+re-capture (sentinel matched).
+
+**Workspace test count after this session: 274 tests** (was 207;
++10 hyprctl + +24 synthesize + +6 PasteConfig + +8 sentinel +
+build_default_tracker + small adjustments). All clippy
+`-D warnings` + fmt clean.
+
+**Phase 2 status: 6/9 sub-tasks done.** Outstanding:
+- **2.2** Win32 foreground tracker — Windows-side, deferred.
+- **2.3 (cont)** Wayland wlr-foreign-toplevel subscription — needs
+  dedicated `wayland-client` event-loop thread; not on MVP path.
+- **2.5** Win32 synthesizer (`SendInput` + stuck-modifier guard) —
+  Windows-side, deferred.
+- **2.9** `selection_cursor` groundwork — small persistent file at
+  `<data_dir>/cursor.json` with debounce.
+
+**Pre-existing tray panic surfaced** (not blocking 2.8): on
+Hyprland the `ditox-tray` thread panics at runtime —
+`libappindicator-sys-0.9.0/src/lib.rs:41` fails to `dlopen`
+`libayatana-appindicator3.so.1` / `libappindicator3.so.1`. The
+panic is on a dedicated thread so the GUI itself stays alive,
+but the tray icon never appears under Hyprland on this dev
+shell. Tracked as a follow-up bug; root cause is missing
+runtime library in `flake.nix` GUI environment.

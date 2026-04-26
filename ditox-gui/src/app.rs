@@ -1,6 +1,10 @@
 //! Ditox iced GUI application - Modern redesign
 
 use ditox_core::app::TabFilter;
+use ditox_core::foreground::{ForegroundSnapshot, ForegroundTracker};
+use ditox_core::paste::keystroke::KeystrokeSequence;
+use ditox_core::paste::sentinel::PasteSentinel;
+use ditox_core::paste::synthesize::{paste_with_chain, Synthesizer};
 use ditox_core::{Clipboard, Config, Database, DbHandle, Entry, EntryType, Result, Watcher};
 #[cfg(windows)]
 use global_hotkey::{
@@ -1122,10 +1126,34 @@ pub struct DitoxApp {
     /// Current scroll viewport for smart scrolling
     scroll_viewport: Option<scrollable::Viewport>,
     is_searching: bool,
+    /// Phase 2 paste-back: snapshot of the window that was focused
+    /// BEFORE the launcher appeared. Captured in `main.rs::run` and
+    /// threaded through `boot_app`. `None` when no foreground tracker
+    /// is available (GNOME Wayland, unsupported platforms) or the
+    /// snapshot returned `None` (no foreground / launcher already
+    /// running). Consumed (cloned) by `paste_and_exit`.
+    previous_foreground: Option<ForegroundSnapshot>,
+    /// Phase 2 paste-back: foreground tracker used by
+    /// `paste_and_exit` to call `restore()` before synthesising the
+    /// paste keystroke. Wrapped in `Box<dyn>` so the platform-specific
+    /// impl is opaque to the GUI.
+    foreground_tracker: Box<dyn ForegroundTracker>,
+    /// Phase 2 paste-back: ordered chain of synthesizer backends.
+    /// Built by `pick_chain(platform)` in `main.rs::run`. Always ends
+    /// with `OffSynthesizer` so `paste_with_chain` never returns Err
+    /// from this chain.
+    synthesizer_chain: Vec<Box<dyn Synthesizer>>,
 }
 
 impl DitoxApp {
-    fn new(db: Database, config: Config, start_hidden: bool) -> (Self, Task<Message>) {
+    fn new(
+        db: Database,
+        config: Config,
+        start_hidden: bool,
+        previous_foreground: Option<ForegroundSnapshot>,
+        foreground_tracker: Box<dyn ForegroundTracker>,
+        synthesizer_chain: Vec<Box<dyn Synthesizer>>,
+    ) -> (Self, Task<Message>) {
         // Move the Database onto its own thread; iced runs against
         // the cheap `DbHandle`. The `DbActorJoin` is dropped on the
         // floor — the actor exits naturally when the last `DbHandle`
@@ -1211,6 +1239,9 @@ impl DitoxApp {
             image_cache: HashMap::new(),
             scroll_viewport: None,
             is_searching: false,
+            previous_foreground,
+            foreground_tracker,
+            synthesizer_chain,
         };
 
         // One-shot mode: don't override the bottom-left position picked by
@@ -1228,31 +1259,141 @@ impl DitoxApp {
         Theme::Dark
     }
 
+    /// Phase 2 paste-back: write `entry` to the clipboard, record a
+    /// sentinel hash so the watcher skips the inevitable re-capture,
+    /// optionally restore the previously-focused window and
+    /// synthesise the paste keystroke, then `save_window_state` and
+    /// `process::exit(0)`.
+    ///
+    /// Diverges (`-> !`); replaces the inline `Clipboard::set_*` →
+    /// `exit(0)` pair that was the entire `Message::CopyEntry`
+    /// handler before sub-task 2.8.
+    ///
+    /// Per-step error handling:
+    ///
+    /// - Clipboard write fails → log + still try paste-back (so the
+    ///   user at least gets focus restored).
+    /// - Sentinel record fails → already swallowed inside
+    ///   `PasteSentinel::record` (best-effort log).
+    /// - Paste-back fails → log; user pastes manually.
+    fn paste_and_exit(&mut self, entry: Entry) -> ! {
+        // 1. Write clipboard.
+        let write_result = match entry.entry_type {
+            EntryType::Text => Clipboard::set_text(&entry.content),
+            EntryType::Image => match entry.image_path() {
+                Some(p) => Clipboard::set_image(&p.to_string_lossy()),
+                None => Err(ditox_core::DitoxError::Other(
+                    "image entry missing extension".into(),
+                )),
+            },
+        };
+        if let Err(e) = &write_result {
+            tracing::warn!(error = %e, "clipboard write failed");
+        }
+
+        // 2. Mark in DB (LRU bump) — fire-and-forget; we exit before
+        //    the actor processes it but SQLite WAL keeps the write
+        //    durable past process exit.
+        let id = entry.id.clone();
+        let _ = self.db.dispatch(move |d| {
+            let _ = d.touch(&id);
+        });
+        tracing::info!("Pasting: {}", entry.preview(30));
+
+        // 3. Record paste sentinel so the watcher (in this process or
+        //    the daemon) skips the re-capture. The hash we record
+        //    must match what `Watcher::process_clip` would compute:
+        //    - Text: `Clipboard::hash(content.as_bytes())`.
+        //    - Image: the entry's `content` field IS the SHA-256 of
+        //      the image bytes (content-addressed storage; see
+        //      AGENTS.md).
+        if write_result.is_ok() {
+            let inner_hash = match entry.entry_type {
+                EntryType::Text => Clipboard::hash(entry.content.as_bytes()),
+                EntryType::Image => entry.content.clone(),
+            };
+            if let Ok(sentinel) = PasteSentinel::at_default_path() {
+                sentinel.record(&inner_hash);
+                tracing::debug!(
+                    hash = %&inner_hash[..8.min(inner_hash.len())],
+                    "recorded paste sentinel"
+                );
+            }
+        }
+
+        // 4. Foreground restore + keystroke synthesis. Skipped when:
+        //    - Paste-back is disabled in config.
+        //    - No previous-foreground snapshot exists.
+        //    - The platform doesn't support client-driven re-focus
+        //      (Wlr / Unknown — see ForegroundId::supports_restore).
+        if !self.config.paste.disabled && write_result.is_ok() {
+            if let Some(snap) = self.previous_foreground.clone() {
+                if snap.identifier.supports_restore() {
+                    if let Err(e) = self.foreground_tracker.restore(&snap) {
+                        tracing::warn!(
+                            error = %e,
+                            target = %snap.process_basename,
+                            "foreground restore failed; user will need to focus manually"
+                        );
+                    } else {
+                        // Brief sleep gives the compositor time to
+                        // switch focus before we synthesise the
+                        // keystroke. 50 ms is the spec value (task
+                        // 024 line 167); on Hyprland we typically
+                        // see focus change well under 10 ms but the
+                        // padding handles slow compositors.
+                        std::thread::sleep(Duration::from_millis(50));
+
+                        let keys_str = self.config.paste.keystroke_for(&snap.process_basename);
+                        match KeystrokeSequence::parse(&keys_str) {
+                            Ok(keys) => {
+                                match paste_with_chain(&self.synthesizer_chain, &snap, &keys) {
+                                    Ok(name) => tracing::info!(
+                                        synth = name,
+                                        target = %snap.process_basename,
+                                        "paste-back succeeded"
+                                    ),
+                                    Err(e) => tracing::warn!(
+                                        error = %e,
+                                        "paste-back chain failed; user will paste manually"
+                                    ),
+                                }
+                            }
+                            Err(e) => tracing::warn!(
+                                error = %e,
+                                keystroke = %keys_str,
+                                "invalid keystroke override; user will paste manually"
+                            ),
+                        }
+                    }
+                } else {
+                    tracing::debug!(
+                        kind = %snap.identifier.kind(),
+                        "previous foreground doesn't support restore; skipping"
+                    );
+                }
+            } else {
+                tracing::debug!("no previous-foreground snapshot; skipping paste-back");
+            }
+        }
+
+        self.save_window_state();
+        std::process::exit(0);
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::CopyEntry(index) => {
-                if let Some(entry) = self.entries.get(index) {
-                    let result = match entry.entry_type {
-                        EntryType::Text => Clipboard::set_text(&entry.content),
-                        EntryType::Image => match entry.image_path() {
-                            Some(p) => Clipboard::set_image(&p.to_string_lossy()),
-                            None => Err(ditox_core::DitoxError::Other(
-                                "image entry missing extension".into(),
-                            )),
-                        },
-                    };
-                    if result.is_ok() {
-                        let id = entry.id.clone();
-                        // Fire-and-forget: we're about to exit, no need to wait.
-                        let _ = self.db.dispatch(move |d| {
-                            let _ = d.touch(&id);
-                        });
-                        tracing::info!("Copied: {}", entry.preview(30));
-                    }
+                // Phase 2 paste-back: clipboard write + sentinel
+                // record + foreground restore + keystroke synthesis,
+                // all in `paste_and_exit` (which diverges).
+                if let Some(entry) = self.entries.get(index).cloned() {
+                    self.paste_and_exit(entry);
                 }
-                // One-shot: exit after copying. Wayland can't reliably hide an
-                // already-mapped iced window, so each launch is a fresh process
-                // and copy → exit is the auto-close mechanism.
+                // Index out of bounds (extremely unlikely): preserve
+                // the previous "exit even on no-op" behaviour so
+                // misbehaving keybinds don't leave the launcher
+                // hanging open.
                 self.save_window_state();
                 std::process::exit(0);
             }
@@ -1624,25 +1765,16 @@ impl DitoxApp {
             }
 
             Message::CopyFromPreview => {
-                if let ViewMode::EntryPanel(ref entry_id) = self.view_mode {
-                    if let Some(entry) = self.entries.iter().find(|e| e.id == *entry_id) {
-                        let result = match entry.entry_type {
-                            EntryType::Text => Clipboard::set_text(&entry.content),
-                            EntryType::Image => match entry.image_path() {
-                                Some(p) => Clipboard::set_image(&p.to_string_lossy()),
-                                None => Err(ditox_core::DitoxError::Other(
-                                    "image entry missing extension".into(),
-                                )),
-                            },
-                        };
-                        if result.is_ok() {
-                            let id = entry.id.clone();
-                            let _ = self.db.dispatch(move |d| {
-                                let _ = d.touch(&id);
-                            });
-                            tracing::info!("Copied: {}", entry.preview(30));
-                        }
-                    }
+                // Phase 2 paste-back from the side-inspector "Copy"
+                // button. Same path as `CopyEntry` once we resolve
+                // the entry from the panel's entry_id.
+                let entry_clone = if let ViewMode::EntryPanel(ref entry_id) = self.view_mode {
+                    self.entries.iter().find(|e| e.id == *entry_id).cloned()
+                } else {
+                    None
+                };
+                if let Some(entry) = entry_clone {
+                    self.paste_and_exit(entry);
                 }
                 self.save_window_state();
                 std::process::exit(0);
@@ -2803,6 +2935,21 @@ fn load_window_icon() -> Option<iced::window::Icon> {
 static APP_CONFIG: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
 static APP_START_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Phase 2 paste-back state. Wrapped in `Mutex<Option<T>>` so
+/// `boot_app` can `take()` ownership into the `DitoxApp` instance —
+/// these aren't `Sync` (the trackers are `Send`-only) and even
+/// `ForegroundSnapshot` shouldn't be cloned out of a static (it
+/// represents a one-time capture).
+#[allow(clippy::type_complexity)]
+static APP_PREVIOUS_FOREGROUND: std::sync::OnceLock<Mutex<Option<ForegroundSnapshot>>> =
+    std::sync::OnceLock::new();
+#[allow(clippy::type_complexity)]
+static APP_FOREGROUND_TRACKER: std::sync::OnceLock<Mutex<Option<Box<dyn ForegroundTracker>>>> =
+    std::sync::OnceLock::new();
+#[allow(clippy::type_complexity)]
+static APP_SYNTHESIZER_CHAIN: std::sync::OnceLock<Mutex<Option<Vec<Box<dyn Synthesizer>>>>> =
+    std::sync::OnceLock::new();
+
 fn boot_app() -> (DitoxApp, Task<Message>) {
     let config = APP_CONFIG
         .get()
@@ -2810,13 +2957,60 @@ fn boot_app() -> (DitoxApp, Task<Message>) {
         .clone();
     let start_hidden = APP_START_HIDDEN.load(std::sync::atomic::Ordering::Relaxed);
     let db = Database::open().expect("Failed to open database for app");
-    DitoxApp::new(db, config, start_hidden)
+
+    // Take ownership of the paste-back state from the statics. After
+    // this `take()`, subsequent calls to `boot_app` (which iced
+    // shouldn't do — boot is one-shot) would receive `None` and the
+    // launcher would degrade gracefully (clipboard-only, no restore).
+    let previous_foreground = APP_PREVIOUS_FOREGROUND
+        .get()
+        .and_then(|m| m.lock().ok().and_then(|mut g| g.take()));
+    let foreground_tracker = APP_FOREGROUND_TRACKER
+        .get()
+        .and_then(|m| m.lock().ok().and_then(|mut g| g.take()))
+        .unwrap_or_else(|| {
+            tracing::warn!("APP_FOREGROUND_TRACKER not set; using NoopForegroundTracker fallback");
+            Box::new(ditox_core::foreground::NoopForegroundTracker::new())
+        });
+    let synthesizer_chain = APP_SYNTHESIZER_CHAIN
+        .get()
+        .and_then(|m| m.lock().ok().and_then(|mut g| g.take()))
+        .unwrap_or_else(|| {
+            tracing::warn!("APP_SYNTHESIZER_CHAIN not set; using OffSynthesizer fallback");
+            vec![
+                Box::new(ditox_core::paste::synthesize::OffSynthesizer::new())
+                    as Box<dyn Synthesizer>,
+            ]
+        });
+
+    DitoxApp::new(
+        db,
+        config,
+        start_hidden,
+        previous_foreground,
+        foreground_tracker,
+        synthesizer_chain,
+    )
 }
 
-pub fn run_with(_db: Database, config: Config, start_hidden: bool) -> Result<()> {
+pub fn run_with(
+    _db: Database,
+    config: Config,
+    start_hidden: bool,
+    previous_foreground: Option<ForegroundSnapshot>,
+    foreground_tracker: Box<dyn ForegroundTracker>,
+    synthesizer_chain: Vec<Box<dyn Synthesizer>>,
+) -> Result<()> {
     // Store config for the boot function (db will be opened fresh since it's not Sync)
     let _ = APP_CONFIG.set(config);
     APP_START_HIDDEN.store(start_hidden, std::sync::atomic::Ordering::Relaxed);
+
+    // Phase 2 paste-back state. Wrapped in Mutex<Option<...>> so
+    // boot_app can take ownership; subsequent invocations (shouldn't
+    // happen but defensively handled) get None and degrade.
+    let _ = APP_PREVIOUS_FOREGROUND.set(Mutex::new(previous_foreground));
+    let _ = APP_FOREGROUND_TRACKER.set(Mutex::new(Some(foreground_tracker)));
+    let _ = APP_SYNTHESIZER_CHAIN.set(Mutex::new(Some(synthesizer_chain)));
 
     // One-shot floating-launcher: ignore any persisted size and force a
     // compact 420x520 window anchored to the bottom-left of the active

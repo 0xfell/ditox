@@ -54,6 +54,43 @@ use crate::error::Result;
 #[cfg(unix)]
 pub mod hyprctl;
 
+/// Build the platform-default [`ForegroundTracker`] wrapped in a
+/// [`ForegroundFilter`] that drops self-focus events.
+///
+/// Selection matrix (Phase 2 sub-task 2.8):
+///
+/// - **Hyprland** → [`hyprctl::HyprctlForegroundTracker`].
+/// - **Sway / generic wlroots / KDE Wayland** → [`NoopForegroundTracker`]
+///   for v0.4 (the wlr-foreign-toplevel-management implementation
+///   is the deferred half of sub-task 2.3).
+/// - **GNOME Wayland** → [`NoopForegroundTracker`] (no protocol
+///   support).
+/// - **X11** → [`NoopForegroundTracker`] for v0.4 (X11 tracker
+///   tracked separately).
+/// - **Windows** → [`NoopForegroundTracker`] for v0.4 (sub-task 2.2
+///   adds the `Win32ForegroundTracker`).
+/// - **macOS / Other** → [`NoopForegroundTracker`].
+///
+/// The launcher consults
+/// [`ForegroundSnapshot::identifier`]'s
+/// [`ForegroundId::supports_restore`] before attempting a restore,
+/// so even with the noop tracker the GUI degrades gracefully (write
+/// the clipboard, show "paste manually" status, exit).
+pub fn build_default_tracker() -> Box<dyn ForegroundTracker> {
+    use crate::platform::{detect, LinuxCompositor, Platform};
+    let p = detect();
+    #[cfg(unix)]
+    {
+        if let Platform::Linux(LinuxCompositor::Hyprland { .. }) = p {
+            return Box::new(ForegroundFilter::new(
+                hyprctl::HyprctlForegroundTracker::new(),
+            ));
+        }
+    }
+    let _ = p; // suppress unused on non-unix
+    Box::new(ForegroundFilter::new(NoopForegroundTracker::new()))
+}
+
 /// A point-in-time snapshot of the currently-focused window.
 ///
 /// Held by the launcher between summon and paste so the user's

@@ -17,7 +17,10 @@ mod cli;
 mod startup;
 
 use clap::Parser;
+use ditox_core::foreground::build_default_tracker;
 use ditox_core::logging;
+use ditox_core::paste::synthesize::pick_chain;
+use ditox_core::platform::detect as detect_platform;
 use ditox_core::{Config, Database, Result};
 
 fn main() {
@@ -73,6 +76,49 @@ fn run() -> Result<()> {
     // mode there's nothing to hide.
     let start_hidden = matches!(action, cli::Action::Hide);
 
+    // ---------------------------------------------------------------
+    // Phase 2 paste-back: capture the foreground window BEFORE iced
+    // creates its own window. By the time `app::run_with` returns,
+    // ditox-gui IS the focused window — so a snapshot from inside
+    // `boot_app` would return ourselves (and `ForegroundFilter` would
+    // correctly drop it, leaving us with no restore target).
+    // ---------------------------------------------------------------
+    let foreground_tracker = build_default_tracker();
+    let previous_foreground = match foreground_tracker.snapshot() {
+        Ok(snap) => {
+            if let Some(s) = &snap {
+                tracing::info!(
+                    process = %s.process_basename,
+                    title = %s.title,
+                    kind = %s.identifier.kind(),
+                    "captured previous-foreground snapshot for paste-back"
+                );
+            } else {
+                tracing::info!(
+                    "no previous-foreground snapshot (no foreground or platform unsupported); \
+                     paste-back will write clipboard only"
+                );
+            }
+            snap
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "foreground snapshot failed; paste-back will write clipboard only");
+            None
+        }
+    };
+    let synthesizer_chain = pick_chain(detect_platform());
+    tracing::debug!(
+        chain = ?synthesizer_chain.iter().map(|s| s.name()).collect::<Vec<_>>(),
+        "constructed paste-back synthesizer chain"
+    );
+
     // Run the iced application
-    app::run_with(db, config, start_hidden)
+    app::run_with(
+        db,
+        config,
+        start_hidden,
+        previous_foreground,
+        foreground_tracker,
+        synthesizer_chain,
+    )
 }
