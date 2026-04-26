@@ -4,36 +4,62 @@ mod ui;
 
 use clap::Parser;
 use cli::{Cli, CollectionCommands, Commands};
+use ditox_core::logging;
 use ditox_core::{
     Clipboard, Collection, Config, Database, DitoxError, Entry, EntryType, Result, Watcher,
 };
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config as MatcherConfig, Matcher};
-use tracing_subscriber::EnvFilter;
 
 fn main() {
     if let Err(e) = run() {
+        // Last-resort: tracing may not be initialised on early errors.
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
 }
 
 fn run() -> Result<()> {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("ditox=info")),
-        )
-        .init();
+    // Initialise logging via the shared helper. RUST_LOG honoured.
+    logging::init(logging::Mode::Stderr);
 
     let cli = Cli::parse();
     let config = Config::load()?;
+    // Apply [storage].data_dir override (if any) before opening the DB
+    // so all path resolution (db path, images dir, watcher PID) lands
+    // in the user-chosen location.
+    if let Some(override_dir) = config.apply_storage_override()? {
+        tracing::info!("data_dir override active: {}", override_dir.display());
+        // Soft-warn if the user pointed somewhere new while a legacy
+        // default DB still exists — they're effectively starting fresh.
+        if Config::legacy_db_exists_outside(&override_dir) {
+            tracing::warn!(
+                "data_dir override points at {} (no ditox.db there yet) but \
+                 a legacy default ditox.db exists. The override starts a \
+                 new history; copy or move the legacy DB if you want it.",
+                override_dir.display()
+            );
+        }
+    }
     let mut db = Database::open()?;
     db.init_schema()?;
 
     match cli.command {
         None => run_tui(db, config),
-        Some(Commands::Watch) => run_watcher(db, config),
+        Some(Commands::Watch {
+            stop,
+            status,
+            json,
+            journal: _journal,
+        }) => {
+            if stop {
+                cmd_watch_stop()
+            } else if status {
+                cmd_watch_status(json)
+            } else {
+                run_watcher(db, config)
+            }
+        }
         Some(Commands::List {
             limit,
             json,
@@ -63,6 +89,63 @@ fn run_tui(db: Database, config: Config) -> Result<()> {
 fn run_watcher(db: Database, config: Config) -> Result<()> {
     let mut watcher = Watcher::new(db, config);
     watcher.run()
+}
+
+fn cmd_watch_stop() -> Result<()> {
+    use ditox_core::watcher;
+    match watcher::stop_watcher()? {
+        true => {
+            println!("watcher stop signal sent");
+            // Poll for up to 3 seconds for confirmation.
+            let start = std::time::Instant::now();
+            while start.elapsed() < std::time::Duration::from_secs(3) {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                let st = watcher::watcher_status();
+                if !st.pid_alive {
+                    println!("watcher stopped");
+                    return Ok(());
+                }
+            }
+            eprintln!("watcher PID still alive after 3s; you may need SIGKILL manually");
+            std::process::exit(2);
+        }
+        false => {
+            println!("no watcher running");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_watch_status(json: bool) -> Result<()> {
+    use ditox_core::watcher;
+    let st = watcher::watcher_status();
+    if json {
+        let out = serde_json::to_string_pretty(&st)
+            .map_err(|e| DitoxError::Other(format!("JSON serialization error: {}", e)))?;
+        println!("{}", out);
+        return Ok(());
+    }
+    println!("Watcher Status");
+    println!("──────────────");
+    match st.pid {
+        Some(p) => println!("PID:           {}", p),
+        None => println!("PID:           (no PID file)"),
+    }
+    println!("PID alive:     {}", if st.pid_alive { "yes" } else { "no" });
+    println!("Lock held:     {}", if st.locked { "yes" } else { "no" });
+    match st.last_heartbeat {
+        Some(ts) => println!(
+            "Heartbeat:     {} ({}s ago)",
+            ts,
+            st.heartbeat_age_secs.unwrap_or(0)
+        ),
+        None => println!("Heartbeat:     (none)"),
+    }
+    println!("Healthy:       {}", if st.healthy { "yes" } else { "no" });
+    if !st.healthy && st.pid.is_some() {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 fn cmd_list(db: &Database, limit: usize, json: bool, favorites_only: bool) -> Result<()> {
@@ -158,12 +241,44 @@ fn cmd_status(db: &Database) -> Result<()> {
     let count = db.count()?;
     let data_dir = Database::get_data_dir()?;
     let images_dir = Database::get_images_dir()?;
+    let platform = ditox_core::platform::detect();
 
     println!("Ditox Status");
     println!("────────────");
     println!("Entries:     {}", count);
     println!("Data dir:    {}", data_dir.display());
     println!("Images dir:  {}", images_dir.display());
+    println!("Platform:    {}", platform.slug());
+    println!(
+        "  layer-shell:    {}",
+        if platform.supports_layer_shell() {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    println!(
+        "  wlr-toplevel:   {}",
+        if platform.supports_wlr_foreign_toplevel() {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    println!(
+        "  global hotkey:  {}",
+        if platform.supports_global_hotkey_in_app() {
+            "in-app"
+        } else {
+            "compositor-managed"
+        }
+    );
+    let chain = platform.paste_synthesizer_chain();
+    if chain.is_empty() {
+        println!("  paste chain:    (none)");
+    } else {
+        println!("  paste chain:    {}", chain.join(" → "));
+    }
 
     // Check if images directory exists and count files
     if images_dir.exists() {
@@ -356,7 +471,7 @@ fn cmd_repair(db: &mut Database, dry_run: bool, fix_hashes: bool) -> Result<()> 
             let bytes = match std::fs::read(path) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("warn: could not read {}: {}", path.display(), e);
+                    tracing::warn!("could not read {}: {}", path.display(), e);
                     continue;
                 }
             };
@@ -399,14 +514,14 @@ fn cmd_repair(db: &mut Database, dry_run: bool, fix_hashes: bool) -> Result<()> 
     }
     for p in &orphans {
         if let Err(e) = std::fs::remove_file(p) {
-            eprintln!("warn: could not remove {}: {}", p.display(), e);
+            tracing::warn!("could not remove {}: {}", p.display(), e);
         }
     }
     if fix_hashes {
         for (_id, db_hash, ext, path, actual) in &mismatched {
             match Database::quarantine_file(path, db_hash, actual, ext) {
                 Ok(dest) => println!("  quarantined {} -> {}", path.display(), dest.display()),
-                Err(e) => eprintln!("warn: could not quarantine {}: {}", path.display(), e),
+                Err(e) => tracing::warn!("could not quarantine {}: {}", path.display(), e),
             }
         }
     }

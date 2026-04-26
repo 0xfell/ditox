@@ -11,8 +11,26 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Start clipboard watcher daemon
-    Watch,
+    /// Start clipboard watcher daemon, or control the running one.
+    Watch {
+        /// Stop the running watcher daemon (sends SIGTERM on Unix,
+        /// TerminateProcess on Windows).
+        #[arg(long, conflicts_with_all = ["status", "journal"])]
+        stop: bool,
+
+        /// Print the watcher daemon's status and exit. JSON via
+        /// `--status --json`.
+        #[arg(long, conflicts_with = "stop")]
+        status: bool,
+
+        /// JSON output (only with `--status`).
+        #[arg(long, requires = "status")]
+        json: bool,
+
+        /// Log to systemd journal instead of stderr (Linux only).
+        #[arg(long, conflicts_with_all = ["stop", "status"])]
+        journal: bool,
+    },
 
     /// List recent clipboard entries
     List {
