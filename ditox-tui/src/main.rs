@@ -3,7 +3,8 @@ mod keybindings;
 mod ui;
 
 use clap::Parser;
-use cli::{Cli, CollectionCommands, Commands};
+use cli::{Cli, CollectionCommands, Commands, RulesCommands};
+use ditox_core::filter::{FilterAction, FilterRule, PatternKind};
 use ditox_core::logging;
 use ditox_core::{
     Clipboard, Collection, Config, Database, DitoxError, Entry, EntryType, Result, Watcher,
@@ -83,6 +84,7 @@ fn run() -> Result<()> {
             action,
             print_only,
         }) => cmd_open(&db, &config, &target, &action, print_only),
+        Some(Commands::Rules(subcmd)) => cmd_rules(&db, subcmd),
         Some(Commands::Transform {
             list,
             json,
@@ -106,6 +108,175 @@ fn run() -> Result<()> {
             }
         }
         Some(Commands::Collection(subcmd)) => cmd_collection(&db, subcmd),
+    }
+}
+
+fn cmd_rules(db: &Database, sub: RulesCommands) -> Result<()> {
+    match sub {
+        RulesCommands::List { json } => cmd_rules_list(db, json),
+        RulesCommands::Add {
+            name,
+            pattern,
+            kind,
+            process,
+            action,
+        } => cmd_rules_add(db, &name, &pattern, &kind, process.as_deref(), &action),
+        RulesCommands::Show { target, json } => cmd_rules_show(db, &target, json),
+        RulesCommands::Delete { target } => cmd_rules_delete(db, &target),
+        RulesCommands::Enable { target } => cmd_rules_set_enabled(db, &target, true),
+        RulesCommands::Disable { target } => cmd_rules_set_enabled(db, &target, false),
+        RulesCommands::Reorder { target, position } => cmd_rules_reorder(db, &target, position),
+    }
+}
+
+fn cmd_rules_list(db: &Database, json: bool) -> Result<()> {
+    let rules = db.list_filter_rules()?;
+    if json {
+        let out = serde_json::to_string_pretty(&rules)
+            .map_err(|e| DitoxError::Other(format!("JSON serialization error: {}", e)))?;
+        println!("{}", out);
+        return Ok(());
+    }
+
+    if rules.is_empty() {
+        println!("No filter rules configured.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<5} {:<10} {:<6} {:<22} {:<10} {:<14} NAME / PATTERN",
+        "POS", "ENABLED", "KIND", "ID", "PROCESS", "ACTION"
+    );
+    let bar = "─".repeat(100);
+    println!("{}", bar);
+    for r in &rules {
+        let id_short = if r.id.len() > 8 { &r.id[..8] } else { &r.id };
+        let process = r.process_glob.as_deref().unwrap_or("-");
+        println!(
+            "{:<5} {:<10} {:<6} {:<22} {:<10} {:<14} {}",
+            r.position,
+            if r.enabled { "yes" } else { "no" },
+            r.pattern_kind.as_str(),
+            id_short,
+            process,
+            r.action.to_storage(),
+            r.name
+        );
+        println!(
+            "{:<5} {:<10} {:<6} {:<22} {:<10} {:<14}   {}",
+            "", "", "", "", "", "", r.pattern
+        );
+    }
+    Ok(())
+}
+
+fn cmd_rules_add(
+    db: &Database,
+    name: &str,
+    pattern: &str,
+    kind_str: &str,
+    process: Option<&str>,
+    action_str: &str,
+) -> Result<()> {
+    let kind = match PatternKind::from_str_lossy(kind_str) {
+        Some(k) => k,
+        None => {
+            eprintln!(
+                "ditox rules add: unknown --kind '{}'. Valid: regex, glob, contains.",
+                kind_str
+            );
+            std::process::exit(2);
+        }
+    };
+    let action = match FilterAction::from_storage(action_str) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("ditox rules add: {}", e);
+            std::process::exit(2);
+        }
+    };
+
+    let position = db.max_filter_rule_position()? + 1;
+    let rule = FilterRule::new_now(
+        name,
+        pattern,
+        kind,
+        process.map(String::from),
+        action,
+        position,
+    );
+
+    db.add_filter_rule(&rule)?;
+    println!(
+        "Added rule {} \"{}\" ({}) at position {}",
+        &rule.id[..8],
+        rule.name,
+        rule.action.to_storage(),
+        rule.position
+    );
+    Ok(())
+}
+
+fn cmd_rules_show(db: &Database, target: &str, json: bool) -> Result<()> {
+    let rule = match db.get_filter_rule(target)? {
+        Some(r) => r,
+        None => {
+            eprintln!("Rule not found: {}", target);
+            std::process::exit(1);
+        }
+    };
+    if json {
+        let out = serde_json::to_string_pretty(&rule)
+            .map_err(|e| DitoxError::Other(format!("JSON serialization error: {}", e)))?;
+        println!("{}", out);
+        return Ok(());
+    }
+    println!("ID:           {}", rule.id);
+    println!("Name:         {}", rule.name);
+    println!("Pattern:      {}", rule.pattern);
+    println!("Pattern kind: {}", rule.pattern_kind.as_str());
+    println!(
+        "Process glob: {}",
+        rule.process_glob.as_deref().unwrap_or("-")
+    );
+    println!("Action:       {}", rule.action.to_storage());
+    println!("Enabled:      {}", rule.enabled);
+    println!("Position:     {}", rule.position);
+    println!("Created:      {}", rule.created_at);
+    Ok(())
+}
+
+fn cmd_rules_delete(db: &Database, target: &str) -> Result<()> {
+    if db.delete_filter_rule(target)? {
+        println!("Deleted rule {}", target);
+        Ok(())
+    } else {
+        eprintln!("Rule not found: {}", target);
+        std::process::exit(1);
+    }
+}
+
+fn cmd_rules_set_enabled(db: &Database, target: &str, enabled: bool) -> Result<()> {
+    if db.set_filter_rule_enabled(target, enabled)? {
+        println!(
+            "Rule {} {}",
+            target,
+            if enabled { "enabled" } else { "disabled" }
+        );
+        Ok(())
+    } else {
+        eprintln!("Rule not found: {}", target);
+        std::process::exit(1);
+    }
+}
+
+fn cmd_rules_reorder(db: &Database, target: &str, position: i64) -> Result<()> {
+    if db.set_filter_rule_position(target, position)? {
+        println!("Rule {} moved to position {}", target, position);
+        Ok(())
+    } else {
+        eprintln!("Rule not found: {}", target);
+        std::process::exit(1);
     }
 }
 

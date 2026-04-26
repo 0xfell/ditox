@@ -33,6 +33,11 @@ pub struct Watcher {
     /// using `with_sources` and for platforms without a tracker
     /// (GNOME Wayland).
     foreground_tracker: Box<dyn ForegroundTracker>,
+    /// Phase 3 sub-task 3.4: capture-time filter rules. Compiled
+    /// once at watcher construction; reload via [`Watcher::reload_filters`]
+    /// when the user adds/removes/edits rules. Empty engine = no
+    /// rules to evaluate (cheap short-circuit).
+    filters: crate::filter::FilterEngine,
     /// Last `clip_hash` we processed. Used as a fast in-memory dedup
     /// short-circuit so we don't re-hash large images on every poll.
     /// Persistent dedup happens via `Database::exists_by_hash` against
@@ -365,13 +370,42 @@ impl Watcher {
         sources: Vec<Box<dyn CaptureSource>>,
         foreground_tracker: Box<dyn ForegroundTracker>,
     ) -> Self {
+        // Load filter rules from the DB at construction time. A
+        // failed read is logged and the engine starts empty —
+        // best-effort, never blocks watcher startup.
+        let filters = match db.list_filter_rules() {
+            Ok(rules) => crate::filter::FilterEngine::from_rules(rules),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not load filter_rules; starting with empty engine");
+                crate::filter::FilterEngine::from_rules(vec![])
+            }
+        };
         Self {
             db,
             config,
             sources,
             foreground_tracker,
+            filters,
             last_hash: None,
             _lock: None,
+        }
+    }
+
+    /// Reload filter rules from the DB. Called by the watcher
+    /// daemon's run loop on a slow cadence (every N polls) so
+    /// edits made via `ditox rules add/delete/...` are picked up
+    /// without restarting the daemon. The reload is best-effort:
+    /// a transient DB error keeps the existing engine.
+    pub fn reload_filters(&mut self) {
+        match self.db.list_filter_rules() {
+            Ok(rules) => {
+                let len = rules.len();
+                self.filters = crate::filter::FilterEngine::from_rules(rules);
+                debug!(count = len, "reloaded filter rules");
+            }
+            Err(e) => {
+                debug!(error = %e, "filter rule reload skipped (DB error)");
+            }
         }
     }
 
@@ -574,26 +608,81 @@ impl Watcher {
         // in our history at all" — including not bumping `last_hash`,
         // since a future clipboard-of-the-same-bytes from a different
         // app should still be capturable.
+        //
+        // Take the snapshot once and reuse it for both the exclusion
+        // check (sub-task 3.2) and the filter-rule check (sub-task
+        // 3.4) below, so we don't double-poll the foreground.
+        let fg_basename: Option<String> = match self.foreground_tracker.snapshot() {
+            Ok(Some(fg)) => Some(fg.process_basename),
+            Ok(None) => None,
+            Err(e) => {
+                debug!(
+                    error = %e,
+                    "foreground tracker error; capturing clip without exclusion / filter check"
+                );
+                None
+            }
+        };
+
         if !self.config.capture.exclude.processes.is_empty() {
-            match self.foreground_tracker.snapshot() {
-                Ok(Some(fg)) if self.config.capture.exclude.excludes(&fg.process_basename) => {
+            if let Some(basename) = fg_basename.as_deref() {
+                if self.config.capture.exclude.excludes(basename) {
                     debug!(
-                        process = %fg.process_basename,
+                        process = %basename,
                         "skipping clip: foreground app matches [capture.exclude]"
                     );
-                    // Intentionally do NOT update `last_hash` — see
-                    // the rationale above.
+                    // Intentionally do NOT update `last_hash`.
                     return Ok(false);
                 }
-                Ok(_) => {
-                    // Tracker available but no foreground / no match —
-                    // fall through to normal capture.
-                }
-                Err(e) => {
-                    debug!(
-                        error = %e,
-                        "foreground tracker error; capturing clip without exclusion check"
-                    );
+            }
+        }
+
+        // Filter rules (Phase 3 sub-task 3.4). Evaluate against the
+        // clip's text content. Image-only clips skip rule evaluation
+        // (rules currently match against text bodies; image-aware
+        // rules can land in a Phase 4 follow-up).
+        if !self.filters.is_empty() {
+            // Get the text content if any. Filter rules see the raw
+            // text payload as the watcher would otherwise insert it.
+            let text_payload: Option<String> = clip
+                .first_with_prefix("text/plain")
+                .map(|f| String::from_utf8_lossy(&f.bytes).into_owned());
+
+            if let Some(text) = text_payload.as_deref() {
+                if let Some(matched) = self.filters.evaluate(text, fg_basename.as_deref()) {
+                    use crate::filter::FilterAction;
+                    match &matched.rule.action {
+                        FilterAction::Drop => {
+                            info!(
+                                rule = %matched.rule.name,
+                                "filter rule matched (drop): skipping clip"
+                            );
+                            // Intentionally do NOT advance last_hash —
+                            // a future identical clip from a non-matching
+                            // context should still be capturable.
+                            return Ok(false);
+                        }
+                        FilterAction::Transform(_) => {
+                            // Transform application requires more
+                            // plumbing (we'd need to mutate the
+                            // outgoing clip's text format and possibly
+                            // its hash). Land as a Phase 3 follow-up
+                            // — for now log + capture normally so the
+                            // user sees the rule fire.
+                            info!(
+                                rule = %matched.rule.name,
+                                action = %matched.rule.action.to_storage(),
+                                "filter rule matched: transform action not yet wired; capturing as-is"
+                            );
+                        }
+                        FilterAction::Tag(_) => {
+                            info!(
+                                rule = %matched.rule.name,
+                                action = %matched.rule.action.to_storage(),
+                                "filter rule matched: tags not yet implemented (Phase 4b); capturing without tag"
+                            );
+                        }
+                    }
                 }
             }
         }

@@ -473,6 +473,180 @@ impl ForegroundTracker for MockForegroundTrackerHandle {
     }
 }
 
+// ============================================================================
+// Filter rules (Phase 3 sub-task 3.4)
+// ============================================================================
+
+#[test]
+fn watcher_drops_clip_matching_filter_rule() -> Result<(), Box<dyn StdError>> {
+    use ditox_core::filter::{FilterAction, FilterRule, PatternKind};
+
+    let _g = OVERRIDE_LOCK.lock().unwrap();
+    reset_override();
+    let (_tmp, db) = setup_db();
+
+    // Persist a filter rule that drops anything containing "secret".
+    let rule = FilterRule::new_now(
+        "drop-secrets",
+        "secret",
+        PatternKind::Contains,
+        None,
+        FilterAction::Drop,
+        0,
+    );
+    db.add_filter_rule(&rule)?;
+
+    let source = Box::new(QueueSource::new(
+        "rule-source",
+        vec![RawClip::text("a secret value".to_string())],
+    ));
+    let tracker: Box<dyn ForegroundTracker> = Box::new(MockForegroundTracker::new(None));
+
+    let mut watcher =
+        Watcher::with_sources_and_tracker(db, Config::default(), vec![source], tracker);
+
+    let captured = watcher.poll_once()?;
+    assert!(!captured, "rule must drop matching clip");
+
+    let db2 = open_with_schema();
+    assert_eq!(
+        db2.get_all(1000)?.len(),
+        0,
+        "no entry must reach the database when a drop rule matches"
+    );
+
+    reset_override();
+    Ok(())
+}
+
+#[test]
+fn watcher_captures_clip_not_matching_any_filter_rule() -> Result<(), Box<dyn StdError>> {
+    use ditox_core::filter::{FilterAction, FilterRule, PatternKind};
+
+    let _g = OVERRIDE_LOCK.lock().unwrap();
+    reset_override();
+    let (_tmp, db) = setup_db();
+
+    let rule = FilterRule::new_now(
+        "drop-secrets",
+        "secret",
+        PatternKind::Contains,
+        None,
+        FilterAction::Drop,
+        0,
+    );
+    db.add_filter_rule(&rule)?;
+
+    let source = Box::new(QueueSource::new(
+        "rule-pass",
+        vec![RawClip::text("public information".to_string())],
+    ));
+    let tracker: Box<dyn ForegroundTracker> = Box::new(MockForegroundTracker::new(None));
+
+    let mut watcher =
+        Watcher::with_sources_and_tracker(db, Config::default(), vec![source], tracker);
+
+    let captured = watcher.poll_once()?;
+    assert!(captured, "non-matching clip must pass through filter rules");
+
+    let db2 = open_with_schema();
+    let entries = db2.get_all(1000)?;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].content, "public information");
+
+    reset_override();
+    Ok(())
+}
+
+#[test]
+fn watcher_filter_rules_first_match_wins() -> Result<(), Box<dyn StdError>> {
+    use ditox_core::filter::{FilterAction, FilterRule, PatternKind};
+
+    let _g = OVERRIDE_LOCK.lock().unwrap();
+    reset_override();
+    let (_tmp, db) = setup_db();
+
+    // First rule (position 0) drops; second rule (position 1) would
+    // also match but is irrelevant — the engine stops after the
+    // first match.
+    let r1 = FilterRule::new_now(
+        "drop-first",
+        "value",
+        PatternKind::Contains,
+        None,
+        FilterAction::Drop,
+        0,
+    );
+    let r2 = FilterRule::new_now(
+        "tag-second",
+        "value",
+        PatternKind::Contains,
+        None,
+        FilterAction::Tag("would-tag".to_string()),
+        1,
+    );
+    db.add_filter_rule(&r1)?;
+    db.add_filter_rule(&r2)?;
+
+    let source = Box::new(QueueSource::new(
+        "first-wins",
+        vec![RawClip::text("a value to drop".to_string())],
+    ));
+    let tracker: Box<dyn ForegroundTracker> = Box::new(MockForegroundTracker::new(None));
+
+    let mut watcher =
+        Watcher::with_sources_and_tracker(db, Config::default(), vec![source], tracker);
+
+    assert!(!watcher.poll_once()?);
+    let db2 = open_with_schema();
+    assert_eq!(db2.get_all(1000)?.len(), 0);
+
+    reset_override();
+    Ok(())
+}
+
+#[test]
+fn watcher_filter_rule_process_glob_restricts_match() -> Result<(), Box<dyn StdError>> {
+    use ditox_core::filter::{FilterAction, FilterRule, PatternKind};
+
+    let _g = OVERRIDE_LOCK.lock().unwrap();
+    reset_override();
+    let (_tmp, db) = setup_db();
+
+    // Rule only fires when foreground basename matches *Term*.
+    let rule = FilterRule::new_now(
+        "scoped",
+        "secret",
+        PatternKind::Contains,
+        Some("*Term*".to_string()),
+        FilterAction::Drop,
+        0,
+    );
+    db.add_filter_rule(&rule)?;
+
+    // Tracker reports "Firefox" — does NOT match scope → rule should
+    // not fire → clip captured.
+    let source = Box::new(QueueSource::new(
+        "scope-miss",
+        vec![RawClip::text("a secret payload".to_string())],
+    ));
+    let tracker: Box<dyn ForegroundTracker> =
+        Box::new(MockForegroundTracker::new(Some(make_snap("Firefox"))));
+
+    let mut watcher =
+        Watcher::with_sources_and_tracker(db, Config::default(), vec![source], tracker);
+
+    assert!(
+        watcher.poll_once()?,
+        "scoped rule must skip non-matching foreground"
+    );
+    let db2 = open_with_schema();
+    assert_eq!(db2.get_all(1000)?.len(), 1);
+
+    reset_override();
+    Ok(())
+}
+
 #[test]
 fn empty_exclude_list_skips_foreground_check() -> Result<(), Box<dyn StdError>> {
     let _g = OVERRIDE_LOCK.lock().unwrap();

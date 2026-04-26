@@ -154,6 +154,26 @@ pub enum Commands {
         print_only: bool,
     },
 
+    /// Manage capture-time filter rules (Phase 3 sub-task 3.4).
+    ///
+    /// Rules match patterns against incoming clipboard text and
+    /// take an action (`drop` / `transform:<id>` / `tag:<name>`).
+    /// Evaluated in `position` order; first match wins.
+    ///
+    /// Examples:
+    ///
+    /// ```sh
+    /// ditox rules list
+    /// ditox rules add --name "drop pwds" --pattern "(?i)password" \
+    ///                 --kind regex --action drop
+    /// ditox rules add --name "redact ID" --pattern "INC-*" --kind glob \
+    ///                 --process keepassxc --action drop
+    /// ditox rules disable <id>
+    /// ditox rules delete <id>
+    /// ```
+    #[command(subcommand)]
+    Rules(RulesCommands),
+
     /// Apply a transform to an entry's text and copy the result to
     /// the clipboard (Phase 3 sub-task 3.1). Original entry is never
     /// mutated.
@@ -194,6 +214,82 @@ pub enum Commands {
     /// Manage collections
     #[command(subcommand)]
     Collection(CollectionCommands),
+}
+
+#[derive(Subcommand)]
+pub enum RulesCommands {
+    /// List all filter rules in evaluation order.
+    List {
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Add a new filter rule. The rule is appended at the end of
+    /// the evaluation order (highest position) and starts enabled.
+    Add {
+        /// User-facing name for the rule (shown in `list`).
+        #[arg(long)]
+        name: String,
+
+        /// Pattern to match against captured clipboard text.
+        #[arg(long)]
+        pattern: String,
+
+        /// How `pattern` is interpreted: `regex`, `glob`, or
+        /// `contains` (substring; ASCII case-insensitive).
+        #[arg(long, default_value = "contains")]
+        kind: String,
+
+        /// Optional process-name glob restricting the rule to
+        /// captures where the foreground app's basename matches.
+        #[arg(long)]
+        process: Option<String>,
+
+        /// Action: `drop` (default), `transform:<transform-id>`, or
+        /// `tag:<tag-name>` (tags Phase 4b — parsed but not yet
+        /// applied).
+        #[arg(long, default_value = "drop")]
+        action: String,
+    },
+
+    /// Show one filter rule by id.
+    Show {
+        /// Rule id (UUID).
+        target: String,
+
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Delete a filter rule by id.
+    Delete {
+        /// Rule id (UUID).
+        target: String,
+    },
+
+    /// Enable a filter rule by id.
+    Enable {
+        /// Rule id (UUID).
+        target: String,
+    },
+
+    /// Disable a filter rule by id.
+    Disable {
+        /// Rule id (UUID).
+        target: String,
+    },
+
+    /// Move a filter rule to a specific position. Lower positions
+    /// evaluate first.
+    Reorder {
+        /// Rule id (UUID).
+        target: String,
+
+        /// New position (`i64`). Negative values are accepted; the
+        /// engine sorts numerically ascending.
+        position: i64,
+    },
 }
 
 #[derive(Subcommand)]

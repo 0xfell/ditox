@@ -15,6 +15,7 @@ pub mod db;
 pub mod db_actor;
 pub mod entry;
 pub mod error;
+pub mod filter;
 pub mod foreground;
 pub mod format;
 pub mod logging;

@@ -18,7 +18,9 @@ use std::sync::RwLock;
 /// - 3: multi-format storage — `entry_formats` table + `entries.canonical_format`
 ///   pointer + per-format `format_content_fts` index. `entries_fts` is kept
 ///   for backwards-compat single-format search; Phase 2+ may consolidate.
-pub const SCHEMA_VERSION: i64 = 3;
+/// - 4: filter rules table (Phase 3 sub-task 3.4) — `filter_rules` for
+///   pattern-based capture-time pipeline (drop / transform / tag).
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// Subdirectory inside `images/` that holds files quarantined by
 /// `ditox repair --fix-hashes` because their on-disk hash didn't match the
@@ -793,6 +795,15 @@ impl Database {
             self.write_schema_version(3)?;
         }
 
+        // Schema v4: filter rules (Phase 3 sub-task 3.4). Adds a
+        // `filter_rules` table for pattern-based capture-time
+        // pipeline. Existing entries are unaffected; rules apply
+        // only to NEW captures.
+        if self.read_schema_version().unwrap_or(0) < 4 {
+            self.migrate_to_v4()?;
+            self.write_schema_version(4)?;
+        }
+
         // Startup reconciliation: drain any pending prunes left from a crash,
         // and sweep stale `.tmp` files from previous aborted writes. Cheap
         // (milliseconds) and self-healing on every open.
@@ -1095,6 +1106,48 @@ impl Database {
                 [],
             )?;
         }
+
+        Ok(())
+    }
+
+    /// Schema v3 → v4 migration. Adds the `filter_rules` table
+    /// (Phase 3 sub-task 3.4): a user-managed pattern pipeline
+    /// evaluated at capture time. Each rule has:
+    ///
+    /// - `id`: stable UUID assigned by `db.add_filter_rule`.
+    /// - `name`: human-readable label shown in lists / errors.
+    /// - `pattern` + `pattern_kind`: the matcher. Kind is one of
+    ///   `regex`, `glob`, or `contains`.
+    /// - `process_glob`: optional glob restricting the rule to
+    ///   captures where the foreground app's basename matches.
+    /// - `action`: serialised as `'drop'` / `'transform:<id>'` /
+    ///   `'tag:<name>'`.
+    /// - `enabled`: 0/1.
+    /// - `position`: evaluation order (lower wins).
+    /// - `created_at`: ISO-8601.
+    ///
+    /// Idempotent: re-running on a v4+ DB is a no-op (version
+    /// check in `init_schema` skips this branch).
+    fn migrate_to_v4(&self) -> Result<()> {
+        tracing::info!("applying schema migration v3 -> v4 (filter rules)");
+
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS filter_rules (
+                id           TEXT PRIMARY KEY,
+                name         TEXT NOT NULL,
+                pattern      TEXT NOT NULL,
+                pattern_kind TEXT NOT NULL,
+                process_glob TEXT,
+                action       TEXT NOT NULL,
+                enabled      INTEGER NOT NULL DEFAULT 1,
+                position     INTEGER NOT NULL DEFAULT 0,
+                created_at   TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_filter_rules_position
+                ON filter_rules(position);
+            CREATE INDEX IF NOT EXISTS idx_filter_rules_enabled_position
+                ON filter_rules(enabled, position);",
+        )?;
 
         Ok(())
     }
@@ -2296,6 +2349,139 @@ impl Database {
             keybind: keybind_str.and_then(|s| s.chars().next()),
             position: row.get(4)?,
             created_at,
+        })
+    }
+
+    // ============= Filter Rule Methods (Phase 3 sub-task 3.4) =============
+
+    /// Insert a new filter rule. Returns the inserted rule's id.
+    pub fn add_filter_rule(&self, rule: &crate::filter::FilterRule) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO filter_rules (id, name, pattern, pattern_kind, process_glob, action, enabled, position, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                rule.id,
+                rule.name,
+                rule.pattern,
+                rule.pattern_kind.as_str(),
+                rule.process_glob,
+                rule.action.to_storage(),
+                if rule.enabled { 1_i64 } else { 0_i64 },
+                rule.position,
+                rule.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// All filter rules ordered by `position` ascending. Disabled
+    /// rules are included; the engine filters them out at compile
+    /// time.
+    pub fn list_filter_rules(&self) -> Result<Vec<crate::filter::FilterRule>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, pattern, pattern_kind, process_glob, action, enabled, position, created_at
+             FROM filter_rules
+             ORDER BY position ASC, created_at ASC",
+        )?;
+        let rules = stmt
+            .query_map([], Self::row_to_filter_rule)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rules)
+    }
+
+    /// Look up a single rule by id.
+    pub fn get_filter_rule(&self, id: &str) -> Result<Option<crate::filter::FilterRule>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, pattern, pattern_kind, process_glob, action, enabled, position, created_at
+             FROM filter_rules WHERE id = ?1",
+        )?;
+        let rule = stmt.query_row([id], Self::row_to_filter_rule).optional()?;
+        Ok(rule)
+    }
+
+    /// Delete a filter rule by id. Returns `true` iff a row was
+    /// removed.
+    pub fn delete_filter_rule(&self, id: &str) -> Result<bool> {
+        let rows = self
+            .conn
+            .execute("DELETE FROM filter_rules WHERE id = ?1", [id])?;
+        Ok(rows > 0)
+    }
+
+    /// Toggle enabled-ness for a single rule. Returns `true` iff a
+    /// row was updated.
+    pub fn set_filter_rule_enabled(&self, id: &str, enabled: bool) -> Result<bool> {
+        let rows = self.conn.execute(
+            "UPDATE filter_rules SET enabled = ?1 WHERE id = ?2",
+            params![if enabled { 1_i64 } else { 0_i64 }, id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Set the `position` of a single rule. Re-ordering all rules
+    /// to compact positions is left to the caller; the engine
+    /// sorts on load so non-contiguous positions are fine.
+    pub fn set_filter_rule_position(&self, id: &str, position: i64) -> Result<bool> {
+        let rows = self.conn.execute(
+            "UPDATE filter_rules SET position = ?1 WHERE id = ?2",
+            params![position, id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Largest `position` currently in use. Used by `add` to
+    /// append new rules at the end.
+    pub fn max_filter_rule_position(&self) -> Result<i64> {
+        let max: Option<i64> = self
+            .conn
+            .query_row("SELECT MAX(position) FROM filter_rules", [], |row| {
+                row.get(0)
+            })
+            .optional()?
+            .flatten();
+        Ok(max.unwrap_or(-1))
+    }
+
+    fn row_to_filter_rule(
+        row: &rusqlite::Row,
+    ) -> std::result::Result<crate::filter::FilterRule, rusqlite::Error> {
+        let pattern_kind_str: String = row.get(3)?;
+        let action_str: String = row.get(5)?;
+        let enabled_int: i64 = row.get(6)?;
+
+        let pattern_kind = crate::filter::PatternKind::from_str_lossy(&pattern_kind_str)
+            .ok_or_else(|| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    3,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("unknown pattern_kind '{pattern_kind_str}'"),
+                    )),
+                )
+            })?;
+
+        let action = crate::filter::FilterAction::from_storage(&action_str).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                5,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{e}"),
+                )),
+            )
+        })?;
+
+        Ok(crate::filter::FilterRule {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            pattern: row.get(2)?,
+            pattern_kind,
+            process_glob: row.get(4)?,
+            action,
+            enabled: enabled_int != 0,
+            position: row.get(7)?,
+            created_at: row.get(8)?,
         })
     }
 }

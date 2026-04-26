@@ -1,6 +1,6 @@
 # Task: Phase 3 — Power-user features
 
-> **Status:** in-progress (6/8 sub-tasks done — 3.1, 3.2, 3.5 (Linux), 3.6, 3.7, 3.8)
+> **Status:** in-progress (7/8 sub-tasks done — 3.1, 3.2, 3.4, 3.5 (Linux), 3.6, 3.7, 3.8)
 > **Priority:** medium
 > **Phase:** 3 — Power-user features
 > **Created:** 2026-04-26
@@ -715,3 +715,133 @@ should land alongside or in a Phase-2-style follow-up task.
 
 **Workspace test count after this session: 449 tests** (was 441;
 +8 power module tests). All clippy `-D warnings` + fmt clean.
+
+### 2026-04-26 — sub-task 3.4 landed
+
+**3.4 — Filter rules.**
+
+User-managed pattern rules evaluated at capture time. Matches drop /
+transform / tag the clip; first matching rule wins. Schema bumped
+v3 → v4. UI deferred to Phase 4 (a Settings page); CLI surface
+ships now.
+
+`ditox-core/src/db.rs`:
+- `SCHEMA_VERSION` bumped 3 → 4.
+- `migrate_to_v4()`: creates `filter_rules` table with columns
+  `(id, name, pattern, pattern_kind, process_glob, action,
+  enabled, position, created_at)` plus indexes on `position`
+  and `(enabled, position)`.
+- New CRUD methods: `add_filter_rule`, `list_filter_rules`,
+  `get_filter_rule`, `delete_filter_rule`,
+  `set_filter_rule_enabled`, `set_filter_rule_position`,
+  `max_filter_rule_position`.
+- `row_to_filter_rule()` translates the canonical TEXT
+  `pattern_kind` and `action` columns back into typed
+  `PatternKind` and `FilterAction` enums.
+
+`ditox-core/src/filter.rs`:
+- `PatternKind { Regex, Glob, Contains }`. Glob reuses the
+  existing `crate::config::glob_match` helper; Contains is plain
+  ASCII-case-insensitive substring match; Regex compiles via
+  `regex::RegexBuilder` with `case_insensitive(true)` and a
+  4 MiB `dfa_size_limit` cap (defence-in-depth against runaway
+  matches).
+- `FilterAction { Drop, Transform(String), Tag(String) }`.
+  Canonical TEXT round-trip via `to_storage()` /
+  `from_storage()`: `"drop"` / `"transform:<id>"` /
+  `"tag:<name>"`.
+- `FilterRule` struct with `new_now()` constructor (UUIDv4 +
+  ISO-8601 timestamp).
+- `FilterEngine`: compiles rules once, sorts by position, evaluates
+  on demand. Disabled rules are dropped at compile time. Invalid
+  regex patterns log `warn` and are skipped without breaking the
+  engine.
+- `MatchedRule<'a>` returned from `evaluate()` carries a borrow
+  into the engine — callers don't pay clone cost on the hot path.
+- 18 unit tests covering kind round-trip, action serialisation,
+  rule construction, engine compile-time skip of disabled rules,
+  first-match-wins by position, contains/glob/regex matching,
+  invalid-regex graceful skip, process-scope restriction.
+
+`ditox-core/src/watcher.rs`:
+- `Watcher` gains a `filters: FilterEngine` field built at
+  construction (`db.list_filter_rules()` then
+  `FilterEngine::from_rules`). Construction failures log warn
+  and start with an empty engine.
+- New `Watcher::reload_filters()` for the future "edit rules
+  while daemon runs" workflow (caller decides cadence).
+- `process_clip` snapshots the foreground basename **once** and
+  reuses it for both the existing `[capture.exclude]` check and
+  the new filter-rule evaluation. Exclusion runs first; rules
+  run after.
+- For text clips, `FilterEngine::evaluate(text, basename)`
+  returns the first matching rule. Action handling:
+  - `Drop` → log + `return Ok(false)` without advancing
+    `last_hash` (so identical content from a non-matching
+    context still captures).
+  - `Transform(id)` → log + capture as-is (full transform
+    application requires more plumbing — Phase 3 follow-up).
+  - `Tag(name)` → log + capture as-is (tags Phase 4b).
+
+`ditox-tui/src/cli.rs::Commands::Rules`:
+- `ditox rules list [--json]`
+- `ditox rules add --name <n> --pattern <p> [--kind regex|glob|contains] [--process <glob>] [--action <a>]`
+- `ditox rules show <id> [--json]`
+- `ditox rules delete <id>`
+- `ditox rules enable <id>` / `ditox rules disable <id>`
+- `ditox rules reorder <id> <position>`
+
+Add appends at `max_position + 1`. Show / disable / enable / delete
+exit 1 on unknown id. Add exits 2 on bad `--kind` or `--action`.
+
+4 new integration tests in
+`ditox-core/tests/watcher_capture_integration.rs`:
+- Watcher drops clip matching a filter rule.
+- Non-matching clip passes through.
+- First match wins by position.
+- Process-glob scope restricts the rule to a specific
+  foreground (with a `MockForegroundTracker`).
+
+**Live verification on Hyprland 2026-04-26:**
+
+```
+$ ditox rules list
+No filter rules configured.
+
+$ ditox rules add --name "drop pwds" --pattern "(?i)password" --kind regex --action drop
+Added rule 9335cfe2 "drop pwds" (drop) at position 0
+
+$ ditox rules add --name "scoped drop" --pattern "secret" --kind contains --process "*KeePass*"
+Added rule 9a6dfde2 "scoped drop" (drop) at position 1
+
+$ ditox rules list
+POS   ENABLED    KIND   ID                     PROCESS    ACTION         NAME / PATTERN
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0     yes        regex  9335cfe2               -          drop           drop pwds
+                                                                           (?i)password
+1     yes        contains 9a6dfde2               *KeePass*  drop           scoped drop
+                                                                           secret
+
+$ ditox rules disable <full-uuid>
+Rule <uuid> disabled
+$ ditox rules show <full-uuid>
+ID:           <uuid>
+Name:         drop pwds
+Pattern:      (?i)password
+Pattern kind: regex
+Enabled:      false
+...
+$ ditox rules reorder <full-uuid> 99
+Rule <uuid> moved to position 99
+$ ditox rules add --kind invalid --name x --pattern y
+ditox rules add: unknown --kind 'invalid'. Valid: regex, glob, contains.
+$ echo $?
+2
+```
+
+Schema migration log: `applying schema migration v3 -> v4 (filter
+rules)` fired once on first DB access; subsequent runs no-op.
+
+**Workspace test count after this session: 471 tests** (was 449;
++18 filter unit tests + +4 watcher integration tests). All clippy
+`-D warnings` + fmt clean.
