@@ -50,6 +50,9 @@ iced_layershell.workspace = true
 # we run it from a dedicated helper thread, separate from iced/winit.
 gtk = "0.18"
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [build-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 

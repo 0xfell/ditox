@@ -14,6 +14,7 @@
 
 mod app;
 mod cli;
+mod hyprland_config;
 mod ipc;
 mod startup;
 
@@ -40,6 +41,34 @@ fn run() -> Result<()> {
 
     let cli = cli::Cli::parse();
     let action = cli.action();
+
+    // Phase 4 sub-task 4.11: Hyprland config helper. Pure
+    // file-generation; no daemon / IPC involvement.
+    if matches!(action, cli::Action::InstallHyprlandConfig) {
+        let path = hyprland_config::install()?;
+        println!("Wrote: {}", path.display());
+        println!();
+        println!("To activate, add this line to your hyprland.conf:");
+        println!();
+        println!("    source = ~/.config/hypr/conf.d/ditox.conf");
+        println!();
+        println!("Then reload:  hyprctl reload");
+        return Ok(());
+    }
+    if matches!(action, cli::Action::UninstallHyprlandConfig) {
+        let removed = hyprland_config::uninstall()?;
+        if removed {
+            println!("Removed ditox-managed snippet from ~/.config/hypr/conf.d/ditox.conf");
+            println!();
+            println!("If you no longer want the file at all, delete it manually:");
+            println!("    rm -i ~/.config/hypr/conf.d/ditox.conf");
+            println!();
+            println!("Reload Hyprland:  hyprctl reload");
+        } else {
+            println!("No ditox-managed snippet found; nothing to remove.");
+        }
+        return Ok(());
+    }
 
     // -----------------------------------------------------------------
     // Phase 4 sub-tasks 4.1 + 4.2 — single-instance + IPC.

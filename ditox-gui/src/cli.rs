@@ -25,6 +25,10 @@ pub enum Action {
     Show,
     Hide,
     Quit,
+    /// Phase 4 sub-task 4.11: write Hyprland config snippet.
+    InstallHyprlandConfig,
+    /// Phase 4 sub-task 4.11: remove the previously-written snippet.
+    UninstallHyprlandConfig,
 }
 
 impl Action {
@@ -38,6 +42,9 @@ impl Action {
             Action::Show => Some("SHOW"),
             Action::Hide => Some("HIDE"),
             Action::Quit => Some("QUIT"),
+            // The Hyprland-config actions are local to this
+            // process — they never go over IPC.
+            Action::InstallHyprlandConfig | Action::UninstallHyprlandConfig => None,
         }
     }
 }
@@ -46,20 +53,32 @@ impl Action {
 #[command(name = "ditox-gui", about = "Ditox clipboard manager (GUI)", version)]
 pub struct Cli {
     /// Toggle the window (show if hidden, hide if shown).
-    #[arg(long, conflicts_with_all = ["show", "hide", "quit"])]
+    #[arg(long, conflicts_with_all = ["show", "hide", "quit", "install_hyprland_config", "uninstall_hyprland_config"])]
     pub toggle: bool,
 
     /// Force the window to show.
-    #[arg(long, conflicts_with_all = ["toggle", "hide", "quit"])]
+    #[arg(long, conflicts_with_all = ["toggle", "hide", "quit", "install_hyprland_config", "uninstall_hyprland_config"])]
     pub show: bool,
 
     /// Force the window to hide.
-    #[arg(long, conflicts_with_all = ["toggle", "show", "quit"])]
+    #[arg(long, conflicts_with_all = ["toggle", "show", "quit", "install_hyprland_config", "uninstall_hyprland_config"])]
     pub hide: bool,
 
     /// Ask the running GUI instance to quit.
-    #[arg(long, conflicts_with_all = ["toggle", "show", "hide"])]
+    #[arg(long, conflicts_with_all = ["toggle", "show", "hide", "install_hyprland_config", "uninstall_hyprland_config"])]
     pub quit: bool,
+
+    /// Write a Hyprland config snippet to
+    /// `~/.config/hypr/conf.d/ditox.conf` and print the one-line
+    /// addition needed in `hyprland.conf`. Idempotent: re-running
+    /// overwrites the snippet between its `# >>> ditox-managed >>>`
+    /// markers without touching anything else.
+    #[arg(long, conflicts_with_all = ["toggle", "show", "hide", "quit", "uninstall_hyprland_config"])]
+    pub install_hyprland_config: bool,
+
+    /// Remove the snippet written by `--install-hyprland-config`.
+    #[arg(long, conflicts_with_all = ["toggle", "show", "hide", "quit", "install_hyprland_config"])]
+    pub uninstall_hyprland_config: bool,
 }
 
 impl Cli {
@@ -72,6 +91,10 @@ impl Cli {
             Action::Hide
         } else if self.quit {
             Action::Quit
+        } else if self.install_hyprland_config {
+            Action::InstallHyprlandConfig
+        } else if self.uninstall_hyprland_config {
+            Action::UninstallHyprlandConfig
         } else {
             Action::Launch
         }

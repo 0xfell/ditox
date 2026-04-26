@@ -82,13 +82,17 @@ fn runtime_path(ext: &str) -> PathBuf {
 
 /// Convert a CLI [`Action`] to its on-the-wire command string.
 /// Returns `None` for [`Action::Launch`] when there's no active
-/// daemon to send to (the caller starts a fresh daemon instead).
+/// daemon to send to (the caller starts a fresh daemon instead),
+/// and for the local-only Hyprland-config actions
+/// ([`Action::InstallHyprlandConfig`] / [`Action::UninstallHyprlandConfig`])
+/// which are handled in `main.rs::run` before any IPC attempt.
 pub fn action_to_wire(action: Action) -> Option<&'static str> {
     match action {
         Action::Launch | Action::Toggle => Some("TOGGLE"),
         Action::Show => Some("SHOW"),
         Action::Hide => Some("HIDE"),
         Action::Quit => Some("QUIT"),
+        Action::InstallHyprlandConfig | Action::UninstallHyprlandConfig => None,
     }
 }
 

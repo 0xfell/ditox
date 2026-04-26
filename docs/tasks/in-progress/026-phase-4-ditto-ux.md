@@ -1,6 +1,6 @@
 # Task: Phase 4 — Ditto UX replication (long-running GUI + layer-shell)
 
-> **Status:** in-progress (3/12 sub-tasks done — 4.1, 4.2, 4.3 layer-shell, 4.8 hide-on-blur + paste-and-hide)
+> **Status:** in-progress (4/12 sub-tasks done — 4.1, 4.2, 4.3, 4.8, 4.11 + 3.7 already covers 4.12)
 > **Priority:** high
 > **Phase:** 4 — Ditto UX
 > **Created:** 2026-04-26
@@ -549,3 +549,116 @@ trip.
 **Workspace test count after this session: 495 tests** (still
 unchanged; 4.8 is a behavioural refactor with no new
 pure-logic surface area). All clippy `-D warnings` + fmt clean.
+
+### 2026-04-26 — sub-task 4.11 landed
+
+**4.11 — `--install-hyprland-config` helper.**
+
+`ditox-gui/src/hyprland_config.rs` (new):
+- `install() -> Result<PathBuf>`: writes
+  `~/.config/hypr/conf.d/ditox.conf` (honouring `XDG_CONFIG_HOME`)
+  with the snippet between `# >>> ditox-managed >>>` and
+  `# <<< end ditox-managed <<<` markers. Atomic via tmp+rename.
+  Idempotent — re-running overwrites only the managed block,
+  preserving any user content outside the markers. Also creates
+  an empty `ditox-binds.conf` placeholder so the snippet's
+  `source = …` line doesn't break Hyprland on first reload
+  (Phase 5 will populate that file with per-clip hotkeys).
+- `uninstall() -> Result<bool>`: strips the managed block. If
+  nothing else remains, removes the file; otherwise rewrites it
+  atomically. `ditox-binds.conf` is left alone (the user may
+  have customised it). Returns `true` iff something was removed.
+- Snippet body matches the spec:
+  ```text
+  exec-once = ditox-gui --hide
+  bind = CTRL, grave, exec, ditox-gui --toggle
+  windowrulev2 = float, class:^(ditox-gui)$
+  windowrulev2 = pin, class:^(ditox-gui)$
+  windowrulev2 = noborder, class:^(ditox-gui)$
+  windowrulev2 = noshadow, class:^(ditox-gui)$
+  windowrulev2 = noanim, class:^(ditox-gui)$
+  source = ~/.config/hypr/conf.d/ditox-binds.conf
+  ```
+- 8 unit tests covering: marker-aware strip happy path; no-marker
+  passthrough; trailing-newline handling; only-begin / only-end
+  marker rejection; full round-trip via `tempdir`; preservation
+  of user content outside markers across re-install.
+
+`ditox-gui/src/cli.rs`:
+- `Action { …, InstallHyprlandConfig, UninstallHyprlandConfig }`
+  variants. The Hyprland-specific actions never go over IPC —
+  `action_to_wire` returns `None`. Mutually exclusive with the
+  daemon control flags.
+- `--install-hyprland-config` / `--uninstall-hyprland-config`
+  long flags. Both conflict with `--toggle`/`--show`/`--hide`/
+  `--quit` and with each other.
+
+`ditox-gui/src/main.rs`:
+- Helper actions handled BEFORE any IPC / lock / daemon work.
+  Print the helpful "add this to hyprland.conf" message after a
+  successful install; print the cleanup hint on uninstall.
+- Per `H5`: the helper **never** auto-modifies `hyprland.conf`
+  itself — only the conf.d files we own. The user copy-pastes
+  the `source = …` line manually so they understand what's
+  changing.
+
+**Live verification on Hyprland 2026-04-26 with `HOME=/tmp/...`:**
+
+```
+$ ditox-gui --install-hyprland-config
+Wrote: /tmp/.../.config/hypr/conf.d/ditox.conf
+To activate, add this line to your hyprland.conf:
+    source = ~/.config/hypr/conf.d/ditox.conf
+Then reload:  hyprctl reload
+
+$ cat /tmp/.../.config/hypr/conf.d/ditox.conf
+# >>> ditox-managed (do not edit between these markers) >>>
+exec-once = ditox-gui --hide
+bind = CTRL, grave, exec, ditox-gui --toggle
+windowrulev2 = float, class:^(ditox-gui)$
+... (full snippet) ...
+# <<< end ditox-managed <<<
+
+$ ditox-gui --install-hyprland-config   # idempotent
+Wrote: ...
+
+$ ditox-gui --uninstall-hyprland-config
+Removed ditox-managed snippet from ~/.config/hypr/conf.d/ditox.conf
+If you no longer want the file at all, delete it manually:
+    rm -i ~/.config/hypr/conf.d/ditox.conf
+
+$ ls /tmp/.../.config/hypr/conf.d/
+ditox-binds.conf                # ditox-binds.conf preserved
+
+$ ditox-gui --uninstall-hyprland-config   # no-op on second run
+No ditox-managed snippet found; nothing to remove.
+```
+
+End-to-end: install / re-install (idempotent) / uninstall /
+re-uninstall (no-op) all behave correctly. Snippet body
+verbatim matches the spec.
+
+**Workspace test count after this session: 503 tests** (was 495;
++8 hyprland_config tests). All clippy `-D warnings` + fmt clean.
+
+---
+
+## Phase 4 close summary (4/12 sub-tasks landed)
+
+The Phase 4 work shipped today brings the daemon model + IPC +
+layer-shell + hide-on-blur + Hyprland helper online. Outstanding
+sub-tasks (planned for follow-up commits / sessions):
+
+- **4.4** Configurable popup position (`[gui.position]` modes).
+- **4.5** Custom non-client area (drag handle in layer-shell).
+- **4.6** Always-on-top toggle (pin button → `Layer::Top` ⇄ `Overlay`).
+- **4.7** Modifier-held cycling (extends 2.9 cursor primitive).
+- **4.9** Tooltip-as-preview (custom iced widget).
+- **4.10** Inline list extras (glyphs + hotkey-number prefix; color
+  swatch already done in 3.3).
+- **4.12** Per-resolution window state — already covered by 3.7.
+
+The MVP is functional: launching `ditox-gui` starts the daemon;
+`ditox-gui --toggle` (or the helper-installed `Ctrl+~` keybind)
+shows the layer-shell launcher; click → paste-back hides the
+window; daemon stays alive for the next summon.
