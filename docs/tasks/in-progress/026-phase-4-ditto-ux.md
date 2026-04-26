@@ -1,6 +1,6 @@
 # Task: Phase 4 — Ditto UX replication (long-running GUI + layer-shell)
 
-> **Status:** in-progress (7/12 sub-tasks done — 4.1, 4.2, 4.3, 4.4, 4.6, 4.7, 4.8, 4.11 + 3.7 already covers 4.12)
+> **Status:** in-progress (8/12 sub-tasks done — 4.1, 4.2, 4.3, 4.4, 4.6, 4.7, 4.8, 4.10, 4.11 + 3.7 already covers 4.12)
 > **Priority:** high
 > **Phase:** 4 — Ditto UX
 > **Created:** 2026-04-26

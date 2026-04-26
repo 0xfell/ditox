@@ -1052,6 +1052,11 @@ mod icons {
     pub const PIN: char = '\u{F4D7}'; // pin angle
     pub const PIN_FILL: char = '\u{F4D5}'; // pin angle fill
 
+    // Phase 4 sub-task 4.10: inline list extras (collection /
+    // notes glyphs). Bootstrap Icons codepoints.
+    pub const FOLDER: char = '\u{F3D6}'; // folder outline (entry in collection)
+    pub const JOURNAL_TEXT: char = '\u{F4A4}'; // journal-text (entry has notes)
+
     // Status
     pub const CIRCLE_FILL: char = '\u{F287}'; // filled circle (status indicator)
 
@@ -2803,12 +2808,51 @@ impl DitoxApp {
         let entry_id_preview = entry.id.clone();
         let interactive = self.view_mode == ViewMode::Main;
 
+        // Phase 4 sub-task 4.10: hotkey number prefix for the first
+        // 10 entries. `1`..`9` map to indices 0..8; `0` maps to
+        // index 9 (the 10th entry). Beyond index 9 the prefix is
+        // blank so the column stays aligned. Phase 5 will let the
+        // user actually invoke these hotkeys via Alt+<digit>;
+        // today the prefix is informational so the user learns
+        // the upcoming binding.
+        let hotkey_prefix: Element<'_, Message> = match index {
+            0..=8 => text(format!("{}", index + 1))
+                .size(10)
+                .color(colors::TEXT_MUTED)
+                .into(),
+            9 => text("0").size(10).color(colors::TEXT_MUTED).into(),
+            _ => text("  ").size(10).into(),
+        };
+
         // Favorite indicator
         let fav_star = if entry.favorite {
             icon(icons::STAR_FILL).size(12).color(colors::WARNING)
         } else {
             text(" ").size(12)
         };
+
+        // Phase 4 sub-task 4.10: glyph cluster between preview and
+        // time. Each glyph is rendered only when its underlying
+        // state is set on the entry; the column compresses
+        // gracefully when nothing applies.
+        let collection_glyph: Option<Element<'_, Message>> =
+            entry.collection_id.as_ref().map(|_| {
+                icon(icons::FOLDER)
+                    .size(11)
+                    .color(colors::TEXT_MUTED)
+                    .into()
+            });
+        let notes_glyph: Option<Element<'_, Message>> =
+            if entry.notes.as_ref().is_some_and(|n| !n.is_empty()) {
+                Some(
+                    icon(icons::JOURNAL_TEXT)
+                        .size(11)
+                        .color(colors::TEXT_MUTED)
+                        .into(),
+                )
+            } else {
+                None
+            };
 
         // Time
         let time = text(entry.relative_time())
@@ -2832,15 +2876,22 @@ impl DitoxApp {
                     colors::TEXT_SECONDARY
                 });
 
-                row![
+                let mut img_row: Row<'_, Message> = row![
+                    container(hotkey_prefix).width(Length::Fixed(14.0)),
                     thumbnail,
                     container(fav_star).width(Length::Fixed(18.0)),
                     filename,
                     Space::new().width(Length::Fill),
-                    time,
                 ]
                 .spacing(8)
-                .align_y(iced::Alignment::Center)
+                .align_y(iced::Alignment::Center);
+                if let Some(g) = collection_glyph {
+                    img_row = img_row.push(g);
+                }
+                if let Some(g) = notes_glyph {
+                    img_row = img_row.push(g);
+                }
+                img_row.push(time)
             }
             EntryType::Text => {
                 // Text entry: type badge + (optional color swatch) + preview text
@@ -2877,19 +2928,30 @@ impl DitoxApp {
                             .into()
                     });
 
-                let mut row_items: Row<'_, Message> =
-                    row![type_badge, container(fav_star).width(Length::Fixed(18.0)),]
-                        .spacing(8)
-                        .align_y(iced::Alignment::Center);
+                let mut row_items: Row<'_, Message> = row![
+                    container(hotkey_prefix).width(Length::Fixed(14.0)),
+                    type_badge,
+                    container(fav_star).width(Length::Fixed(18.0)),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center);
 
                 if let Some(s) = swatch {
                     row_items = row_items.push(s);
                 }
 
-                row_items
+                row_items = row_items
                     .push(preview)
-                    .push(Space::new().width(Length::Fill))
-                    .push(time)
+                    .push(Space::new().width(Length::Fill));
+
+                if let Some(g) = collection_glyph {
+                    row_items = row_items.push(g);
+                }
+                if let Some(g) = notes_glyph {
+                    row_items = row_items.push(g);
+                }
+
+                row_items.push(time)
             }
         };
 
