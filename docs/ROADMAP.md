@@ -8,10 +8,10 @@
 
 | Category | Count |
 |----------|-------|
-| Completed | 24 |
+| Completed | 25 |
 | In Progress | 3 |
 | Planned (Phase 0 — Foundation) | 0 |
-| Planned (Phase 1-8 epics + carry-overs) | 10 |
+| Planned (Phase 1-8 epics + carry-overs) | 9 |
 
 ---
 
@@ -57,7 +57,6 @@ _All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; rea
 
 | Task | Description | Schema |
 |------|-------------|--------|
-| [025 Power-user features](tasks/planned/025-phase-3-power-user.md) | Special paste, exclusion, color swatch, filter rules, suspend/resume | v3 → v4 |
 | [026 Ditto UX replication](tasks/planned/026-phase-4-ditto-ux.md) | Long-running daemon + layer-shell + position modes + tooltip preview | none |
 | [027 GUI feature parity](tasks/planned/027-phase-4b-gui-parity.md) | Settings, collections, multi-select, tags, time chips, theming | v4 → v5 |
 | [028 Hotkeys, IPC, Rhai scripting](tasks/planned/028-phase-5-hotkeys-ipc-scripting.md) | Per-clip hotkeys, full IPC, sandboxed scripting hooks | v5 → v6 |
@@ -74,6 +73,7 @@ _All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; rea
 
 | Task | Date | Description |
 |------|------|-------------|
+| [025 Power-user features](tasks/completed/025-phase-3-power-user.md) | 2026-04-26 | Phase 3: 8/8 sub-tasks landed (Linux + cross-platform pure code). 21 special-paste transforms (case styles, slugify, typoglycemia, datetime, GUID, etc.) with `ditox transform` CLI; per-app capture exclusion via the Phase 2 ForegroundTracker; CSS color swatches in TUI + GUI list rendering; filter rules engine (schema v3→v4 + first-match-wins drop/transform/tag pipeline + `ditox rules` CLI); Linux suspend/resume awareness via logind PrepareForSleep DBus signal; search-mode prefixes `/p` `/h` `/r` `/q` `/f`; per-resolution window state with legacy auto-migration; translate/web-search URL templates with `ditox open` CLI. +186 tests, 487 total. Image-stitching transforms, filter-transform wiring, Windows power monitor, and GUI context menu deferred. |
 | [024 Paste-back UX (Linux MVP)](tasks/completed/024-phase-2-paste-back.md) | 2026-04-26 | Phase 2: 7/9 sub-tasks. `ForegroundTracker` trait + `HyprctlForegroundTracker`; Linux synthesis chain (`hyprctl` → `wtype` → `ydotool` → `off`) with per-app `KeystrokeSequence` parser (vim's `"+gp` etc.); cross-process `PasteSentinel` so the watcher skips the paste-back's own re-capture; full GUI integration with pre-iced foreground snapshot, `paste_and_exit(entry)` flow, and a `SelectionCursor` primitive that advances on rapid re-fires (groundwork for Phase 4 modifier-held cycling). End-to-end verified live on Hyprland: hyprctl `sendshortcut` pasted text into ghostty. Sub-tasks 2.2 + 2.5 (Windows) spun out as 033; 2.3 cont (wlr-foreign-toplevel) as 034. +94 tests, 301 total. |
 | [023 Multi-format clipboard capture](tasks/completed/023-phase-1-multi-format-capture.md) | 2026-04-26 | Phase 1: 8/9 sub-tasks. Schema v2→v3 with `entry_formats` table + `format_content_fts`; `FormatId` + Wayland/Win32 canonicalisation; HTML envelope + RTF \rsid stripping; per-format hashing; multi-format `Database::insert_multi` with rollback-on-failure; multi-format FTS5 search; `CaptureConfig` mode/size caps; `WaylandLibraryCapture` via `wl-clipboard-rs` (live-tested on Hyprland); `FormatAggregator` trait + 5 impls (PlainText/HtmlEnvelope/Rtf/UriList/ImageStack). Sub-task 1.4 (Windows event-driven capture) spun out as task 032. +87 tests, 153 total. |
 | [022 Layer-shell research spike](tasks/completed/022-foundation-layer-shell-spike.md) | 2026-04-26 | Built A1 prototype (`spike/a1-iced-layershell/`, 179 LOC, builds in 1.71s); decision: adopt `iced_layershell = "=0.17.1"` over hand-rolled SCTK + tiny-skia. ADR at `docs/notes/adr/0001-layer-shell-strategy.md`. Hyprland verified by user; Sway/KDE/GNOME/longevity tests pending. |

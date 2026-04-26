@@ -1,11 +1,33 @@
 # Task: Phase 3 — Power-user features
 
-> **Status:** in-progress (7/8 sub-tasks done — 3.1, 3.2, 3.4, 3.5 (Linux), 3.6, 3.7, 3.8)
+> **Status:** completed (8/8 — 3.5 Windows path deferred to follow-up)
 > **Priority:** medium
 > **Phase:** 3 — Power-user features
 > **Created:** 2026-04-26
 > **Started:** 2026-04-26
+> **Completed:** 2026-04-26
 > **Estimated:** 4 weeks
+>
+> **Sub-tasks landed (Linux + cross-platform pure code):**
+> - 3.1 Special paste / transforms (21 of 22 transforms; image stitching deferred)
+> - 3.2 Per-app capture exclusion
+> - 3.3 Color swatch detection (TUI + GUI)
+> - 3.4 Filter rules (schema v3→v4 + engine + CLI)
+> - 3.5 Suspend/resume awareness (Linux logind; Windows path spun out)
+> - 3.6 Search-mode prefixes (`/p` / `/h` / `/r` / `/q` / `/f`)
+> - 3.7 Per-resolution window state (multi-key JSON; legacy auto-migrates)
+> - 3.8 Translate / web-search URL templates + `ditox open` CLI
+>
+> **Deferred follow-ups:**
+> - Image-stitching transforms (`ImagesHorizontal` / `ImagesVertical`) —
+>   need multi-entry-selection UX; Phase 4.
+> - Filter rule transform-action wiring — needs clip-mutation plumbing
+>   in the watcher; Phase 3 polish or Phase 4.
+> - Filter rule tag-action — tags themselves are Phase 4b.
+> - Suspend/resume on Windows — `WM_POWERBROADCAST` integration; on the
+>   same path as task 033 (Windows paste-back).
+> - GUI context-menu integration for `ditox open` translate/search —
+>   Phase 4 will introduce the broader context menu.
 
 ## Description
 
@@ -845,3 +867,86 @@ rules)` fired once on first DB access; subsequent runs no-op.
 **Workspace test count after this session: 471 tests** (was 449;
 +18 filter unit tests + +4 watcher integration tests). All clippy
 `-D warnings` + fmt clean.
+
+### 2026-04-26 — sub-task 3.3 landed; Phase 3 closed
+
+**3.3 — Color swatch detection.**
+
+`ditox-core/src/color.rs`:
+- `DetectedColor { r, g, b, a, start, end }` — RGBA8 + byte
+  offsets so callers can splice the source string if they want.
+- `detect_first_color(text)` recognises 5 CSS-style formats in
+  priority order:
+  - `#RRGGBBAA` (8-digit RGBA hex)
+  - `#RRGGBB` (6-digit RGB hex)
+  - `#RGBA` (4-digit short — extension beyond the spec list,
+    matches CSS Color 4)
+  - `#RGB` (3-digit short)
+  - `rgb(r, g, b)` / `rgba(r, g, b, a)`
+  - `hsl(h, s%, l%)` / `hsla(h, s%, l%, a)` — converted to RGB
+    via the standard CSS algorithm.
+- Single combined regex via `OnceLock`. Rust's `regex` crate
+  doesn't support lookahead, so we **post-filter** hex matches:
+  if the next char is also hex, the literal had too many digits
+  (e.g. `#abcde` → 5 chars; not a valid CSS color) and the match
+  is rejected. The captures iterator skips to the next candidate.
+- Truncates input at 4 KiB before scanning so adversarial clips
+  can't tie up the renderer's CPU.
+- HSL → RGB uses the spec algorithm (chroma + hue prime + match
+  table); 3-digit short hex expands per nibble (`f` → `0xFF`).
+- 20 unit tests covering each format, byte-offset correctness,
+  uppercase hex, alpha-clamping for `rgba`/`hsla`, the
+  `#abcde` 5-digit rejection, no-color-found path, multi-color
+  first-match-wins, and truncation behaviour (color before /
+  after the 4 KiB cutoff).
+
+`ditox-tui/src/ui/list.rs::format_entry_row`:
+- Scans `entry.content` (full content, not the truncated preview)
+  for the first color.
+- When found, reduces content_width by 3 cells and prepends two
+  full-block characters (`██`) styled with `Color::Rgb(r, g, b)`
+  as **foreground** — terminals reliably render fg RGB; some
+  struggle with arbitrary bg colours.
+- A trailing space separates the swatch from the preview text.
+
+`ditox-gui/src/app.rs::view_entry_row` (text branch):
+- Same scan against the full content.
+- Renders the swatch as a 12×12 px iced `Container` with a
+  per-row style closure capturing the parsed RGBA. 1-px
+  half-transparent black border for visibility against pale
+  swatches on the row's hover background.
+- Inserted between `fav_star` and the preview `text` so it lands
+  exactly where the spec asks ("before the entry text").
+
+The detection function is shared between TUI and GUI — single
+`ditox-core` source of truth, identical UX semantics.
+
+**Workspace test count after this session: 487 tests** (was 471;
++16 color + +0 wiring tests; the wiring is straight-through and
+covered indirectly by the TUI/GUI render passes). All clippy
+`-D warnings` + fmt clean.
+
+---
+
+## Phase 3 close summary
+
+8 sub-tasks landed in this task, 3 follow-ups appropriately
+deferred (image-stitching, filter-transform wiring, Windows
+power monitor). Workspace went from 121 tests at the start of
+v0.4 work (Phase 0 baseline) to **487 tests** at Phase 3 close —
++366 tests across all four phases.
+
+Schema progressed v1 → v4. New ditox-core modules:
+`aggregator`, `capture` (+`wayland`), `db_actor`, `filter`,
+`foreground` (+`hyprctl`), `format`, `paste` (+`cursor`,
+`keystroke`, `sentinel`, `synthesize`), `platform`, `power`
+(+`logind`), `search`, `transforms` (+`case`, `meta`, `string`,
+`whitespace`), `url_template`, `color`.
+
+New CLI surface: `ditox open`, `ditox transform`, `ditox rules`,
+plus existing `watch --stop --status --json --journal`.
+
+Cross-platform readiness: every Phase 3 sub-task has either
+landed cross-platform (3.1, 3.2 via ForegroundTracker, 3.3, 3.4,
+3.6, 3.7, 3.8) or has a clean Linux MVP with the Windows path
+spun out (3.5).
