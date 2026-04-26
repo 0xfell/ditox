@@ -1,9 +1,10 @@
 # Task: Phase 4 — Ditto UX replication (long-running GUI + layer-shell)
 
-> **Status:** planned
+> **Status:** in-progress (1/12 sub-tasks done — 4.1 + 4.2 plumbing only; full long-running UX in 4.3)
 > **Priority:** high
 > **Phase:** 4 — Ditto UX
 > **Created:** 2026-04-26
+> **Started:** 2026-04-26
 > **Estimated:** 5-6 weeks
 
 ## Description
@@ -299,5 +300,114 @@ The lock + sock IPC code can be partially recovered from git history
 
 ## Work Log
 
-### 2026-04-26
-- Task file created (epic).
+### 2026-04-26 — task moved to in-progress; sub-tasks 4.1 + 4.2 plumbing landed
+
+Phase 4 begins. The first commit ships the IPC plumbing only —
+full long-running UX (paste-and-stay, hide-on-blur with grace,
+modifier-held cycling, layer-shell window) lands incrementally
+across sub-tasks 4.3-4.12.
+
+**4.1 — Single-instance lock + IPC socket.**
+
+`ditox-gui/src/ipc.rs` (new module):
+- `lock_path()` / `socket_path()` → `$XDG_RUNTIME_DIR/ditox-gui-<uid>.{lock,sock}`
+  (falls back to `/tmp/ditox-gui-<uid>` when `XDG_RUNTIME_DIR` is
+  unset). Both files are mode 0600.
+- `acquire_lock()` opens the lock file with `OpenOptions` (mode
+  0600 via `OpenOptionsExt`) and `try_lock_exclusive()` via
+  `fs2`. Returns `Some(file)` on success, `None` on contention.
+  Caller must keep the file alive — drop releases the flock and
+  process exit also releases it (kernel handles).
+- `try_send_to_daemon(action)` returns:
+  - `Sent { reply }` — daemon present, reply received.
+  - `Rejected { message }` — daemon answered `ERR ...`.
+  - `NoDaemon` — socket absent or connection refused.
+- `spawn_listener()` binds the Unix socket (with stale-file
+  cleanup), spawns a `ditox-gui-ipc` accept thread that spawns
+  per-client `ditox-gui-ipc-client` worker threads, returns
+  `(Receiver<DaemonCommand>, SocketGuard)`. The guard unlinks
+  the socket file on drop (best-effort; `process::exit` skips
+  it but the next `bind` cleans up the stale path).
+- `DaemonCommand { command, reply }` carries a `SyncSender<String>`
+  for the IPC client's reply. Drop impl emits `ERR no-reply` so
+  the client never hangs on read. `reply_ok()`, `reply_ok_with()`,
+  and `reply_err()` (allow-dead-code, future use).
+- 8 unit tests covering: command parsing (canonical + case-insensitive
+  + reject), action wire round-trip, lock-path shape, reply
+  semantics (ok/err/dropped-without-reply).
+
+**4.2 — IPC protocol (newline-terminated text).**
+
+```text
+TOGGLE | SHOW | HIDE | QUIT | STATUS    →    OK | OK <payload> | ERR <msg>
+```
+
+Wire-format and parsing are stable; future commands (Phase 5
+`paste-clip <id>`, `cycle-next`, `cycle-prev`) extend the same
+grammar.
+
+**`ditox-gui/src/main.rs`:**
+- Step 1: `try_send_to_daemon(action)` first — for every action
+  including bare `Launch`. Sent → exit 0; Rejected → exit 1;
+  NoDaemon → fall through. Lets the same `ditox-gui` keybind
+  serve both "first launch" (start daemon) and "summon"
+  (forward to running one).
+- `--quit` with no daemon prints "nothing to do" and exits 0.
+- Step 2: `acquire_lock()`. On contention (race with another
+  starter) retries `try_send_to_daemon` once before erroring out.
+- Step 3: `spawn_listener()` binds the socket, threads the
+  receiver into `app::run_with` as a new 8th arg.
+
+**`ditox-gui/src/app.rs`:**
+- `Message::PollIpc` and `Message::WindowOpened(window::Id)`
+  variants added.
+- Subscriptions: 50 ms `iced::time::every` tick → `PollIpc`;
+  `iced::window::open_events()` → `WindowOpened`.
+- `update::Message::PollIpc → drain_ipc()` drains the receiver
+  via `try_recv` and processes each `DaemonCommand`:
+  - `Show`/`Hide`/`Toggle`: update `self.visible` flag, reply
+    `OK`, and (best-effort) issue `iced::window::set_mode(id,
+    Mode::Hidden|Windowed)` if the main window's `Id` was
+    captured.
+  - `Quit`: reply `OK`, save window state, then
+    `std::process::exit(0)` from a deferred 50 ms timer thread
+    so the IPC reply lands at the client before the process
+    dies.
+  - `Status`: reply `OK visible=<b> entries=<n> version=<v>`.
+
+**Scope explicitly held back from this commit:**
+- Window stays open after copy/paste (one-shot `paste_and_exit`
+  semantics retained). Phase 4.3 will replace with
+  `paste_and_hide` so the daemon truly outlives a paste cycle.
+- Layer-shell on Linux (Phase 4.3, builds on the 022 ADR's
+  `iced_layershell` decision).
+- Hide-on-blur grace period (Phase 4.8).
+- Modifier-held cycling beyond the existing 2.9 cursor (Phase 4.7).
+
+**Live verification on Hyprland 2026-04-26:**
+
+```
+$ ditox-gui &     # starts daemon
+INFO ditox_gui: ditox-gui daemon listening on IPC socket socket=/run/user/1000/ditox-gui-1000.sock
+INFO ditox_gui: Ditox GUI starting (daemon, action=Launch)
+
+$ ditox-gui --hide
+INFO ditox_gui: forwarded to running daemon action=Hide reply=OK
+
+$ ditox-gui --show
+INFO ditox_gui: forwarded to running daemon action=Show reply=OK
+
+$ ditox-gui --toggle
+INFO ditox_gui: forwarded to running daemon action=Toggle reply=OK
+
+$ ditox-gui --quit
+INFO ditox_gui: forwarded to running daemon action=Quit reply=OK
+# (daemon exits, no longer in process list)
+```
+
+End-to-end: socket bound, all four IPC commands accepted,
+quit-with-deferred-exit pattern works (reply received before
+process death).
+
+**Workspace test count after this session: 495 tests** (was 487;
++8 ipc unit tests). All clippy `-D warnings` + fmt clean.

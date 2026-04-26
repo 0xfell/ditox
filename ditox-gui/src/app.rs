@@ -1486,6 +1486,15 @@ pub enum Message {
     TrayMenuEvent(String),
     QuitApp,
 
+    // Phase 4 sub-tasks 4.1 + 4.2 — IPC plumbing.
+    /// Tick emitted every 50 ms so we drain pending IPC commands
+    /// from the daemon socket via `try_recv`.
+    PollIpc,
+    /// Captured the main window's `Id` on first open. Stored in a
+    /// static so IPC handlers can target the window with
+    /// `iced::window::set_mode`.
+    WindowOpened(iced::window::Id),
+
     // View modes
     ShowSettings,
     HideSettings,
@@ -1690,6 +1699,101 @@ impl DitoxApp {
 
     fn theme(&self) -> Theme {
         Theme::Dark
+    }
+
+    /// Phase 4 sub-tasks 4.1 + 4.2: drain pending IPC commands from
+    /// the daemon receiver and execute them. Each `DaemonCommand`
+    /// carries a one-shot reply channel so the IPC client (a fresh
+    /// `ditox-gui --foo` invocation) sees a synchronous OK / ERR.
+    ///
+    /// Today's scope is plumbing only: `Show` / `Hide` / `Toggle`
+    /// update the in-memory `visible` flag and (best-effort) issue
+    /// `iced::window::set_mode` if we know the main window's `Id`,
+    /// but the existing one-shot UX (paste → exit) stays unchanged.
+    /// Phase 4 sub-task 4.3 will integrate `iced_layershell` and
+    /// rework `paste_and_exit` into `paste_and_hide` so the daemon
+    /// genuinely lives across multiple show/hide cycles.
+    fn drain_ipc(&mut self) -> Task<Message> {
+        use crate::ipc::Command;
+
+        let Some(mutex) = APP_IPC_RX.get() else {
+            return Task::none();
+        };
+        let Ok(guard) = mutex.lock() else {
+            return Task::none();
+        };
+        let Some(rx) = guard.as_ref() else {
+            return Task::none();
+        };
+
+        let mut tasks: Vec<Task<Message>> = Vec::new();
+        loop {
+            let mut cmd = match rx.try_recv() {
+                Ok(c) => c,
+                Err(_) => break,
+            };
+
+            match cmd.command {
+                Command::Show => {
+                    self.visible = true;
+                    cmd.reply_ok();
+                    if let Some(id) = APP_MAIN_WINDOW_ID.get() {
+                        tasks.push(iced::window::set_mode(*id, iced::window::Mode::Windowed));
+                    }
+                }
+                Command::Hide => {
+                    self.visible = false;
+                    cmd.reply_ok();
+                    if let Some(id) = APP_MAIN_WINDOW_ID.get() {
+                        tasks.push(iced::window::set_mode(*id, iced::window::Mode::Hidden));
+                    }
+                }
+                Command::Toggle => {
+                    self.visible = !self.visible;
+                    cmd.reply_ok();
+                    if let Some(id) = APP_MAIN_WINDOW_ID.get() {
+                        let mode = if self.visible {
+                            iced::window::Mode::Windowed
+                        } else {
+                            iced::window::Mode::Hidden
+                        };
+                        tasks.push(iced::window::set_mode(*id, mode));
+                    }
+                }
+                Command::Quit => {
+                    cmd.reply_ok();
+                    // Save window state before exiting so geometry
+                    // persists for the next launch.
+                    self.save_window_state();
+                    tracing::info!("quit requested via IPC; exiting");
+                    // Defer the actual exit by one tick so the reply
+                    // makes it back to the IPC client before the
+                    // process dies.
+                    std::thread::Builder::new()
+                        .name("ditox-gui-quit".into())
+                        .spawn(|| {
+                            std::thread::sleep(Duration::from_millis(50));
+                            std::process::exit(0);
+                        })
+                        .ok();
+                }
+                Command::Status => {
+                    let payload = format!(
+                        "visible={} entries={} version={}",
+                        self.visible,
+                        self.entries.len(),
+                        env!("CARGO_PKG_VERSION")
+                    );
+                    cmd.reply_ok_with(&payload);
+                }
+            }
+        }
+
+        if tasks.is_empty() {
+            Task::none()
+        } else {
+            Task::batch(tasks)
+        }
     }
 
     /// Phase 2 paste-back: write `entry` to the clipboard, record a
@@ -2072,6 +2176,15 @@ impl DitoxApp {
                 if self.visible && self.last_refresh.elapsed() > Duration::from_secs(2) {
                     self.refresh_entries();
                 }
+            }
+
+            Message::PollIpc => {
+                return self.drain_ipc();
+            }
+
+            Message::WindowOpened(id) => {
+                let _ = APP_MAIN_WINDOW_ID.set(id);
+                tracing::debug!(?id, "main window opened");
             }
 
             #[cfg(windows)]
@@ -3109,10 +3222,17 @@ impl DitoxApp {
             )
         });
 
-        // IPC subscription removed: one-shot mode does not run an IPC
-        // server; each launch is its own process. The `ipc` and
-        // `ipc_bridge` modules remain compiled for potential future use
-        // (e.g. a native global hotkey on Linux that talks to a daemon).
+        // Phase 4 sub-tasks 4.1 + 4.2: poll the IPC receiver every
+        // 50 ms. We can't bridge the std::mpsc::Receiver directly
+        // into iced's async runtime (it's not Send-compatible with
+        // iced's stream::channel future), so we emit a tick that
+        // triggers an `update()` call where we drain the rx.
+        let ipc_sub = iced::time::every(Duration::from_millis(50)).map(|_| Message::PollIpc);
+
+        // Window-open subscription: capture the main window's Id on
+        // creation so subsequent IPC commands can target it via
+        // `iced::window::set_mode`.
+        let window_open_sub = iced::window::open_events().map(Message::WindowOpened);
 
         let clipboard_sub = Subscription::run(|| {
             iced::stream::channel(
@@ -3178,10 +3298,19 @@ impl DitoxApp {
             clipboard_sub,
             focus_sub,
             tray_sub,
+            ipc_sub,
+            window_open_sub,
         ]);
         #[cfg(not(windows))]
-        let subs =
-            Subscription::batch([keyboard_sub, tick_sub, clipboard_sub, focus_sub, tray_sub]);
+        let subs = Subscription::batch([
+            keyboard_sub,
+            tick_sub,
+            clipboard_sub,
+            focus_sub,
+            tray_sub,
+            ipc_sub,
+            window_open_sub,
+        ]);
         subs
     }
 
@@ -3488,6 +3617,19 @@ static APP_START_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 static APP_INITIAL_SELECTION: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
+/// Phase 4 sub-tasks 4.1 + 4.2: receiver end of the IPC server's
+/// command channel. The iced subscription drains it on every poll
+/// tick. `boot_app` `take()`s it on first call.
+#[allow(clippy::type_complexity)]
+static APP_IPC_RX: std::sync::OnceLock<
+    Mutex<Option<std::sync::mpsc::Receiver<crate::ipc::DaemonCommand>>>,
+> = std::sync::OnceLock::new();
+
+/// Once iced reports the main window's `Id` (via `open_events`), we
+/// store it here so subsequent IPC `Show`/`Hide`/`Toggle` commands
+/// can target it via `iced::window::set_mode`.
+static APP_MAIN_WINDOW_ID: std::sync::OnceLock<iced::window::Id> = std::sync::OnceLock::new();
+
 /// Phase 2 paste-back state. Wrapped in `Mutex<Option<T>>` so
 /// `boot_app` can `take()` ownership into the `DitoxApp` instance —
 /// these aren't `Sync` (the trackers are `Send`-only) and even
@@ -3557,6 +3699,7 @@ pub fn run_with(
     foreground_tracker: Box<dyn ForegroundTracker>,
     synthesizer_chain: Vec<Box<dyn Synthesizer>>,
     initial_selection: usize,
+    ipc_rx: Option<std::sync::mpsc::Receiver<crate::ipc::DaemonCommand>>,
 ) -> Result<()> {
     // Store config for the boot function (db will be opened fresh since it's not Sync)
     let _ = APP_CONFIG.set(config);
@@ -3569,6 +3712,10 @@ pub fn run_with(
     let _ = APP_PREVIOUS_FOREGROUND.set(Mutex::new(previous_foreground));
     let _ = APP_FOREGROUND_TRACKER.set(Mutex::new(Some(foreground_tracker)));
     let _ = APP_SYNTHESIZER_CHAIN.set(Mutex::new(Some(synthesizer_chain)));
+
+    // Phase 4 sub-tasks 4.1 + 4.2: stash the IPC receiver for the
+    // GUI's poll subscription to drain.
+    let _ = APP_IPC_RX.set(Mutex::new(ipc_rx));
 
     // One-shot floating-launcher: ignore any persisted size and force a
     // compact 420x520 window anchored to the bottom-left of the active

@@ -41,6 +41,8 @@ global-hotkey.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+# Phase 4 daemon IPC: flock on the runtime lock file.
+fs2.workspace = true
 # Linux tray-icon requires a GTK event loop on the same thread as the tray;
 # we run it from a dedicated helper thread, separate from iced/winit.
 gtk = "0.18"

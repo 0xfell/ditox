@@ -14,6 +14,7 @@
 
 mod app;
 mod cli;
+mod ipc;
 mod startup;
 
 use clap::Parser;
@@ -23,6 +24,7 @@ use ditox_core::paste::cursor::PersistentSelectionCursor;
 use ditox_core::paste::synthesize::pick_chain;
 use ditox_core::platform::detect as detect_platform;
 use ditox_core::{Config, Database, Result};
+use ipc::SendOutcome;
 
 fn main() {
     if let Err(e) = run() {
@@ -40,18 +42,47 @@ fn run() -> Result<()> {
     let action = cli.action();
 
     // -----------------------------------------------------------------
-    // One-shot launcher model: each invocation is an independent process
-    // that runs until the user copies, cancels, or the window loses
-    // focus. Because there's no long-lived daemon, the IPC actions
-    // (`--toggle`, `--show`, `--hide`, `--quit`) are no longer
-    // meaningful: a fresh launch IS a "show", and exit handles
-    // "hide"/"quit" as soon as the user is done. We keep the flags for
-    // backward-compatibility (so existing keybinds don't break), but
-    // they're all rolled into "just launch" except `--quit` which
-    // exits immediately.
+    // Phase 4 sub-tasks 4.1 + 4.2 — single-instance + IPC.
+    //
+    // For every CLI action including bare `Launch`, we first try to
+    // talk to a running daemon. If the daemon answers we forward the
+    // command and exit. Only when no daemon is reachable do we try
+    // to acquire the lock and become one ourselves. This lets the
+    // user re-bind the same `ditox-gui` keybind for both "first
+    // launch" (start the daemon) and "summon" (forward to the
+    // running one).
+    //
+    // The daemon's full long-running UX (window stays open, hide on
+    // blur, modifier-held cycling, layer-shell) lands incrementally
+    // across sub-tasks 4.3-4.12. This commit ships the plumbing only
+    // — the daemon mode currently still exits on copy (one-shot
+    // semantics retained) but accepts IPC commands while alive.
     // -----------------------------------------------------------------
+
+    // Step 1: forward action to the daemon if one is running.
+    match ipc::try_send_to_daemon(action) {
+        SendOutcome::Sent { reply } => {
+            tracing::info!(action = ?action, %reply, "forwarded to running daemon");
+            // A non-OK reply is surfaced to the user so they can react.
+            if !reply.starts_with("OK") {
+                eprintln!("ditox-gui: daemon replied: {reply}");
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        SendOutcome::Rejected { message } => {
+            eprintln!("ditox-gui: daemon rejected command: {message}");
+            std::process::exit(1);
+        }
+        SendOutcome::NoDaemon => {
+            // Fall through. For Launch / Toggle we'll start a daemon;
+            // for Quit we just exit cleanly because there's nothing to
+            // quit.
+        }
+    }
+
     if matches!(action, cli::Action::Quit) {
-        tracing::info!("--quit requested; one-shot mode has no daemon to signal, exiting");
+        tracing::info!("--quit requested but no daemon is running; nothing to do");
         return Ok(());
     }
 
@@ -71,7 +102,37 @@ fn run() -> Result<()> {
     let db = Database::open()?;
     db.init_schema()?;
 
-    tracing::info!("Ditox GUI starting (one-shot, action={:?})", action);
+    // Step 2: try to acquire the daemon lock. If another process
+    // grabbed it between our `try_send_to_daemon` call and now (race
+    // condition during simultaneous starts), retry the IPC send once
+    // before giving up.
+    let _lock_guard = match ipc::acquire_lock() {
+        Some(file) => file,
+        None => {
+            tracing::debug!("daemon lock contended; retrying IPC send");
+            match ipc::try_send_to_daemon(action) {
+                SendOutcome::Sent { reply } => {
+                    tracing::info!(%reply, "race resolved; forwarded to other daemon");
+                    return Ok(());
+                }
+                _ => {
+                    eprintln!("ditox-gui: another instance is starting up; try again in a moment.");
+                    std::process::exit(1);
+                }
+            }
+        }
+    };
+
+    // Step 3: bind the IPC socket and become the daemon.
+    let (ipc_rx, _socket_guard) = ipc::spawn_listener().map_err(|e| {
+        ditox_core::DitoxError::Other(format!("could not bind ditox-gui IPC socket: {e}"))
+    })?;
+    tracing::info!(
+        socket = %ipc::socket_path().display(),
+        "ditox-gui daemon listening on IPC socket"
+    );
+
+    tracing::info!("Ditox GUI starting (daemon, action={:?})", action);
 
     // `--hide` is preserved as a no-op compatibility flag; in one-shot
     // mode there's nothing to hide.
@@ -146,7 +207,9 @@ fn run() -> Result<()> {
         }
     };
 
-    // Run the iced application
+    // Run the iced application. The IPC receiver is threaded
+    // through so the GUI's update loop can drain DaemonCommands
+    // and reply to clients.
     app::run_with(
         db,
         config,
@@ -155,5 +218,6 @@ fn run() -> Result<()> {
         foreground_tracker,
         synthesizer_chain,
         initial_selection,
+        Some(ipc_rx),
     )
 }
