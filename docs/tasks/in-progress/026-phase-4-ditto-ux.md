@@ -1,6 +1,6 @@
 # Task: Phase 4 — Ditto UX replication (long-running GUI + layer-shell)
 
-> **Status:** in-progress (1/12 sub-tasks done — 4.1 + 4.2 plumbing only; full long-running UX in 4.3)
+> **Status:** in-progress (2/12 sub-tasks done — 4.1 plumbing, 4.2 plumbing, 4.3 layer-shell dispatch)
 > **Priority:** high
 > **Phase:** 4 — Ditto UX
 > **Created:** 2026-04-26
@@ -411,3 +411,77 @@ process death).
 
 **Workspace test count after this session: 495 tests** (was 487;
 +8 ipc unit tests). All clippy `-D warnings` + fmt clean.
+
+### 2026-04-26 — sub-task 4.3 layer-shell dispatch landed
+
+**4.3 — Layer-shell window on Linux.**
+
+Path A1 from ADR 0001 wired in: `iced_layershell::build_pattern::application`
+on Linux compositors that support `wlr-layer-shell`; existing
+`iced::application` path retained for everything else (Windows,
+macOS, GNOME Wayland, X11).
+
+`Cargo.toml`:
+- `iced_layershell = "=0.17.1"` workspace dep (pinned through
+  Phase 4 to avoid the in-flight 0.18 beta churn; unpin in v0.5).
+- Added to `ditox-gui`'s `cfg(unix)` deps. Pure Rust + already
+  in lock; integrates cleanly with the rest of the iced stack.
+
+`ditox-gui/src/app.rs`:
+- `Message` enum gains `#[cfg_attr(unix, iced_layershell::to_layer_message)]`.
+  The macro adds the layer-shell control variants (`AnchorChange`,
+  `SizeChange`, `MarginChange`, `LayerChange`,
+  `KeyboardInteractivityChange`, `SetInputRegion`,
+  `AnchorSizeChange`, `VirtualKeyboardPressed`,
+  `ExclusiveZoneChange`) and a `TryInto<LayershellCustomActionWithId>`
+  impl. On non-Linux builds the macro still emits the variants so
+  the same enum builds; iced never produces them, so they're
+  harmless dead code.
+- `update`'s match gains a `_ => {}` catch-all to satisfy
+  exhaustiveness without acting on the synthesised control
+  variants — iced_layershell dispatches them internally.
+- Removed the bare `Result` import from `use ditox_core::{...}`
+  because the macro expansion uses `Result<T, E>` (std's two-arg
+  form) and `ditox_core::Result<T>` (one-arg) shadowed it. The
+  one site that wanted `ditox_core::Result` (`run_with`) now
+  qualifies it explicitly.
+- New `run_layer_shell()` function (cfg=target_os="linux"):
+  - `LayerShellSettings { anchor: Bottom | Left, layer: Top,
+    size: Some((420, 520)), margin: (0, 0, 24, 24),
+    keyboard_interactivity: Exclusive, exclusive_zone: -1,
+    start_mode: Active, events_transparent: false }`.
+  - Same `boot_app` (`(DitoxApp, Task<Message>)`) — works because
+    `iced_layershell::application` accepts `IntoBoot`-shaped
+    closures.
+  - Same `subscription` and `view`.
+  - Theme passed as `iced::Theme::Dark` (the trait impl on
+    `iced::Theme` itself satisfies `ThemeFn<State, Theme>`).
+  - Bootstrap font loaded via `.font(iced_fonts::BOOTSTRAP_FONT_BYTES)`.
+- `run_with` dispatches: on Linux + `Platform::supports_layer_shell()`
+  → `run_layer_shell`; else → existing iced path.
+
+**Live verification on Hyprland 2026-04-26:**
+
+```
+INFO ditox_gui: ditox-gui daemon listening on IPC socket
+INFO ditox_gui: Ditox GUI starting (daemon, action=Launch)
+INFO ditox_gui: captured previous-foreground snapshot ...
+INFO ditox_gui::app: starting iced_layershell window (wlr-layer-shell) platform=Linux(Hyprland { signature: ... })
+```
+
+Daemon binds IPC socket, detects Hyprland, dispatches to
+`run_layer_shell`, layer-surface created without panic.
+
+**Held back from this commit (rolling into Phase 4.4-4.12):**
+- Configurable popup position (`[gui.position]` modes
+  `at_caret` / `at_cursor` / `at_previous` / etc.) — sub-task 4.4.
+- Custom non-client area drag handle for layer-shell — 4.5.
+- Pin / always-on-top toggle — 4.6.
+- Hide-on-blur grace + paste-and-stay — 4.8 + the existing
+  `paste_and_exit` rework.
+- Tooltip-as-preview — 4.9.
+- Helper `--install-hyprland-config` — 4.11.
+
+**Workspace test count after this session: 495 tests** (unchanged;
+4.3 is wiring + cfg-gated dispatch with no new pure-logic surface
+area). All clippy `-D warnings` + fmt clean.

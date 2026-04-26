@@ -5,7 +5,14 @@ use ditox_core::foreground::{ForegroundSnapshot, ForegroundTracker};
 use ditox_core::paste::keystroke::KeystrokeSequence;
 use ditox_core::paste::sentinel::PasteSentinel;
 use ditox_core::paste::synthesize::{paste_with_chain, Synthesizer};
-use ditox_core::{Clipboard, Config, Database, DbHandle, Entry, EntryType, Result, Watcher};
+// Phase 4 sub-task 4.3: do NOT import `ditox_core::Result` here. The
+// `iced_layershell::to_layer_message` macro expands a `TryInto` impl
+// that uses bare `Result<T, E>` which must resolve to `std::result::Result`
+// (the 2-generic version). Importing `ditox_core::Result` (which is
+// `Result<T, DitoxError>` with a single generic) shadows std's and
+// breaks macro expansion. The one site that wanted `ditox_core::Result`
+// (`run_with`) qualifies it explicitly below.
+use ditox_core::{Clipboard, Config, Database, DbHandle, Entry, EntryType, Watcher};
 #[cfg(windows)]
 use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
@@ -1438,6 +1445,15 @@ pub enum ViewMode {
     ConfirmDelete(String), // entry_id - confirmation for deleting favorites
 }
 
+/// Phase 4 sub-task 4.3: `#[to_layer_message]` augments the enum
+/// with the layer-shell control variants (AnchorChange,
+/// SizeChange, MarginChange, etc.) plus the `TryInto<LayershellCustomActionWithId>`
+/// impl that `iced_layershell::build_pattern::application` requires.
+///
+/// On non-Linux builds the macro still emits the variants but
+/// they're never produced by iced — harmless dead code that
+/// keeps the same Message enum buildable cross-platform.
+#[cfg_attr(unix, iced_layershell::to_layer_message)]
 #[derive(Debug, Clone)]
 pub enum Message {
     // Entry interactions
@@ -2336,6 +2352,15 @@ impl DitoxApp {
             Message::Scrolled(viewport) => {
                 self.scroll_viewport = Some(viewport);
             }
+
+            // Phase 4 sub-task 4.3: catch-all for the variants
+            // synthesised by `iced_layershell::to_layer_message`
+            // (AnchorChange, SizeChange, MarginChange,
+            // SetInputRegion, etc.). iced never emits them on the
+            // xdg_toplevel path; iced_layershell uses them
+            // internally for compositor round-trips. We don't act
+            // on them ourselves.
+            _ => {}
         }
 
         Task::none()
@@ -3700,7 +3725,7 @@ pub fn run_with(
     synthesizer_chain: Vec<Box<dyn Synthesizer>>,
     initial_selection: usize,
     ipc_rx: Option<std::sync::mpsc::Receiver<crate::ipc::DaemonCommand>>,
-) -> Result<()> {
+) -> ditox_core::Result<()> {
     // Store config for the boot function (db will be opened fresh since it's not Sync)
     let _ = APP_CONFIG.set(config);
     APP_START_HIDDEN.store(start_hidden, std::sync::atomic::Ordering::Relaxed);
@@ -3757,6 +3782,26 @@ pub fn run_with(
         settings
     };
 
+    // Phase 4 sub-task 4.3: dispatch between the layer-shell path
+    // (Linux compositors that support wlr-layer-shell) and the
+    // xdg_toplevel path (everything else: Windows, macOS, GNOME
+    // Wayland, X11). Settings translation lives inside each arm.
+    #[cfg(target_os = "linux")]
+    {
+        let platform = ditox_core::platform::detect();
+        if platform.supports_layer_shell() {
+            tracing::info!(
+                platform = ?platform,
+                "starting iced_layershell window (wlr-layer-shell)"
+            );
+            return run_layer_shell(start_hidden);
+        }
+        tracing::info!(
+            platform = ?platform,
+            "starting iced xdg_toplevel window (compositor lacks wlr-layer-shell)"
+        );
+    }
+
     iced::application(boot_app, DitoxApp::update, DitoxApp::view)
         .subscription(DitoxApp::subscription)
         .theme(DitoxApp::theme)
@@ -3765,6 +3810,70 @@ pub fn run_with(
         .window(settings)
         .run()
         .map_err(|e| ditox_core::DitoxError::Other(e.to_string()))?;
+
+    Ok(())
+}
+
+/// Phase 4 sub-task 4.3: layer-shell window for wlr-layer-shell
+/// compositors (Hyprland, Sway, Wlroots-generic, KDE Plasma 5.27+).
+///
+/// Uses `iced_layershell::build_pattern::application` instead of
+/// `iced::application`. The Message enum has the
+/// `#[iced_layershell::to_layer_message]` attribute applied so the
+/// layer-shell control variants and `TryInto<LayershellCustomActionWithId>`
+/// impl are auto-generated. The catch-all `_ => {}` in `update`
+/// soaks up the unhandled control variants.
+///
+/// Settings (per `docs/notes/ui-replication.md::A3`):
+/// - 420x520 panel anchored to bottom-left of the active monitor.
+/// - 24px margin on bottom and left.
+/// - Top layer (above normal windows; below system overlays).
+/// - Exclusive keyboard interactivity so the launcher captures
+///   key events (Esc, Enter, search input) without depending on
+///   compositor focus.
+///
+/// Phase 4 sub-task 4.4 will make `anchor` / `margin` / `layer`
+/// configurable; this commit hard-codes the bottom-left default.
+#[cfg(target_os = "linux")]
+fn run_layer_shell(_start_hidden: bool) -> ditox_core::Result<()> {
+    use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
+    use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
+
+    let layer_settings = LayerShellSettings {
+        anchor: Anchor::Bottom | Anchor::Left,
+        layer: Layer::Top,
+        size: Some((
+            DEFAULT_WINDOW_SIZE.width as u32,
+            DEFAULT_WINDOW_SIZE.height as u32,
+        )),
+        // (top, right, bottom, left) per layershellev. Default
+        // floating-launcher offset is 24 px from the bottom-left
+        // corner.
+        margin: (0, 0, 24, 24),
+        keyboard_interactivity: KeyboardInteractivity::Exclusive,
+        // exclusive_zone = -1 means "no zone reserved" (we float over
+        // other windows rather than push them).
+        exclusive_zone: -1,
+        start_mode: StartMode::Active,
+        events_transparent: false,
+    };
+
+    iced_layershell::build_pattern::application(
+        boot_app,
+        || String::from("ditox-gui"),
+        DitoxApp::update,
+        DitoxApp::view,
+    )
+    .subscription(DitoxApp::subscription)
+    .theme(iced::Theme::Dark)
+    .font(iced_fonts::BOOTSTRAP_FONT_BYTES)
+    .settings(Settings {
+        id: Some("ditox-gui".to_string()),
+        layer_settings,
+        ..Settings::default()
+    })
+    .run()
+    .map_err(|e| ditox_core::DitoxError::Other(e.to_string()))?;
 
     Ok(())
 }

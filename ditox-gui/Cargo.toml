@@ -43,6 +43,9 @@ global-hotkey.workspace = true
 libc.workspace = true
 # Phase 4 daemon IPC: flock on the runtime lock file.
 fs2.workspace = true
+# Phase 4 sub-task 4.3: wlr-layer-shell on Linux. Used only when
+# the detected compositor reports `supports_layer_shell()`.
+iced_layershell.workspace = true
 # Linux tray-icon requires a GTK event loop on the same thread as the tray;
 # we run it from a dedicated helper thread, separate from iced/winit.
 gtk = "0.18"
