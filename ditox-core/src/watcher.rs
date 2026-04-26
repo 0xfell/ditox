@@ -1,4 +1,6 @@
-use crate::capture::{clip_hash, CaptureSource, PollingCaptureSource, RawClip};
+#[cfg(windows)]
+use crate::capture::PollingCaptureSource;
+use crate::capture::{clip_hash, CaptureSource, RawClip};
 use crate::clipboard::Clipboard;
 use crate::config::Config;
 use crate::db::Database;
@@ -287,16 +289,37 @@ fn acquire_lock() -> Result<File> {
 }
 
 impl Watcher {
-    /// Build a watcher with the platform-default capture source: a
-    /// polling adapter that reads images first (browser "Copy image"
-    /// priority) then text from the OS clipboard.
+    /// Build a watcher with the platform-default capture source.
+    ///
+    /// - **Linux:** [`crate::capture::wayland::WaylandLibraryCapture`]
+    ///   talks to the compositor via `wl-clipboard-rs` and returns
+    ///   every offered MIME in one [`RawClip`] (Phase 1 multi-format).
+    /// - **Windows:** the legacy `arboard`-based polling source is
+    ///   kept until sub-task 1.4 lands the
+    ///   `AddClipboardFormatListener` event-driven path.
+    ///
+    /// Image-priority (browser "Copy image" → image, not URL) is
+    /// preserved by [`Watcher::process_clip`], which calls
+    /// [`RawClip::first_with_prefix("image/")`] before
+    /// [`RawClip::first_with_prefix("text/plain")`].
     pub fn new(db: Database, config: Config) -> Self {
-        let interval = config.general.poll_interval_ms;
-        let source: Box<dyn CaptureSource> = Box::new(PollingCaptureSource::new(
-            "legacy-clipboard",
-            interval,
-            legacy_clipboard_snapshot,
-        ));
+        let source: Box<dyn CaptureSource> = {
+            #[cfg(unix)]
+            {
+                Box::new(crate::capture::wayland::WaylandLibraryCapture::new(
+                    config.capture.clone(),
+                ))
+            }
+            #[cfg(windows)]
+            {
+                let interval = config.general.poll_interval_ms;
+                Box::new(PollingCaptureSource::new(
+                    "legacy-clipboard",
+                    interval,
+                    legacy_clipboard_snapshot,
+                ))
+            }
+        };
         Self::with_sources(db, config, vec![source])
     }
 
@@ -518,9 +541,16 @@ impl Watcher {
     }
 }
 
-/// Default capture closure used by `Watcher::new`. Reads images
-/// first (priority), then text. Returns `None` when the clipboard is
-/// empty.
+/// Windows fallback capture closure used by `Watcher::new` until
+/// sub-task 1.4 lands the event-driven `AddClipboardFormatListener`
+/// path. Reads images first (priority), then text. Returns `None`
+/// when the clipboard is empty.
+///
+/// On Linux the watcher uses
+/// [`crate::capture::wayland::WaylandLibraryCapture`] directly, so
+/// this function is gated `#[cfg(windows)]` to avoid dead-code
+/// warnings.
+#[cfg(windows)]
 fn legacy_clipboard_snapshot() -> Result<Option<RawClip>> {
     if let Some(img) = Clipboard::read_image()? {
         return Ok(Some(RawClip::image(img.bytes, &img.extension)));

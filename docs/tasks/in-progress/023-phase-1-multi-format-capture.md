@@ -448,3 +448,98 @@ Workspace test count after this session: **153 tests**
 (Linux event-driven via `wl-clipboard-rs`) and 1.4 (Windows
 `AddClipboardFormatListener`). Both require platform-specific
 testing.
+
+### 2026-04-26 — sub-task 1.3 Wayland multi-format capture landed
+
+New `ditox-core/src/capture/wayland.rs` (`WaylandLibraryCapture`)
+replaces the `wl-paste` subprocess shell-out on Linux. The watcher
+now constructs the source via `#[cfg(unix)]` in
+`ditox-core/src/watcher.rs::Watcher::new`; the legacy
+`legacy_clipboard_snapshot` and the import of
+`PollingCaptureSource` are gated `#[cfg(windows)]` and become a
+Windows-only fallback until sub-task 1.4 lands.
+
+**Pipeline per `current_snapshot()`:**
+
+1. `paste::get_mime_types_ordered(Regular, Unspecified)` —
+   compositor order is preserved (matters because many apps offer
+   the native format first; `RawClip::first_with_prefix` returns
+   the earliest match, so the ordering decides which `image/*`
+   wins when both PNG and JPEG are offered).
+2. For each MIME, canonicalise via `FormatId::from_wayland_mime`
+   (collapses `text/plain`, `UTF8_STRING`, `STRING` → the single
+   canonical `text/plain;charset=utf-8`).
+3. Apply `CaptureConfig::should_capture_format(canonical)` —
+   honours mode (All / Minimal / Custom) + allow/deny lists.
+4. Dedup by canonical MIME — synonyms collapse to one read.
+5. Open `paste::get_contents(Regular, Unspecified, Specific(mime))`,
+   wrap the returned `os_pipe::PipeReader` in
+   `Read::take(max_format_size_bytes + 1)`, `read_to_end`. Empty
+   payloads are dropped (X11-leaked `TARGETS`/`TIMESTAMP` etc. and
+   misbehaving sources).
+6. `format_size_ok` per format and `clip_size_ok` for the total —
+   when the total exceeds the cap, drop the WHOLE clip with a warn
+   log (partial captures would silently lose information).
+
+**Error mapping:** `PasteError::NoSeats | ClipboardEmpty | NoMimeType`
+→ `Ok(None)` (steady-state empty clipboard, not an error).
+Everything else (`MissingProtocol`, `WaylandCommunication`, `…`) →
+`DitoxError::Clipboard(...)` so KDE-without-data-control or a
+crashed compositor surfaces loudly.
+
+**Image-priority preservation:** `Watcher::process_clip` was
+already calling `clip.first_with_prefix("image/")` *before*
+`first_with_prefix("text/plain")` (`watcher.rs:463 vs :485`); now
+that `RawClip.formats` carries every offered MIME instead of one
+pre-picked format, the existing precedence rule does the right
+thing automatically. The "Copy image" from a browser → image, not
+URL behaviour AGENTS.md describes is preserved without any
+clipboard-side priority list. The `image/png > image/jpeg > …`
+fixed list in `clipboard.rs::read_image:109-115` is no longer on
+the hot path — that function survives as part of `Clipboard`'s
+public API (now unused by the watcher) for backward compat.
+
+**`subscribe()` is a stub** — returns an empty channel. The
+watcher only ever calls `current_snapshot()` (`watcher.rs:445`),
+so event-driven Wayland is deferred. A future implementation
+needs `wlr-data-control-v1::data_offer.offer` events directly;
+the `data_control` module is private inside `wl-clipboard-rs` so
+this would require either a fork or a switch to
+`smithay-client-toolkit`. Not blocking Phase 1.
+
+**`Clipboard::set_text` / `Clipboard::set_image` unchanged** —
+paste-back still shells out to `wl-copy` from `ditox-tui`,
+`ditox-gui`, and `ditox-core::app`. The reverse-direction
+`wl-clipboard-rs::copy::Options::copy` API works but needs a
+daemonised holder process (Wayland clipboard requires the source
+to stay alive until another client takes ownership), which is
+its own project. Tracked as a follow-up.
+
+**Tests added (7, +1 ignored):**
+- `name_is_stable` — `name() == "wayland-library"` invariant.
+- `shutdown_is_idempotent` — `Drop` contract.
+- `translate_paste_err_collapses_empty_variants` — the three
+  steady-state-empty errors all collapse to `Ok(None)`.
+- `translate_paste_err_propagates_real_errors` — `MissingProtocol`
+  surfaces as `DitoxError::Clipboard`.
+- `subscribe_returns_empty_channel` — receiver is valid but
+  disconnected (the `_tx` is dropped at end of `subscribe`).
+- `config_is_held_by_value_for_should_capture_check` — the
+  `CaptureConfig` field is consulted before any pipe is opened
+  (verified via the cheap helper rather than a real Wayland call).
+- `live_snapshot_returns_some_clip_when_clipboard_nonempty`
+  (`#[ignore]`) — end-to-end smoke test against the active
+  Wayland session. **Verified passing on Hyprland 2026-04-26**
+  with `echo … | wl-copy` followed by
+  `cargo test … live_snapshot … -- --ignored --nocapture`.
+  Asserts the snapshot has at least one format with non-empty
+  bytes and that all MIMEs are canonical (no raw `text/plain` or
+  `UTF8_STRING` leak through).
+
+**Workspace test count after this session: 159 tests** (+6
+active wayland, +1 ignored). All clippy `-D warnings` + fmt clean.
+
+**Phase 1 status: 8/9 sub-tasks done.** Remaining: 1.4 (Windows
+`AddClipboardFormatListener`). That work needs to be done on
+Windows (or against a Windows VM) — not feasible from this
+Linux-only session.

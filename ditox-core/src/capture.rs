@@ -20,6 +20,12 @@ use crate::error::Result;
 use std::sync::mpsc;
 use std::time::SystemTime;
 
+/// Linux-only capture backend built on `wl-clipboard-rs` (see
+/// task 023 sub-task 1.3). Provides multi-format snapshots from a
+/// real Wayland session; replaces the `wl-paste` shell-out path.
+#[cfg(unix)]
+pub mod wayland;
+
 /// A clipboard snapshot at a particular instant, before any
 /// processing or persistence.
 ///
