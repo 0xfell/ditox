@@ -22,6 +22,7 @@ pub mod paste;
 pub mod platform;
 pub mod search;
 pub mod stats;
+pub mod url_template;
 pub mod watcher;
 
 // Re-export commonly used types

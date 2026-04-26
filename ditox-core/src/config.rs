@@ -90,6 +90,9 @@ pub struct Config {
     pub keybindings: KeybindingsConfig,
     pub capture: CaptureConfig,
     pub paste: PasteConfig,
+    /// Phase 3 sub-task 3.8: per-clip URL templates for the
+    /// "Translate" / "Search the web" actions.
+    pub actions: crate::url_template::ActionsConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]

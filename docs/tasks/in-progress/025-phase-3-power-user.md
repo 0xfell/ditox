@@ -1,6 +1,6 @@
 # Task: Phase 3 — Power-user features
 
-> **Status:** in-progress (3/8 sub-tasks done — 3.2, 3.6, 3.7)
+> **Status:** in-progress (4/8 sub-tasks done — 3.2, 3.6, 3.7, 3.8)
 > **Priority:** medium
 > **Phase:** 3 — Power-user features
 > **Created:** 2026-04-26
@@ -433,3 +433,89 @@ fires; non-destructive migration on read keeps things safe.)
 
 **Workspace test count after this session: 359 tests** (was 347;
 +12 window_state_tests). All clippy `-D warnings` + fmt clean.
+
+### 2026-04-26 — sub-task 3.8 landed
+
+**3.8 — Translate / web-search URL templates.**
+
+`ditox-core/src/url_template.rs`:
+- `ActionsConfig { translate_url, web_search_url }` with the
+  spec defaults: `https://translate.google.com/?text={q}` and
+  `https://duckduckgo.com/?q={q}`.
+- `substitute(template, query)` — replaces every `{q}` with the
+  URL-encoded query; passes other tokens (including lone `{`)
+  through verbatim.
+- `url_encode(input)` — RFC 3986 unreserved-set encoder
+  (`[A-Za-z0-9-_.~]` literal, everything else `%XX` uppercase
+  hex). ~25 LoC, no new workspace dep (avoided `urlencoding` /
+  `percent-encoding` for dependency hygiene).
+- `UrlAction { Translate, WebSearch }` enum with
+  `from_name(&str)` parser accepting canonical names
+  (`translate`/`search`) plus synonyms (`tr`/`trans`/`web`/
+  `websearch`/`web-search`).
+- `open_in_browser(url)` — cross-platform shell-out:
+  - Linux:   `xdg-open <url>`
+  - macOS:   `open <url>`
+  - Windows: `cmd /C start "" <url>` (the empty `""` is the
+    mandatory window-title arg for `start`)
+
+  Errors surface the launcher's stderr — typical failure modes
+  are "no default browser registered" or "xdg-open not on PATH".
+
+`ditox-core/src/config.rs`: `Config.actions: ActionsConfig`
+nested under the `[actions]` TOML section.
+
+`ditox-tui/src/cli.rs`: new `Open { target, action,
+print_only }` subcommand.
+
+`ditox-tui/src/main.rs::cmd_open`:
+- Resolves the entry via the existing `resolve_target` helper
+  (1-based index or UUID).
+- Refuses image entries (URL templates need a text query —
+  pasting a bare SHA-256 into Google Translate is useless).
+- Looks up the action via `UrlAction::from_name`; exit code 2
+  on unknown action.
+- `--print-only` (`-p`) dumps the resolved URL to stdout
+  instead of launching the browser. Useful for piping into a
+  custom browser script or sanity-checking templates.
+- Otherwise calls `open_in_browser` and propagates errors.
+
+15 unit tests in url_template.rs covering: url_encode unreserved
+pass-through / space / specials / unicode (multi-byte UTF-8 →
+multi-byte percent encoding) / empty / uppercase hex (RFC 3986
+§2.1); substitute happy-path / encoding / multi-occurrence /
+no-placeholder / lone braces; ActionsConfig defaults and
+helpers; UrlAction resolution and from_name with all synonyms.
+
+**Live verification on Hyprland 2026-04-26 with `--print-only`:**
+
+```
+$ ditox open 1 translate -p
+https://translate.google.com/?text=Diablo%C2%AE%20IV%3A%20Lord%20of%20Hatred%E2%84%A2%20-%20Ultimate%20Edition
+
+$ ditox open 1 search -p
+https://duckduckgo.com/?q=Diablo%C2%AE%20IV%3A%20Lord%20of%20Hatred%E2%84%A2%20-%20Ultimate%20Edition
+
+$ ditox open 1 trans -p          # synonym
+https://translate.google.com/?text=...
+
+$ ditox open 1 web-search -p     # synonym
+https://duckduckgo.com/?q=...
+
+$ ditox open 1 garbage -p
+ditox open: unknown action 'garbage'. Valid: translate, search (synonyms: tr, trans, web, websearch, web-search).
+$ echo $?
+2
+```
+
+Unicode round-trip works: ™ → `%E2%84%A2`, ® → `%C2%AE`, space →
+`%20`, `:` → `%3A` — all uppercase hex per RFC 3986 §2.1.
+
+GUI integration deferred — iced 0.14 has no built-in context
+menu support, and adding right-click handling is its own
+refactor. Phase 4's Ditto-UX-replication task (026) will
+introduce the broader context-menu UI; 3.8's data model + CLI
+surface is the foundation it'll build on.
+
+**Workspace test count after this session: 374 tests** (was 359;
++15 url_template tests). All clippy `-D warnings` + fmt clean.

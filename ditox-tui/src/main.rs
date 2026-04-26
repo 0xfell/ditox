@@ -78,8 +78,64 @@ fn run() -> Result<()> {
             dry_run,
             fix_hashes,
         }) => cmd_repair(&mut db, dry_run, fix_hashes),
+        Some(Commands::Open {
+            target,
+            action,
+            print_only,
+        }) => cmd_open(&db, &config, &target, &action, print_only),
         Some(Commands::Collection(subcmd)) => cmd_collection(&db, subcmd),
     }
+}
+
+fn cmd_open(
+    db: &Database,
+    config: &Config,
+    target: &str,
+    action_name: &str,
+    print_only: bool,
+) -> Result<()> {
+    use ditox_core::url_template::{open_in_browser, UrlAction};
+
+    let entry = match resolve_target(db, target)? {
+        Some(e) => e,
+        None => {
+            eprintln!("Entry not found: {}", target);
+            std::process::exit(1);
+        }
+    };
+
+    // Only text entries make sense to open in a URL template;
+    // images would emit `<sha256>` as the URL query, which is
+    // useless. Be explicit rather than silently doing the wrong
+    // thing.
+    if entry.entry_type != EntryType::Text {
+        eprintln!(
+            "ditox open: entry {} is not a text entry; URL templates need a text query",
+            target
+        );
+        std::process::exit(1);
+    }
+
+    let action = match UrlAction::from_name(action_name) {
+        Some(a) => a,
+        None => {
+            eprintln!(
+                "ditox open: unknown action '{}'. Valid: translate, search (synonyms: tr, trans, web, websearch, web-search).",
+                action_name
+            );
+            std::process::exit(2);
+        }
+    };
+
+    let url = action.url_for(&config.actions, &entry.content);
+
+    if print_only {
+        println!("{}", url);
+        return Ok(());
+    }
+
+    open_in_browser(&url)?;
+    Ok(())
 }
 
 fn run_tui(db: Database, config: Config) -> Result<()> {

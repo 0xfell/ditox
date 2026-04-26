@@ -125,6 +125,35 @@ pub enum Commands {
         fix_hashes: bool,
     },
 
+    /// Open the entry's text content in the default browser via a
+    /// configured URL template (Phase 3 sub-task 3.8). Templates live
+    /// under `[actions]` in `config.toml`; the placeholder `{q}` is
+    /// substituted with the URL-encoded clip text.
+    ///
+    /// Examples:
+    ///
+    /// ```sh
+    /// ditox open 1 translate     # Opens translate.google.com with entry #1
+    /// ditox open <uuid> search   # Opens DuckDuckGo with that entry's text
+    /// ditox open 2 -p            # Print the resolved URL instead of opening
+    /// ```
+    Open {
+        /// Entry index (1-based) or UUID.
+        target: String,
+
+        /// Action name. Canonical: `translate`, `search`. Synonyms:
+        /// `tr`/`trans` for translate; `web`/`websearch`/`web-search`
+        /// for search.
+        #[arg(default_value = "translate")]
+        action: String,
+
+        /// Print the resolved URL to stdout instead of launching the
+        /// browser. Useful for piping into a custom browser script
+        /// or for sanity-checking templates.
+        #[arg(short = 'p', long)]
+        print_only: bool,
+    },
+
     /// Manage collections
     #[command(subcommand)]
     Collection(CollectionCommands),
