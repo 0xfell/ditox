@@ -2873,8 +2873,30 @@ fn setup_tray_icon() -> Option<TrayIcon> {
 /// we spawn a dedicated GTK thread that owns the tray and drives
 /// `gtk::main()`. Menu events travel back to the iced app via the global
 /// `MenuEvent::receiver()` (which the existing subscription already polls).
+///
+/// `tray-icon`'s Linux backend pulls in `libappindicator-sys`, which `dlopen`s
+/// `libayatana-appindicator3.so.1` (or fallbacks) on first use and **panics**
+/// from a `lazy_static` initialiser if the library isn't on the loader path.
+/// We can't recover from that panic on a dedicated thread, so we probe the
+/// library *before* spawning the tray thread and skip cleanly when it's
+/// missing — typically when running a `cargo build`'d binary outside
+/// `nix develop` on NixOS, or on minimal distros without the appindicator
+/// system package installed.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn spawn_linux_tray_thread() {
+    if !appindicator_loadable() {
+        tracing::warn!(
+            "tray-icon requires libayatana-appindicator3.so.1 or \
+             libappindicator3.so.1 at runtime; none of the candidate names \
+             were loadable. Continuing without a tray icon. \
+             Hint: NixOS users should run via `nix run` / `nix build` (which \
+             wraps the binary with the right LD_LIBRARY_PATH) or launch from \
+             a `nix develop` shell; on other distros install the \
+             libayatana-appindicator (or libappindicator-gtk3) system package."
+        );
+        return;
+    }
+
     std::thread::Builder::new()
         .name("ditox-tray".into())
         .spawn(|| {
@@ -2909,6 +2931,53 @@ fn spawn_linux_tray_thread() {
             gtk::main();
         })
         .expect("failed to spawn tray thread");
+}
+
+/// Probe for the libappindicator dynamic library that `tray-icon` needs at
+/// runtime, returning `true` iff one of the four candidate sonames can be
+/// `dlopen`ed. `libappindicator-sys` itself panics on failure from a
+/// `lazy_static` initialiser; we'd rather skip the tray than crash the
+/// dedicated GTK thread.
+///
+/// The candidate list mirrors `libappindicator-sys-0.9.0/src/lib.rs:41`:
+///
+/// ```text
+/// libayatana-appindicator3.so.1
+/// libappindicator3.so.1
+/// libayatana-appindicator3.so
+/// libappindicator3.so
+/// ```
+///
+/// We open with `RTLD_LAZY` (don't resolve symbols yet) and immediately
+/// `dlclose` so the probe doesn't pin the library into the address space —
+/// `tray-icon`'s real load path will reopen it through `libappindicator-sys`'s
+/// own caching layer.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn appindicator_loadable() -> bool {
+    use std::ffi::CString;
+
+    const CANDIDATES: &[&str] = &[
+        "libayatana-appindicator3.so.1",
+        "libappindicator3.so.1",
+        "libayatana-appindicator3.so",
+        "libappindicator3.so",
+    ];
+
+    for name in CANDIDATES {
+        let Ok(c) = CString::new(*name) else { continue };
+        // SAFETY: `dlopen` accepts any valid C string; failure returns null,
+        // which we surface as a fall-through. We close successful handles
+        // immediately and never expose them outside this function.
+        unsafe {
+            let handle = libc::dlopen(c.as_ptr(), libc::RTLD_LAZY);
+            if !handle.is_null() {
+                libc::dlclose(handle);
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 const ICON_PNG: &[u8] = include_bytes!("../../ditox.png");
