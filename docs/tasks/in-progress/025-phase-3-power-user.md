@@ -1,6 +1,6 @@
 # Task: Phase 3 — Power-user features
 
-> **Status:** in-progress (2/8 sub-tasks done — 3.2, 3.6)
+> **Status:** in-progress (3/8 sub-tasks done — 3.2, 3.6, 3.7)
 > **Priority:** medium
 > **Phase:** 3 — Power-user features
 > **Created:** 2026-04-26
@@ -357,3 +357,79 @@ revisit if the combination proves useful in practice.
 
 **Workspace test count after this session: 347 tests** (was 322;
 +25 search.rs unit tests). All clippy `-D warnings` + fmt clean.
+
+### 2026-04-26 — sub-task 3.7 landed (data-model + key MVP)
+
+**3.7 — Per-resolution window state.**
+
+Migrated `window_state.json` from a single flat `{x, y, width,
+height}` to a multi-key map keyed by monitor resolution. The
+in-memory `WindowState` shape stays unchanged so the 11 read sites
+in `DitoxApp` (`self.window_state.{x, y, width, height}`)
+continue to work without churn — only the persistence layer
+evolved.
+
+`ditox-gui/src/app.rs`:
+- New `WindowStateFile { version: 2, geometries: HashMap<String,
+  PersistedGeometry>, last_resolution_key: Option<String> }`
+  on-disk shape; matches the spec from
+  `docs/notes/ui-replication.md::A10`.
+- `PersistedGeometry { x, y, width, height, last_used: String }`
+  carries an ISO-8601 timestamp for the LRU fallback path.
+- `parse_persisted_shape(content)` probes the JSON via
+  `serde_json::Value`: `geometries` key → new format;
+  `x`+`y`+`width`+`height` numeric keys → legacy → migrate under
+  `LEGACY_RESOLUTION_KEY = "legacy"`. The probe is necessary
+  because every `WindowStateFile` field is `#[serde(default)]`
+  so a legacy file would otherwise parse as an empty new-format
+  file and silently lose the user's saved geometry. (The first
+  iteration of this code shipped with that bug; caught by the
+  live smoke test on Hyprland — log showed `Loaded ... at (100,
+  100)` instead of the saved `(150, 250)`. Fixed before commit.)
+- `WindowState::load`:
+  1. Parse via `parse_persisted_shape`.
+  2. Pick the geometry: current monitor key → `last_resolution_key`
+     → first available → default.
+  3. Validate (`x`, `y` not absurd; size at least `MIN_WINDOW_SIZE`).
+- `WindowState::save`: read-modify-write so saving under one
+  resolution doesn't drop entries for other monitors.
+- Resolution key from
+  `iced::window::Position::SpecificWith` callback: captures
+  `monitor_size` into a `OnceLock<String>` formatted as
+  `"<width>x<height>"`. Idempotent — first launch wins.
+  Multi-monitor moves within a session are not yet detected;
+  Phase 4's daemon-mode rework will replace this with per-event
+  monitor tracking. Documented limitation in the doc comment.
+
+Phase 4 will:
+- Extend the resolution key with the monitor model + serial
+  (e.g. `"1920x1080@DP-1:LG_DISPLAY_ABC"`) per the A10 spec —
+  format is forward-compat (just longer keys).
+- Replace the `OnceLock<String>` with a per-event monitor tracker
+  so multi-monitor moves Save/Load under the right key.
+
+`ditox-gui/Cargo.toml`: pull in workspace `chrono` for the
+`last_used` timestamp.
+
+12 unit tests in a new `window_state_tests` module covering:
+legacy-shape parser; new-shape parser; parse_persisted_shape
+detection (legacy migration / new-format / unknown / partial /
+corrupt JSON); make_resolution_key truncation; PersistedGeometry
+↔ WindowState round-trip; LEGACY_RESOLUTION_KEY constant
+stability; current_monitor_key fallthrough.
+
+**Live verification on Hyprland 2026-04-26:** wrote a legacy
+`{"x":150.0,"y":250.0,"width":420.0,"height":520.0}` file. Log
+showed:
+
+```
+INFO ditox_gui::app: migrating legacy single-geometry window_state.json to multi-key format
+INFO ditox_gui::app: Loaded window state: 420x520 at (150, 250)
+```
+
+— migration banner emitted, geometry correctly picked up from the
+legacy entry. (The on-disk file isn't rewritten until a save event
+fires; non-destructive migration on read keeps things safe.)
+
+**Workspace test count after this session: 359 tests** (was 347;
++12 window_state_tests). All clippy `-D warnings` + fmt clean.

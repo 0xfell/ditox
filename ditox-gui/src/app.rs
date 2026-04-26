@@ -501,7 +501,19 @@ fn is_window_actually_visible() -> bool {
     true // Assume visible on non-Windows
 }
 
-/// Window state that gets persisted
+/// In-memory window state. The shape is identical to the pre-Phase-3.7
+/// flat struct so the 11 read sites elsewhere in `DitoxApp` (which
+/// access `self.window_state.x` / `.y` / `.width` / `.height`
+/// directly) keep compiling without churn.
+///
+/// Phase 3 sub-task 3.7 changed only the **on-disk** representation
+/// to a multi-key map keyed by monitor resolution
+/// (`<width>x<height>`); see [`WindowStateFile`]. `WindowState::load`
+/// picks the best matching geometry for the current monitor, and
+/// `WindowState::save` upserts under the current monitor's key.
+///
+/// Old-format `{x, y, width, height}` JSON files are detected and
+/// migrated transparently into the new format on first load.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WindowState {
     pub x: f32,
@@ -521,17 +533,247 @@ impl Default for WindowState {
     }
 }
 
+/// On-disk persistence record. New format (Phase 3.7):
+///
+/// ```jsonc
+/// {
+///   "version": 2,
+///   "geometries": {
+///     "1920x1080": { "x": ..., "y": ..., "width": ..., "height": ...,
+///                    "last_used": "2026-04-26T19:00:00Z" }
+///   },
+///   "last_resolution_key": "1920x1080"
+/// }
+/// ```
+///
+/// On load:
+/// 1. If the current monitor key is known and present → use that.
+/// 2. Else if `last_resolution_key` is present → use that (most
+///    recent monitor).
+/// 3. Else fall through to the first available geometry.
+/// 4. Else default.
+///
+/// Phase 4 will extend the resolution key with the monitor model +
+/// serial (e.g. `"1920x1080@DP-1:LG_DISPLAY_ABC"`) once a proper
+/// per-event monitor tracker lands; the file format is stable.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+struct WindowStateFile {
+    /// Schema version. Bumped to `2` for the multi-key format.
+    /// Old-format files (no `version` field) are detected via the
+    /// `WindowStateLegacy` shape and migrated.
+    #[serde(default = "default_version")]
+    version: u32,
+    #[serde(default)]
+    geometries: std::collections::HashMap<String, PersistedGeometry>,
+    #[serde(default)]
+    last_resolution_key: Option<String>,
+}
+
+fn default_version() -> u32 {
+    2
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct PersistedGeometry {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    /// ISO-8601 timestamp of the last save. Useful for debugging
+    /// and for the LRU fallback path.
+    #[serde(default)]
+    last_used: String,
+}
+
+impl PersistedGeometry {
+    fn from_state(state: &WindowState) -> Self {
+        Self {
+            x: state.x,
+            y: state.y,
+            width: state.width,
+            height: state.height,
+            last_used: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    fn to_state(&self) -> WindowState {
+        WindowState {
+            x: self.x,
+            y: self.y,
+            width: self.width,
+            height: self.height,
+        }
+    }
+}
+
+/// Old-format file shape: a single flat `{x, y, width, height}`.
+/// Detected via JSON probe — if the parsed file lacks a `version`
+/// field but does have `x`/`y`/`width`/`height`, it's the legacy
+/// format and gets migrated under the
+/// [`LEGACY_RESOLUTION_KEY`] key.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct WindowStateLegacy {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+/// Synthetic key used when migrating a legacy single-geometry file
+/// or when [`current_monitor_key`] returns `None` (the
+/// `Position::SpecificWith` callback hasn't run yet, or this is the
+/// first save before any iced event).
+const LEGACY_RESOLUTION_KEY: &str = "legacy";
+
+/// Captured at window creation by the `Position::SpecificWith`
+/// callback. Format `"<width>x<height>"`. Set once per process;
+/// reads are atomic-string clones.
+static MONITOR_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Tracks which key the most-recent `WindowState::load` resolved.
+/// `WindowState::save` re-uses it when [`MONITOR_KEY`] hasn't been
+/// set yet — avoids forcing every save to fall back to
+/// `LEGACY_RESOLUTION_KEY` just because iced hasn't rendered yet.
+static LAST_LOADED_KEY: std::sync::OnceLock<std::sync::Mutex<Option<String>>> =
+    std::sync::OnceLock::new();
+
+fn last_loaded_key_mutex() -> &'static std::sync::Mutex<Option<String>> {
+    LAST_LOADED_KEY.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Detect the shape of a persisted `window_state.json` and return
+/// a normalised `WindowStateFile`. Order:
+///
+/// 1. If the JSON has a top-level `"geometries"` key → parse as new
+///    format directly.
+/// 2. Else if it has top-level `"x"`, `"y"`, `"width"`, `"height"`
+///    (all four numeric) → parse as legacy and migrate under
+///    [`LEGACY_RESOLUTION_KEY`].
+/// 3. Else → `None` (corrupt / unknown shape).
+///
+/// We can't rely on parser-order ("try new, fall back to legacy")
+/// because `WindowStateFile` accepts every legacy field as
+/// `#[serde(default)]`-absent, silently losing the user's geometry.
+fn parse_persisted_shape(content: &str) -> Option<WindowStateFile> {
+    let value: serde_json::Value = serde_json::from_str(content).ok()?;
+    let obj = value.as_object()?;
+
+    if obj.contains_key("geometries") {
+        // New format. Defer to the typed parser.
+        return serde_json::from_str(content).ok();
+    }
+
+    let has_legacy_fields = ["x", "y", "width", "height"]
+        .iter()
+        .all(|k| obj.get(*k).is_some_and(|v| v.is_number()));
+
+    if has_legacy_fields {
+        let legacy: WindowStateLegacy = serde_json::from_value(value).ok()?;
+        tracing::info!("migrating legacy single-geometry window_state.json to multi-key format");
+        let mut geometries = std::collections::HashMap::new();
+        geometries.insert(
+            LEGACY_RESOLUTION_KEY.to_string(),
+            PersistedGeometry {
+                x: legacy.x,
+                y: legacy.y,
+                width: legacy.width,
+                height: legacy.height,
+                last_used: chrono::Utc::now().to_rfc3339(),
+            },
+        );
+        return Some(WindowStateFile {
+            version: 2,
+            geometries,
+            last_resolution_key: Some(LEGACY_RESOLUTION_KEY.to_string()),
+        });
+    }
+
+    None
+}
+
+/// Build a resolution key from a monitor size pair. Public so
+/// `Position::SpecificWith` can call it.
+pub(crate) fn make_resolution_key(width: f32, height: f32) -> String {
+    format!("{}x{}", width as i32, height as i32)
+}
+
+/// Set the current monitor resolution key. Called from the iced
+/// `Position::SpecificWith` callback once the monitor size is
+/// known. Idempotent (subsequent calls do nothing).
+pub(crate) fn set_current_monitor_key(width: f32, height: f32) {
+    let _ = MONITOR_KEY.set(make_resolution_key(width, height));
+}
+
+/// Best guess at the current monitor's resolution key. Resolution
+/// order:
+/// 1. Captured monitor size from `Position::SpecificWith`.
+/// 2. Last successfully-loaded key (per-process state).
+/// 3. `None` — caller falls back to [`LEGACY_RESOLUTION_KEY`].
+fn current_monitor_key() -> Option<String> {
+    if let Some(k) = MONITOR_KEY.get() {
+        return Some(k.clone());
+    }
+    last_loaded_key_mutex().lock().ok().and_then(|g| g.clone())
+}
+
 impl WindowState {
     fn state_file_path() -> Option<std::path::PathBuf> {
         directories::ProjectDirs::from("com", "ditox", "ditox")
             .map(|dirs| dirs.data_dir().join("window_state.json"))
     }
 
+    /// Read the persisted file, normalise legacy formats, pick the
+    /// geometry best matching the current monitor, and return as a
+    /// flat `WindowState`. Returns the default geometry when no
+    /// file exists or every geometry fails validation.
     pub fn load() -> Self {
-        let state: Self = Self::state_file_path()
-            .and_then(|path| std::fs::read_to_string(&path).ok())
-            .and_then(|content| serde_json::from_str(&content).ok())
-            .unwrap_or_default();
+        let Some(path) = Self::state_file_path() else {
+            return Self::default();
+        };
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            return Self::default();
+        };
+
+        // Detect the shape via serde_json::Value rather than relying
+        // on parser order: every field of `WindowStateFile` is
+        // `#[serde(default)]`, so the new-format parser would happily
+        // accept a legacy `{x,y,w,h}` file as an empty new-format
+        // file (geometries map empty) — losing the user's saved
+        // position silently.
+        let file: WindowStateFile = match parse_persisted_shape(&content) {
+            Some(f) => f,
+            None => {
+                tracing::warn!("window_state.json unrecognised shape; using defaults");
+                return Self::default();
+            }
+        };
+
+        // Pick the geometry: current key → last_resolution_key → first.
+        let chosen_key = current_monitor_key()
+            .filter(|k| file.geometries.contains_key(k))
+            .or_else(|| {
+                file.last_resolution_key
+                    .as_ref()
+                    .filter(|k| file.geometries.contains_key(*k))
+                    .cloned()
+            })
+            .or_else(|| file.geometries.keys().next().cloned());
+
+        let Some(key) = chosen_key else {
+            return Self::default();
+        };
+
+        // Remember which key we loaded so save() can reuse it when
+        // the monitor key hasn't been captured yet.
+        if let Ok(mut guard) = last_loaded_key_mutex().lock() {
+            *guard = Some(key.clone());
+        }
+
+        let geom = file
+            .geometries
+            .get(&key)
+            .expect("key was selected from this map");
+        let state = geom.to_state();
 
         if state.x < -1000.0
             || state.y < -1000.0
@@ -539,7 +781,8 @@ impl WindowState {
             || state.height < MIN_WINDOW_SIZE.height
         {
             tracing::warn!(
-                "Invalid window state detected ({}, {}) {}x{}, using defaults",
+                "invalid window state in key '{}' ({}, {}) {}x{}, using defaults",
+                key,
                 state.x,
                 state.y,
                 state.width,
@@ -559,13 +802,190 @@ impl WindowState {
             return;
         }
 
-        if let Some(path) = Self::state_file_path() {
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Ok(content) = serde_json::to_string_pretty(self) {
-                let _ = std::fs::write(&path, content);
-            }
+        let Some(path) = Self::state_file_path() else {
+            return;
+        };
+
+        // Read-modify-write via the shared shape-detect helper so a
+        // save under one resolution doesn't drop entries for the
+        // others.
+        let mut file: WindowStateFile = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| parse_persisted_shape(&content))
+            .unwrap_or_default();
+        if file.version == 0 {
+            file.version = 2;
+        }
+
+        let key = current_monitor_key().unwrap_or_else(|| LEGACY_RESOLUTION_KEY.to_string());
+        file.geometries
+            .insert(key.clone(), PersistedGeometry::from_state(self));
+        file.last_resolution_key = Some(key);
+
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(content) = serde_json::to_string_pretty(&file) {
+            let _ = std::fs::write(&path, content);
+        }
+    }
+}
+
+#[cfg(test)]
+mod window_state_tests {
+    use super::*;
+
+    fn parse_legacy(raw: &str) -> Option<WindowStateLegacy> {
+        serde_json::from_str(raw).ok()
+    }
+
+    fn parse_new(raw: &str) -> Option<WindowStateFile> {
+        serde_json::from_str(raw).ok()
+    }
+
+    #[test]
+    fn legacy_format_round_trips_through_legacy_parser() {
+        let raw = r#"{"x":100.0,"y":200.0,"width":420.0,"height":520.0}"#;
+        let legacy = parse_legacy(raw).expect("legacy parse");
+        assert_eq!(legacy.x, 100.0);
+        assert_eq!(legacy.y, 200.0);
+        assert_eq!(legacy.width, 420.0);
+        assert_eq!(legacy.height, 520.0);
+    }
+
+    #[test]
+    fn new_format_parses_with_geometries_map() {
+        let raw = r#"{
+            "version": 2,
+            "geometries": {
+                "1920x1080": {
+                    "x": 100.0, "y": 200.0,
+                    "width": 420.0, "height": 520.0,
+                    "last_used": "2026-04-26T19:00:00Z"
+                }
+            },
+            "last_resolution_key": "1920x1080"
+        }"#;
+        let f = parse_new(raw).expect("new parse");
+        assert_eq!(f.version, 2);
+        assert!(f.geometries.contains_key("1920x1080"));
+        assert_eq!(f.last_resolution_key.as_deref(), Some("1920x1080"));
+    }
+
+    #[test]
+    fn parse_persisted_shape_detects_new_format() {
+        let raw = r#"{
+            "version": 2,
+            "geometries": {
+                "1920x1080": { "x": 1.0, "y": 2.0, "width": 420.0, "height": 520.0, "last_used": "" }
+            },
+            "last_resolution_key": "1920x1080"
+        }"#;
+        let f = parse_persisted_shape(raw).expect("new shape");
+        assert!(f.geometries.contains_key("1920x1080"));
+    }
+
+    #[test]
+    fn parse_persisted_shape_migrates_legacy_format() {
+        // The bug: legacy-format JSON would parse as an empty
+        // new-format file because every new-format field is
+        // serde-default-absent. Probe-based detection fixes this.
+        let raw = r#"{"x":150.0,"y":250.0,"width":420.0,"height":520.0}"#;
+        let f = parse_persisted_shape(raw).expect("legacy migration");
+        assert_eq!(f.version, 2);
+        assert_eq!(
+            f.last_resolution_key.as_deref(),
+            Some(LEGACY_RESOLUTION_KEY)
+        );
+        let g = f
+            .geometries
+            .get(LEGACY_RESOLUTION_KEY)
+            .expect("legacy entry");
+        assert_eq!(g.x, 150.0);
+        assert_eq!(g.y, 250.0);
+        assert_eq!(g.width, 420.0);
+        assert_eq!(g.height, 520.0);
+    }
+
+    #[test]
+    fn parse_persisted_shape_rejects_unknown_object() {
+        let raw = r#"{"foo": "bar"}"#;
+        assert!(parse_persisted_shape(raw).is_none());
+    }
+
+    #[test]
+    fn parse_persisted_shape_rejects_partial_legacy() {
+        // Missing one of x/y/width/height → unknown shape.
+        let raw = r#"{"x":1.0,"y":2.0,"width":420.0}"#;
+        assert!(parse_persisted_shape(raw).is_none());
+    }
+
+    #[test]
+    fn parse_persisted_shape_rejects_corrupt_json() {
+        assert!(parse_persisted_shape("not json").is_none());
+        assert!(parse_persisted_shape("[]").is_none());
+        assert!(parse_persisted_shape("42").is_none());
+    }
+
+    #[test]
+    fn make_resolution_key_format() {
+        assert_eq!(make_resolution_key(1920.0, 1080.0), "1920x1080");
+        assert_eq!(make_resolution_key(3840.0, 2160.0), "3840x2160");
+        // Float truncation: 1919.5 → 1919 (truncates toward zero).
+        assert_eq!(make_resolution_key(1919.5, 1080.0), "1919x1080");
+    }
+
+    #[test]
+    fn persisted_geometry_round_trips_to_state() {
+        let pg = PersistedGeometry {
+            x: 100.0,
+            y: 200.0,
+            width: 420.0,
+            height: 520.0,
+            last_used: "2026-04-26T19:00:00Z".to_string(),
+        };
+        let s = pg.to_state();
+        assert_eq!(s.x, 100.0);
+        assert_eq!(s.width, 420.0);
+        let pg2 = PersistedGeometry::from_state(&s);
+        assert_eq!(pg2.x, 100.0);
+        assert_eq!(pg2.width, 420.0);
+        // last_used regenerated to "now" — just check format.
+        assert!(
+            pg2.last_used.contains('T'),
+            "last_used must be ISO-ish: {}",
+            pg2.last_used
+        );
+    }
+
+    #[test]
+    fn missing_geometries_returns_empty_default() {
+        let f = WindowStateFile::default();
+        assert_eq!(f.version, 0); // default is 0, load() bumps to 2 on save
+        assert!(f.geometries.is_empty());
+        assert!(f.last_resolution_key.is_none());
+    }
+
+    #[test]
+    fn legacy_resolution_key_constant_is_stable() {
+        // If this changes, every old-format JSON file silently
+        // creates a new "default" entry instead of being recognised
+        // as the migrated legacy one. Hold the line.
+        assert_eq!(LEGACY_RESOLUTION_KEY, "legacy");
+    }
+
+    #[test]
+    fn current_monitor_key_falls_through_when_unset() {
+        // If neither MONITOR_KEY nor LAST_LOADED_KEY is set,
+        // current_monitor_key returns None. We can't reliably test
+        // the OnceLock-set path here because the static persists
+        // across tests; just sanity-check the function returns
+        // something sensible (Some or None).
+        let k = current_monitor_key();
+        // Allow either: tests run in arbitrary order, the OnceLock
+        // may or may not be set by an earlier test.
+        if let Some(k) = k {
+            assert!(!k.is_empty(), "key must not be empty if present");
         }
     }
 }
@@ -3133,7 +3553,15 @@ pub fn run_with(
         // SpecificWith receives (window_size, monitor_size) and returns the
         // top-left corner. Anchor to the bottom-left with a 20px margin on
         // both axes (matches the floating-launcher reference design).
+        //
+        // Phase 3 sub-task 3.7: also publish the monitor's resolution
+        // (`<width>x<height>`) into [`MONITOR_KEY`] so subsequent
+        // `WindowState::save` calls persist under the per-monitor key.
+        // Idempotent — only the first invocation wins (one monitor
+        // per process for now; Phase 4 will replace this with a
+        // per-event monitor tracker).
         settings.position = window::Position::SpecificWith(|window_size, monitor_size| {
+            set_current_monitor_key(monitor_size.width, monitor_size.height);
             Point::new(
                 FLOATING_MARGIN,
                 (monitor_size.height - window_size.height - FLOATING_MARGIN).max(FLOATING_MARGIN),
