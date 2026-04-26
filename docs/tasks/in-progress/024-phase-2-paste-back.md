@@ -1,6 +1,6 @@
 # Task: Phase 2 — Paste-back UX (cross-platform)
 
-> **Status:** in-progress (2/9 sub-tasks done — 2.1, 2.6)
+> **Status:** in-progress (4/9 sub-tasks done — 2.1, 2.3 (Hyprland part), 2.4, 2.6)
 > **Priority:** high
 > **Phase:** 2 — Paste-back
 > **Created:** 2026-04-26

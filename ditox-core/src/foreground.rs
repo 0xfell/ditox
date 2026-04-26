@@ -48,6 +48,12 @@ use std::time::SystemTime;
 
 use crate::error::Result;
 
+/// Hyprland-specific foreground tracker (Phase 2 sub-task 2.3).
+/// Shells out to `hyprctl activewindow -j` for snapshots and
+/// `hyprctl dispatch focuswindow address:0x…` for restore.
+#[cfg(unix)]
+pub mod hyprctl;
+
 /// A point-in-time snapshot of the currently-focused window.
 ///
 /// Held by the launcher between summon and paste so the user's
