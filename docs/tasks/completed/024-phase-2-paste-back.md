@@ -1,12 +1,30 @@
 # Task: Phase 2 — Paste-back UX (cross-platform)
 
-> **Status:** in-progress (6/9 sub-tasks done — 2.1, 2.3 (Hyprland part), 2.4, 2.6, 2.7 (Linux), 2.8)
+> **Status:** completed (Linux MVP — 7/9 sub-tasks; 2 spun out to 033, 1 to 034)
 > **Priority:** high
 > **Phase:** 2 — Paste-back
 > **Created:** 2026-04-26
 > **Started:** 2026-04-26
+> **Completed:** 2026-04-26
 > **Estimated:** 3 weeks
 > **MVP working on Hyprland (verified 2026-04-26)**
+>
+> **Sub-tasks landed in this task (Linux + cross-platform pure code):**
+> - 2.1 `ForegroundTracker` abstraction
+> - 2.3 (Hyprland part) `HyprctlForegroundTracker`
+> - 2.4 Linux synthesis chain (`hyprctl` → `wtype` → `ydotool` → `off`)
+> - 2.6 Per-app keystroke override parser
+> - 2.7 Cross-process paste sentinel
+> - 2.8 GUI integration (end-to-end paste-back flow)
+> - 2.9 `SelectionCursor` groundwork
+>
+> **Deferred follow-ups:**
+> - 2.2 Win32 foreground tracker → spun out as
+>   [`033-phase-2-windows-paste-back.md`](../planned/033-phase-2-windows-paste-back.md)
+> - 2.5 Win32 synthesizer → ditto (same task 033, since 2.2 + 2.5
+>   share a Windows hardening pass)
+> - 2.3 (cont) `wlr-foreign-toplevel-management` subscription →
+>   [`034-phase-2-wlr-foreign-toplevel.md`](../planned/034-phase-2-wlr-foreign-toplevel.md)
 
 ## Description
 
@@ -538,3 +556,96 @@ panic is on a dedicated thread so the GUI itself stays alive,
 but the tray icon never appears under Hyprland on this dev
 shell. Tracked as a follow-up bug; root cause is missing
 runtime library in `flake.nix` GUI environment.
+
+### 2026-04-26 — sub-task 2.9 landed; tray panic side-fix; task closed
+
+**Tray panic side-fix.** `tray-icon`'s Linux backend pulls in
+`libappindicator-sys`, which dlopens
+`libayatana-appindicator3.so.1` / fallbacks from a `lazy_static`
+initialiser and panics outright on failure. The panic surfaces
+from the dedicated `ditox-tray` thread on first menu build, so
+`catch_unwind` can't recover. Fix: probe for a loadable candidate
+soname via `libc::dlopen` (`RTLD_LAZY` + immediate `dlclose` so
+the probe doesn't pin a handle) before spawning the tray thread.
+If none load, log an actionable warning (NixOS: `nix run` /
+`nix develop` / `nix build`; other distros: install
+`libayatana-appindicator`) and skip cleanly. Verified outside
+`nix develop` (warning fires, GUI continues) and inside (tray
+spawns silently as before). Commit `98ef85f`.
+
+**2.9 — Selection cursor groundwork.** New
+`ditox-core/src/paste/cursor.rs` introduces:
+
+- `SelectionCursor { index, last_fire_at }` — pure state. No IO.
+  Methods `index() / last_fire_at() / index_for_list(len) /
+  fire(now, window) / reset()`. `fire()` advances the index by
+  one (saturating) when `now - last_fire_at <= window`, else
+  resets to 0; either way `last_fire_at = now`.
+- `index_for_list(len)` clamps via modulo so wrap-around past the
+  list length is well-defined; returns 0 for empty lists.
+- `DEFAULT_REFIRE_WINDOW: Duration = 800 ms` constant (mirrors
+  master-plan D2).
+- `PersistentSelectionCursor` — filesystem wrapper. Reads/writes
+  `<data_dir>/cursor.json` via the same `tmp-write + rename`
+  atomic-write pattern as `PasteSentinel`. `read()` returns a
+  fresh cursor on missing file / corrupt JSON / unknown schema
+  version (forward-compat). `write()` is best-effort with
+  `tracing::warn!` on failure. `fire_and_persist()` is the
+  one-call helper used by the launcher.
+- Schema-versioned on-disk record (`{ version: 1, index,
+  last_fire_at_ms }`); future versions can change the shape and
+  old binaries gracefully reset rather than crash.
+
+**`PasteConfig.cursor_refire_window_ms` (default 800).** New
+`cursor_refire_window()` helper returns
+[`DEFAULT_REFIRE_WINDOW`] when 0 (the unset default in TOML).
+
+**`ditox-gui` integration.** `main.rs::run` now calls
+`PersistentSelectionCursor::at_default_path()?.fire_and_persist(now,
+config.paste.cursor_refire_window())` and threads the resulting
+`cursor.index()` to `app::run_with` as a 7th arg. `DitoxApp::new`
+clamps via `initial_selection % entries.len()` (modulo wrap; 0 for
+empty list) and uses it as the initial `selected_index`. The
+state passes through an `AtomicUsize` static, not a `Mutex` —
+plain `usize` doesn't need the round-trip.
+
+**Live verification on Hyprland 2026-04-26:**
+
+```
+Run 1 (cold):                       fired selection cursor index=0 window_ms=800
+                                    cursor.json: {"version":1,"index":0,"last_fire_at_ms":...}
+
+Run 2 (~573 ms after Run 1):        fired selection cursor index=1
+                                    cursor.json: ...,"index":1,...
+
+Run 3 (~575 ms after Run 2):        fired selection cursor index=2
+                                    cursor.json: ...,"index":2,...
+
+Sleep 1.5 s.
+
+Run 4 (~2.0 s after Run 3):         fired selection cursor index=0
+                                    cursor.json: ...,"index":0,...
+```
+
+End-to-end: rapid re-fires within 800 ms advance the cursor; an
+idle past the window resets to 0. JSON persists across processes.
+
+12 unit tests on `SelectionCursor` (new/fire/refire/reset/
+boundary/overflow/index_for_list-empty/within/wrap/exact-len)
+plus 9 on `PersistentSelectionCursor` (read-missing/round-trip/
+corrupt-json/unknown-version/atomic-via-tmp/parent-dirs/
+fire-and-persist-{cold,advance,reset}/clear-{idempotent,absent}/
+path) plus 3 new on `PasteConfig` (default window /
+explicit value / TOML round-trip with `cursor_refire_window_ms`).
+
+**Workspace test count after this session: 301 tests** (was 274;
++24 cursor.rs + +3 PasteConfig). All clippy `-D warnings` + fmt
+clean.
+
+**Phase 2 closed: 7/9 sub-tasks landed.** Three follow-ups
+deferred and spun out:
+
+- **2.2** Win32 foreground tracker → task 033.
+- **2.3 (cont)** Wayland wlr-foreign-toplevel subscription → task 034.
+- **2.5** Win32 synthesizer → task 033 (combined with 2.2 since
+  they share a Windows hardening pass).

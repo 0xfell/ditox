@@ -8,10 +8,10 @@
 
 | Category | Count |
 |----------|-------|
-| Completed | 23 |
+| Completed | 24 |
 | In Progress | 3 |
 | Planned (Phase 0 — Foundation) | 0 |
-| Planned (Phase 1-8 epics + carry-overs) | 9 |
+| Planned (Phase 1-8 epics + carry-overs) | 10 |
 
 ---
 
@@ -57,7 +57,6 @@ _All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; rea
 
 | Task | Description | Schema |
 |------|-------------|--------|
-| [024 Paste-back UX](tasks/planned/024-phase-2-paste-back.md) | Foreground tracker + keystroke synthesis chain (Win/Hyprland/Sway) | none |
 | [025 Power-user features](tasks/planned/025-phase-3-power-user.md) | Special paste, exclusion, color swatch, filter rules, suspend/resume | v3 → v4 |
 | [026 Ditto UX replication](tasks/planned/026-phase-4-ditto-ux.md) | Long-running daemon + layer-shell + position modes + tooltip preview | none |
 | [027 GUI feature parity](tasks/planned/027-phase-4b-gui-parity.md) | Settings, collections, multi-select, tags, time chips, theming | v4 → v5 |
@@ -66,6 +65,8 @@ _All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; rea
 | [030 Distribution & i18n](tasks/planned/030-phase-7-distribution-i18n.md) | Choco/Winget/AUR/Flatpak/MSIX, signing, 5 locales, crash reporting | none |
 | [031 macOS port](tasks/planned/031-phase-8-macos.md) | NSPasteboard, Accessibility flow, .app bundle, Cask, notarisation | none |
 | [032 Windows multi-format capture](tasks/planned/032-phase-1-windows-multi-format.md) | Spun out from 023 sub-task 1.4: `AddClipboardFormatListener` event-driven capture; needs Windows-side validation | none |
+| [033 Windows paste-back](tasks/planned/033-phase-2-windows-paste-back.md) | Spun out from 024 sub-tasks 2.2 + 2.5: `Win32ForegroundTracker` + `Win32Synthesizer` (`SendInput` + stuck-modifier guard); needs Windows-side validation | none |
+| [034 wlr-foreign-toplevel subscription](tasks/planned/034-phase-2-wlr-foreign-toplevel.md) | Spun out from 024 sub-task 2.3: generic Wayland foreground tracker for non-Hyprland wlroots compositors (Sway, river); dedicated `wayland-client` event-loop thread | none |
 
 ---
 
@@ -73,6 +74,7 @@ _All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; rea
 
 | Task | Date | Description |
 |------|------|-------------|
+| [024 Paste-back UX (Linux MVP)](tasks/completed/024-phase-2-paste-back.md) | 2026-04-26 | Phase 2: 7/9 sub-tasks. `ForegroundTracker` trait + `HyprctlForegroundTracker`; Linux synthesis chain (`hyprctl` → `wtype` → `ydotool` → `off`) with per-app `KeystrokeSequence` parser (vim's `"+gp` etc.); cross-process `PasteSentinel` so the watcher skips the paste-back's own re-capture; full GUI integration with pre-iced foreground snapshot, `paste_and_exit(entry)` flow, and a `SelectionCursor` primitive that advances on rapid re-fires (groundwork for Phase 4 modifier-held cycling). End-to-end verified live on Hyprland: hyprctl `sendshortcut` pasted text into ghostty. Sub-tasks 2.2 + 2.5 (Windows) spun out as 033; 2.3 cont (wlr-foreign-toplevel) as 034. +94 tests, 301 total. |
 | [023 Multi-format clipboard capture](tasks/completed/023-phase-1-multi-format-capture.md) | 2026-04-26 | Phase 1: 8/9 sub-tasks. Schema v2→v3 with `entry_formats` table + `format_content_fts`; `FormatId` + Wayland/Win32 canonicalisation; HTML envelope + RTF \rsid stripping; per-format hashing; multi-format `Database::insert_multi` with rollback-on-failure; multi-format FTS5 search; `CaptureConfig` mode/size caps; `WaylandLibraryCapture` via `wl-clipboard-rs` (live-tested on Hyprland); `FormatAggregator` trait + 5 impls (PlainText/HtmlEnvelope/Rtf/UriList/ImageStack). Sub-task 1.4 (Windows event-driven capture) spun out as task 032. +87 tests, 153 total. |
 | [022 Layer-shell research spike](tasks/completed/022-foundation-layer-shell-spike.md) | 2026-04-26 | Built A1 prototype (`spike/a1-iced-layershell/`, 179 LOC, builds in 1.71s); decision: adopt `iced_layershell = "=0.17.1"` over hand-rolled SCTK + tiny-skia. ADR at `docs/notes/adr/0001-layer-shell-strategy.md`. Hyprland verified by user; Sway/KDE/GNOME/longevity tests pending. |
 | [017 DB actor](tasks/completed/017-foundation-async-db-actor.md) | 2026-04-26 | Replaced GUI's `Arc<Mutex<Database>>` with closure-based actor on a dedicated thread; cheap-clone `DbHandle` exposes `call`/`try_call`/`dispatch`/`flush`; bounded queue (64) for backpressure; 8 tests including 1000-insert stress. |
