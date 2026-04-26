@@ -1,6 +1,6 @@
 # Task: Phase 3 — Power-user features
 
-> **Status:** in-progress (4/8 sub-tasks done — 3.2, 3.6, 3.7, 3.8)
+> **Status:** in-progress (5/8 sub-tasks done — 3.1, 3.2, 3.6, 3.7, 3.8)
 > **Priority:** medium
 > **Phase:** 3 — Power-user features
 > **Created:** 2026-04-26
@@ -519,3 +519,121 @@ surface is the foundation it'll build on.
 
 **Workspace test count after this session: 374 tests** (was 359;
 +15 url_template tests). All clippy `-D warnings` + fmt clean.
+
+### 2026-04-26 — sub-task 3.1 landed (full Tier 1+2+3, 21 transforms)
+
+**3.1 — Special paste / transforms.**
+
+Shipped 21 of the spec's 22 transforms (image-stitching deferred —
+needs multi-entry-selection UX from Phase 4). All text transforms
+operate via a clean `Transform` trait and a registry-based lookup.
+
+`ditox-core/src/transforms/` directory module:
+
+- `mod.rs`: `Transform` trait + `registry()` + `get(id)` lookup.
+  6 unit tests on registry hygiene (unique IDs, kebab-case form,
+  count, lookup case-insensitivity).
+- `case.rs`: `UpperCase`, `LowerCase`, `TitleCase`, `SentenceCase`,
+  `InvertCase`, `CamelCase`, `PascalCase`, `SnakeCase`, `KebabCase`.
+  Tokeniser splits on whitespace, ASCII punctuation (excluding
+  `'`), lowercase→uppercase transitions, and the
+  `acronym→camel`-followed-by-lowercase boundary so `HTTPRequest`
+  splits as `["http", "request"]` rather than `["h","t","t","p","request"]`.
+  Tracks original case in a `Vec<char>` accumulator so the
+  boundary-detection still has access to the un-lowered chars.
+  19 unit tests including edge cases (acronyms, apostrophes,
+  multi-separator runs, empty input).
+- `whitespace.rs`: `TrimWhitespace`, `CollapseWhitespace`,
+  `RemoveLineFeeds`, `AddLineFeed`. The spec's
+  parameterised `AddLineFeeds(n)` was reduced to a fixed
+  `AddLineFeed` (n=1, idempotent on input already ending in
+  `\n`); chaining with `printf '\n\n'` etc. gives n>1 from the
+  shell. Collapse leaves newlines verbatim, only coalescing ASCII
+  space + tab runs into a single space (matches `tr -s ' '`).
+  10 unit tests.
+- `string.rs`: `PlainTextOnly` (placeholder identity for
+  single-format text entries; activates with Phase 4's
+  multi-format Entry), `Slugify` (NFKD + drop combining marks +
+  custom symbol map for ©/®/™/°/×/÷/en-em-dash/smart-quotes/…/→/←;
+  `unicode-normalization` workspace dep), `AsciiOnly`,
+  `PosixifyPaths`, `Typoglycemia` (Fisher-Yates + LCG seeded from
+  system clock, preserves first/last letters, ≥4-char-word gate).
+  20 unit tests including symbol-map round-trip, smart-quote
+  handling, idempotent slug, length preservation in typoglycemia.
+- `meta.rs`: `PrependDateTime`, `AppendDateTime` (chrono `%Y-%m-%d
+  %H:%M:%S` local time), `InsertGuid` (UUIDv4 via existing `uuid`
+  workspace dep). 5 unit tests including UUID parseability and
+  uniqueness.
+
+**Slugify implementation hygiene:** the spec is explicit that we
+must NOT read or copy Ditto's `Slugify.h` table. The custom symbol
+map ships from-scratch from RFC 3986 + commonly-encountered glyphs
+the user noted in their daily clipboard. Combining-mark detection
+uses hard-coded ranges (Mn/Mc blocks from BMP) rather than pulling
+in `unicode-properties` for one function.
+
+`ditox-core/Cargo.toml`: `unicode-normalization = "0.1.24"`
+workspace dep added.
+
+`ditox-tui/src/cli.rs::Commands::Transform`:
+
+- `--list` flag (mutually exclusive with `target`/`transform`)
+  prints the registry as a 2-line-per-transform table or as JSON
+  with `--json`.
+- Otherwise: `ditox transform <target> <transform-id> [-p]`
+  resolves the entry (1-based index or UUID), applies the named
+  transform, and either copies the result to the clipboard or
+  prints to stdout (`-p` / `--print-only`).
+- Refuses image entries (transforms operate on text).
+- Exit code 2 on unknown transform id with a helpful pointer
+  to `--list`.
+
+**Live verification on Hyprland 2026-04-26:**
+
+```
+$ ditox transform --list | head -8
+ID                     NAME / DESCRIPTION
+────────────────────────────────────────────────────────────────────────────────
+plain-text-only        Plain text only
+                         Drop non-text formats (HTML/RTF/etc.). Currently a no-op...
+upper-case             UPPER CASE
+                         Convert all letters to UPPERCASE.
+lower-case             lower case
+                         Convert all letters to lowercase.
+... (21 total transforms)
+
+$ ditox transform 1 upper-case -p
+DIABLO® IV: LORD OF HATRED™ - ULTIMATE EDITION
+
+$ ditox transform 1 slugify -p
+diablo-r-iv-lord-of-hatredtm-ultimate-edition
+
+$ ditox transform 1 kebab-case -p
+diablo®-iv-lord-of-hatred™-ultimate-edition
+
+$ ditox transform 1 typoglycemia -p
+Dbioal® IV: Lrod of Headrt™ - Uiatmlte Eoiitdn
+
+$ ditox transform 1 unknown-transform -p
+ditox transform: unknown transform 'unknown-transform'. Run 'ditox transform --list' for available IDs.
+$ echo $?
+2
+```
+
+End-to-end verified: case conversions preserve Unicode marks (®, ™
+pass through `to_uppercase`); slugify strips diacritics + applies
+symbol map (® → r via NFKD, ™ → tm via custom map); typoglycemia
+preserves first/last letters and overall length;
+the `kebab-case` non-ASCII pass-through is intentional (only
+boundaries are split, not character set restricted — use
+`slugify` for ASCII-clean output).
+
+**Image transforms (`ImagesHorizontal` / `ImagesVertical`)
+deferred.** They take multiple entries as input rather than a
+single text string and warrant their own trait when
+multi-entry-selection UX lands in Phase 4. The Phase 1
+`ImageStackAggregator` already implements the underlying
+PNG-stack composition.
+
+**Workspace test count after this session: 441 tests** (was 374;
++67 transform tests). All clippy `-D warnings` + fmt clean.

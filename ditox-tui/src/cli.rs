@@ -154,6 +154,43 @@ pub enum Commands {
         print_only: bool,
     },
 
+    /// Apply a transform to an entry's text and copy the result to
+    /// the clipboard (Phase 3 sub-task 3.1). Original entry is never
+    /// mutated.
+    ///
+    /// Examples:
+    ///
+    /// ```sh
+    /// ditox transform --list               # List all built-in transforms
+    /// ditox transform 1 upper-case         # UPPERCASE entry #1, copy
+    /// ditox transform <uuid> slugify       # URL-safe slug, copy
+    /// ditox transform 1 kebab-case -p      # Print result instead of copying
+    /// ```
+    Transform {
+        /// List all available transforms with their descriptions and
+        /// exit. Mutually exclusive with `target` / `transform`.
+        #[arg(long, conflicts_with_all = ["target", "transform"])]
+        list: bool,
+
+        /// Output `--list` as JSON.
+        #[arg(long, requires = "list")]
+        json: bool,
+
+        /// Entry index (1-based) or UUID.
+        #[arg(required_unless_present = "list")]
+        target: Option<String>,
+
+        /// Transform id (kebab-case, e.g. `upper-case`, `slugify`).
+        /// Run `ditox transform --list` for the full set.
+        #[arg(required_unless_present = "list")]
+        transform: Option<String>,
+
+        /// Print the transformed text to stdout instead of writing
+        /// it to the clipboard. Useful for previewing in a pipeline.
+        #[arg(short = 'p', long, conflicts_with = "list")]
+        print_only: bool,
+    },
+
     /// Manage collections
     #[command(subcommand)]
     Collection(CollectionCommands),

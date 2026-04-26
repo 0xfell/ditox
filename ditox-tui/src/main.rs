@@ -83,8 +83,115 @@ fn run() -> Result<()> {
             action,
             print_only,
         }) => cmd_open(&db, &config, &target, &action, print_only),
+        Some(Commands::Transform {
+            list,
+            json,
+            target,
+            transform,
+            print_only,
+        }) => {
+            if list {
+                cmd_transform_list(json)
+            } else {
+                cmd_transform_apply(
+                    &db,
+                    target
+                        .as_deref()
+                        .expect("clap requires target unless --list"),
+                    transform
+                        .as_deref()
+                        .expect("clap requires transform unless --list"),
+                    print_only,
+                )
+            }
+        }
         Some(Commands::Collection(subcmd)) => cmd_collection(&db, subcmd),
     }
+}
+
+fn cmd_transform_list(json: bool) -> Result<()> {
+    use ditox_core::transforms::registry;
+
+    if json {
+        let arr: Vec<serde_json::Value> = registry()
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "id": t.id(),
+                    "name": t.name(),
+                    "description": t.description(),
+                })
+            })
+            .collect();
+        let out = serde_json::to_string_pretty(&arr)
+            .map_err(|e| DitoxError::Other(format!("JSON serialization error: {}", e)))?;
+        println!("{}", out);
+        return Ok(());
+    }
+
+    println!("{:<22} NAME / DESCRIPTION", "ID");
+    let bar = "─".repeat(80);
+    println!("{}", bar);
+    for t in registry() {
+        println!("{:<22} {}", t.id(), t.name());
+        println!("{:<22}   {}", "", t.description());
+    }
+    Ok(())
+}
+
+fn cmd_transform_apply(
+    db: &Database,
+    target: &str,
+    transform_id: &str,
+    print_only: bool,
+) -> Result<()> {
+    use ditox_core::transforms;
+
+    let entry = match resolve_target(db, target)? {
+        Some(e) => e,
+        None => {
+            eprintln!("Entry not found: {}", target);
+            std::process::exit(1);
+        }
+    };
+
+    if entry.entry_type != EntryType::Text {
+        eprintln!(
+            "ditox transform: entry {} is not a text entry; transforms operate on text",
+            target
+        );
+        std::process::exit(1);
+    }
+
+    let transform = match transforms::get(transform_id) {
+        Some(t) => t,
+        None => {
+            eprintln!(
+                "ditox transform: unknown transform '{}'. Run 'ditox transform --list' for available IDs.",
+                transform_id
+            );
+            std::process::exit(2);
+        }
+    };
+
+    let transformed = transform.apply_text(&entry.content)?;
+
+    if print_only {
+        // Print without trailing newline so pipelines see exactly
+        // the transformed bytes. The user's terminal will add its
+        // own newline at exit.
+        print!("{}", transformed);
+        return Ok(());
+    }
+
+    Clipboard::set_text(&transformed)?;
+    println!(
+        "Applied {} to entry {} → copied {} bytes",
+        transform.id(),
+        &entry.id[..8.min(entry.id.len())],
+        transformed.len()
+    );
+    Ok(())
 }
 
 fn cmd_open(

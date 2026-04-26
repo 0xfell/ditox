@@ -28,6 +28,9 @@ image.workspace = true
 nucleo-matcher.workspace = true
 regex.workspace = true
 
+# Transforms (Phase 3 sub-task 3.1)
+unicode-normalization.workspace = true
+
 # Logging
 tracing.workspace = true
 tracing-subscriber.workspace = true
