@@ -18,3 +18,4 @@
 //!   `Clipboard Viewer Ignore`).
 
 pub mod keystroke;
+pub mod synthesize;
