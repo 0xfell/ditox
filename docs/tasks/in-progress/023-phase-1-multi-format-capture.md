@@ -1,0 +1,384 @@
+# Task: Phase 1 — Multi-format clipboard capture
+
+> **Status:** planned
+> **Priority:** high
+> **Phase:** 1 — Multi-format capture
+> **Created:** 2026-04-26
+> **Estimated:** 6-8 weeks
+
+## Description
+
+Capture every clipboard format the OS publishes (text, HTML, RTF, image
+variants, file lists, custom MIME), persist with stable hashing,
+aggregate on multi-clip paste. This is **the unlock** for paste-back
+that preserves rich formatting (Phase 2), HTML preview tooltips
+(Phase 4), and several power-user features (Phase 3).
+
+Schema bump: v2 → v3. New `entry_formats` table; `entries.content` is
+deprecated for the duration of one version.
+
+Decisions baked in:
+- **Default capture:** all formats with per-format size cap (D4).
+- **Format naming:** MIME types preferred, `win32:` prefix for Windows
+  custom formats.
+- **Linux backend:** `wl-clipboard-rs` library (replaces `wl-paste`
+  shell-out).
+- **Windows backend:** event-driven via `AddClipboardFormatListener`
+  (replaces polling).
+
+## Sub-tasks (each becomes its own task file when started)
+
+### 1.1 Schema v2 → v3 multi-format model
+
+Schema:
+
+```sql
+CREATE TABLE entry_formats (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id    TEXT NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    format_name TEXT NOT NULL,        -- MIME or win32:CF_*
+    storage     TEXT NOT NULL,        -- 'inline' | 'blob_file'
+    content     TEXT,                 -- inline text (NULL for blob)
+    blob_hash   TEXT,                 -- blob file hash (NULL for inline)
+    blob_ext    TEXT,                 -- file extension (e.g. "png", "rtf")
+    byte_size   INTEGER NOT NULL,
+    format_hash TEXT NOT NULL,        -- SHA-256 of canonical bytes
+    canonical   INTEGER NOT NULL DEFAULT 0,  -- 1 = primary format for this entry
+    created_at  TEXT NOT NULL,
+    UNIQUE(entry_id, format_name)
+);
+
+CREATE INDEX idx_entry_formats_entry      ON entry_formats(entry_id);
+CREATE INDEX idx_entry_formats_blob_hash  ON entry_formats(blob_hash);
+CREATE INDEX idx_entry_formats_canonical  ON entry_formats(entry_id, canonical);
+
+-- entries.canonical_format pointer
+ALTER TABLE entries ADD COLUMN canonical_format TEXT;
+```
+
+Migration: for each existing row, insert one `entry_formats` row
+mirroring current data. Set `canonical = 1`. Set
+`entries.canonical_format` to `text/plain` or `image/png`.
+
+Update FTS: `entries_fts` indexes `entry_formats.content` for inline
+text formats.
+
+### 1.2 Format name canonicalisation
+
+Create `ditox-core/src/format.rs` with:
+
+- `enum FormatId { Mime(String), Win32(String) }`
+- Conversions: `from_win32_cf(u32)`, `from_wayland_mime(&str)`.
+- Canonical strings for common types (`text/plain;charset=utf-8`,
+  `text/html`, `text/rtf`, `image/png`, `image/jpeg`,
+  `application/x-files`, `application/x-vnd.ditox.<custom>`).
+- Win32-specific: `win32:CF_DIB`, `win32:CF_HDROP`, `win32:CF_LOCALE`,
+  etc.
+
+### 1.3 Linux capture via `wl-clipboard-rs`
+
+Replace `clipboard.rs:63-224` `wl-paste` subprocess with
+`wl_clipboard_rs::paste::get_contents` and
+`wl_clipboard_rs::utils::get_mime_types`.
+
+New `WaylandLibraryCapture` implements the `CaptureSource` trait from
+task 018. Polls (initially) at the configured interval; later
+phases may switch to event-based via `wlr-data-control-v1` if the
+library exposes it.
+
+### 1.4 Windows capture via `AddClipboardFormatListener`
+
+Replace `clipboard.rs:230-332` `arboard` reads with direct
+`windows-rs` calls.
+
+Architecture:
+
+```
+ditox-gui / ditox watch
+    │
+    ├── spawns: WindowsListenerCapture thread
+    │       │
+    │       ├── creates message-only window via CreateWindowExW(HWND_MESSAGE)
+    │       ├── calls AddClipboardFormatListener(hwnd)
+    │       ├── runs message loop
+    │       │     on WM_CLIPBOARDUPDATE:
+    │       │       - OpenClipboard
+    │       │       - EnumClipboardFormats / IDataObject::EnumFormatEtc
+    │       │       - read each format via GetClipboardData / IDataObject::GetData
+    │       │       - construct RawClip
+    │       │       - send to mpsc::Receiver<RawClip>
+    │       │     on WM_DESTROY: RemoveClipboardFormatListener, exit
+    │       └── ...
+```
+
+Handle the watchdog case (Ditto's 5-min ping) — if no
+`WM_CLIPBOARDUPDATE` fires for an extended period during which we *know*
+the user copied, attempt re-registration.
+
+Honour Windows do-not-record sentinels:
+- `Clipboard Viewer Ignore` (custom registered format).
+- `ExcludeClipboardContentFromMonitorProcessing`.
+- `CanIncludeInClipboardHistory` DWORD == 0.
+
+### 1.5 Per-format hashing & canonicalisation
+
+For each format, compute SHA-256 of *canonicalised* bytes:
+
+- **`text/plain`**: trim trailing `\0` padding from `GlobalAlloc`
+  buffers (Windows quirk).
+- **`text/html`** (Windows "HTML Format" envelope): parse the
+  `Version`/`StartHTML`/`EndHTML`/`StartFragment`/`EndFragment` /
+  `SourceURL` header, hash the *fragment only*. (Source URL stored as
+  metadata.)
+- **`text/rtf`**: strip volatile sub-blocks (`{\*\datastore...}`,
+  `\rsidN`, `\insrsidN`, `\mdispDef1`) before hash. Implement as a
+  light RTF tokenizer; do NOT shell out to a renderer.
+- **Images** (`image/png`, `image/jpeg`, `image/gif`, `image/webp`,
+  `image/bmp`, `win32:CF_DIB`): hash raw bytes after re-encoding to a
+  canonical container. For PNG: re-encode at default level via `image`
+  crate to normalise zlib variations. For others: hash as-is for the
+  format-name; cross-format dedup is a separate concern.
+
+Entry-level hash:
+
+```
+sha256( for each (format_name, format_hash) in sorted_by_name:
+            f"{format_name}\0{format_hash}\n" )
+```
+
+This is stable across format orderings and identifies the *whole clip*.
+
+### 1.6 Format aggregator trait
+
+`ditox-core/src/aggregator.rs`:
+
+```rust
+pub trait FormatAggregator: Send {
+    fn format_name(&self) -> &str;
+    fn add(&mut self, blob: &[u8], idx: usize, count: usize) -> Result<()>;
+    fn build(self: Box<Self>) -> Result<Vec<u8>>;
+}
+```
+
+Implementations:
+
+- `PlainTextAggregator { separator: String }` — concatenate.
+- `HtmlEnvelopeAggregator` — parse each clip's envelope, keep
+  `<!--StartFragment-->...<!--EndFragment-->`, join with `<br>`,
+  serialise valid envelope with recomputed offsets.
+- `RtfAggregator` — strip outer `{\rtf1` and trailing `}` of inner
+  clips, join with `\par`.
+- `FileListAggregator { mode: HDrop | UriList }` — concatenate file
+  paths into the appropriate format.
+- `ImageStackAggregator { axis: Horizontal | Vertical }` — composes
+  via `image` crate `imageops`.
+
+Wired into TUI multi-select copy (`core/app.rs::multi_copy`) which
+currently does plain-text concat only.
+
+### 1.7 Search across formats
+
+FTS5 schema update:
+
+```sql
+DROP TABLE entries_fts;
+CREATE VIRTUAL TABLE entries_fts USING fts5(
+    entry_id    UNINDEXED,
+    format_name UNINDEXED,
+    content,
+    notes
+);
+```
+
+Triggers updated to maintain it. Searches now include results from any
+inline text format (HTML, RTF source, plain text, notes).
+
+Search mode prefixes (also referenced in Phase 3):
+- `/p` — plain text only
+- `/h` — HTML only
+- `/r` — RTF only
+- `/q` — notes only (ditox's "quick paste text")
+- `/f` — full-content all formats (default)
+
+### 1.8 Limits & quotas
+
+Config:
+
+```toml
+[capture]
+mode = "all"                          # "all" | "minimal" | "custom"
+max_format_size_bytes = 10485760      # 10 MiB
+max_clip_size_bytes   = 26214400      # 25 MiB
+
+[capture.formats]
+include = []                          # only used when mode = "custom"
+exclude = ["application/x-vnd.foo"]   # always honoured
+```
+
+`mode = minimal` matches v0.3.1 behaviour: only `text/plain` and
+canonical image. `mode = all` is the new default.
+
+When a single format exceeds `max_format_size_bytes` the entire clip
+is dropped (matching Ditto's behaviour) with a warning log.
+
+### 1.9 Ordering: write blobs only after dedup
+
+Critical: existing `Watcher::poll_internal` pattern (write-after-dedup)
+must be preserved. Multi-format expands the surface — each blob format
+gets a tmp-write/fsync/rename/fsync-parent sequence, but only after the
+entry-level hash is checked. If any format's tmp-write fails, *roll
+back* all already-written blobs for the same entry.
+
+## Acceptance criteria
+
+- [ ] Capture HTML from Firefox; paste into LibreOffice Writer;
+      formatting preserved.
+- [ ] Capture file selection from File Explorer (Windows) / Files
+      (Linux); pasted into another file manager → files appear.
+- [ ] Copy from Word; consecutive copies of identical text don't create
+      new entries (`\rsid`-strip working).
+- [ ] Migration v2 → v3 round-trips a snapshot DB without data loss.
+- [ ] Multi-select 3 entries in TUI, copy. Paste into HTML-aware app
+      → fragments concatenated as valid HTML.
+- [ ] Default capture catches all known formats. `mode = "minimal"`
+      reverts to v0.3.1 behaviour.
+- [ ] Honor `Clipboard Viewer Ignore` / `Exclude*` / `CanIncludeInHistory`
+      sentinels on Windows.
+- [ ] Capture latency: < 50 ms (text), < 200 ms (image).
+- [ ] DB size per capture: bounded by `max_clip_size_bytes`.
+
+## Implementation Notes
+
+- Vendor `wl-clipboard-rs` if upstream lacks features we need
+  (e.g. mime-type filtering at watch time).
+- Windows `windows-rs` is huge; consider building a thin wrapper crate
+  `ditox-core/src/clipboard/win.rs` that compiles only the small
+  subset of bindings we need.
+- The migration is the single most invasive change in this whole
+  roadmap. Snapshot tests for v0/v1/v2 → v3 are mandatory before merge.
+- HTML envelope round-trip parser: see https://learn.microsoft.com/en-us/windows/win32/dataxchg/html-clipboard-format
+- RTF tokenizer: minimal — we only need to strip control-word groups,
+  not parse semantics. Use `nom` or hand-roll.
+
+## Risks
+
+- **Risk:** HTML envelope serialisation off-by-one bugs corrupt clips.
+  Mitigation: round-trip property test (capture → store → emit → parse)
+  with `proptest`.
+- **Risk:** DB explodes for users with image-heavy workflows.
+  Mitigation: per-format size cap + total clip cap defaults that are
+  generous but bounded.
+- **Risk:** `AddClipboardFormatListener` skipped events under heavy
+  Windows load. Mitigation: watchdog-ping pattern from Ditto (write a
+  custom format every 5 min, expect to see it back).
+
+## Work Log
+
+### 2026-04-26 — task created
+- Epic file written.
+
+### 2026-04-26 — sub-tasks 1.1, 1.2, 1.5, 1.7, 1.8, 1.9 landed
+
+Six of nine sub-tasks complete in one session (~36 new tests, no
+regressions, all clippy/fmt clean). The persistence, schema, format
+identity, canonicalisation, search, limits, and atomic-write surface
+is fully built out; the remaining work is producing (1.3, 1.4) and
+consuming (1.6) multi-format clips.
+
+**1.1 — Schema v2 → v3.** New `entry_formats` table with
+`(entry_id, format_name, storage, content, blob_hash, blob_ext,
+byte_size, format_hash, canonical, created_at)` and three indexes,
+plus `entries.canonical_format` pointer. Backfill mirrors every
+existing entry into one canonical `entry_formats` row (text →
+inline, image → blob_file). New `format_content_fts` virtual table
+with triggers on `entry_formats`. **Deviation from spec:** kept
+`entries_fts` (notes + legacy single-format content) instead of
+dropping and rebuilding it with multi-format columns — the spec
+schema duplicates `notes` per format row (~3× bloat for typical
+multi-format clips); we use two FTS tables and UNION them in search.
+Trade-off: 2 FTS indexes vs 1, no notes duplication. `Database::open`
+now sets `PRAGMA foreign_keys = ON` so the new `ON DELETE CASCADE`
+on `entry_formats(entry_id) REFERENCES entries(id)` actually fires.
+6 snapshot tests in `ditox-core/tests/schema_v3_migration.rs`.
+
+**1.2 — Format identity.** New `ditox-core/src/format.rs` with
+`FormatId` enum (`Mime` / `Win32` variants), conversion from Win32
+`CF_*` codes (`from_win32_cf`), Wayland MIME normalisation
+(`from_wayland_mime`), `is_text_like` / `is_image_like` /
+`storage()` classifiers, and a `well_known` constants module
+(`TEXT_PLAIN_UTF8`, `TEXT_HTML`, `IMAGE_PNG`, …). 8 unit tests.
+
+**1.5 — Per-format hashing & canonicalisation.** New
+`ditox-core/src/format/canonicalise.rs`:
+- `html_envelope(bytes) -> CanonicalHtml { fragment, source_url,
+  was_envelope }` parses Windows "HTML Format" envelope; on Linux
+  raw HTML it passes through.
+- `rtf(bytes) -> Vec<u8>` strips `\rsid*` family + `{\*\rsidtbl
+  …}`, `{\*\datastore …}`, `{\*\mmathPr …}`, `{\*\latentstyles
+  …}`, etc. — destination groups via brace-balanced walker
+  (max 4096 bytes span to avoid runaway on malformed input).
+- `format_hash(mime, bytes) -> String` dispatches per-MIME and
+  returns the SHA-256 of canonicalised bytes (what gets stored in
+  `entry_formats.format_hash`).
+PNG re-encoding deferred — current per-MIME default is "hash raw
+bytes". 11 unit tests, including a "two RTF copies with different
+\rsid hash identically" regression test.
+
+**1.7 — Multi-format search.** Rewrote `Database::search_entries`
+and `search_entries_filtered` to use `e.id IN (UNION of
+format_content_fts MATCH and entries_fts MATCH)` instead of the
+single `entries_fts` join. Added `search_entries_in_format(query,
+format_name, limit)` for the future `/h` / `/r` / `/p` search-mode
+prefixes. Added `search_notes_only(query, limit)` for the `/q`
+prefix (uses FTS5 column-restrictor `notes:term`). Search prefix
+front-end UX (TUI/GUI handling) deferred to a Phase 1 follow-up.
+4 v3 search tests added.
+
+**1.8 — Capture limits & quotas.** New `Config.capture`
+sub-section: `mode = all | minimal | custom`,
+`max_format_size_bytes` (default 10 MiB),
+`max_clip_size_bytes` (default 25 MiB), `formats.include` /
+`formats.exclude` lists. Helpers
+`CaptureConfig::should_capture_format(name)`,
+`format_size_ok(len)`, `clip_size_ok(len)`. `Minimal` mode reverts
+to v0.3.1 behaviour (text + canonical image only). Excludes win
+over includes. 8 unit tests, including TOML round-trip.
+
+**1.9 — Multi-format atomic write.** New
+`Database::insert_multi(entry, extras: &[ExtraFormat])` and
+`ExtraFormat { format_name, bytes }` with helpers
+`format_hash() / canonical_bytes() / storage_class() /
+blob_extension()`. Pipeline: write extra blob files first
+(tracking was-newly-written paths) → open SQLite tx → write
+canonical row + extra rows + update `entries.format_count` →
+commit; on any SQL error, tx rolls back automatically and
+written blobs are unlinked best-effort via `rollback_blobs`.
+Known v0.4 limitation: a hash-collision short-circuit
+(entries row already exists) does NOT unlink already-written
+blob files; documented in the doc comment, asserted in the
+`insert_multi_rolls_back_blobs_on_db_failure` test, follow-up
+filed for Phase 1.x. 4 multi-format tests added (happy path,
+empty extras, image extras land in blob store, collision behaviour).
+
+**Remaining sub-tasks (deferred to next session):**
+
+- **1.3 Linux capture via `wl-clipboard-rs`.** Replace the
+  `wl-paste` shell-out with library calls; integrate as a
+  `WaylandLibraryCapture` source per the `CaptureSource` trait
+  (task 018). Needs real Wayland session for full verification.
+- **1.4 Windows event-driven capture.** Replace `arboard` polling
+  with `AddClipboardFormatListener` + message-only window +
+  `EnumClipboardFormats` / `GetClipboardData`. Requires
+  `windows-rs` Win32 bindings. Honour Ditto's "do not record"
+  sentinels (`Clipboard Viewer Ignore`,
+  `ExcludeClipboardContentFromMonitorProcessing`,
+  `CanIncludeInClipboardHistory`).
+- **1.6 FormatAggregator trait + 5 impls** (PlainText / HtmlEnvelope
+  / Rtf / FileList / ImageStack). HtmlEnvelopeAggregator is the
+  trickiest — needs envelope serialisation with recomputed offsets
+  (the inverse of `canonicalise::html_envelope`).
+
+Total workspace test count after this session: **121 tests** (was
+72 at session start; +49 added: 8 db_actor + 6 v3 migration + 8
+format + 11 canonicalise + 8 capture_config + 4 v3 search + 4
+insert_multi). All clippy `-D warnings` + fmt clean.
