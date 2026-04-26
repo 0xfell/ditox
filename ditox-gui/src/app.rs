@@ -1,7 +1,7 @@
 //! Ditox iced GUI application - Modern redesign
 
 use ditox_core::app::TabFilter;
-use ditox_core::{Clipboard, Config, Database, Entry, EntryType, Result, Watcher};
+use ditox_core::{Clipboard, Config, Database, DbHandle, Entry, EntryType, Result, Watcher};
 #[cfg(windows)]
 use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
@@ -1092,7 +1092,10 @@ pub enum Message {
 }
 
 pub struct DitoxApp {
-    db: Arc<Mutex<Database>>,
+    /// Handle to the dedicated DB actor thread. Cheap clone, `Send +
+    /// Sync`. Replaces the Phase-0-pre `Arc<Mutex<Database>>` pattern
+    /// — see `docs/notes/db-actor.md`.
+    db: DbHandle,
     config: Config,
     search_query: String,
     selected_index: usize,
@@ -1123,8 +1126,15 @@ pub struct DitoxApp {
 
 impl DitoxApp {
     fn new(db: Database, config: Config, start_hidden: bool) -> (Self, Task<Message>) {
-        let total_count = db.count().unwrap_or(0);
-        let entries = db.get_page(0, PAGE_SIZE).unwrap_or_default();
+        // Move the Database onto its own thread; iced runs against
+        // the cheap `DbHandle`. The `DbActorJoin` is dropped on the
+        // floor — the actor exits naturally when the last `DbHandle`
+        // clone (this struct's `db` field) drops on app exit.
+        let (db, _join) = DbHandle::spawn(db);
+        let total_count = db.call(|d| d.count().unwrap_or(0)).unwrap_or(0);
+        let entries = db
+            .call(|d| d.get_page(0, PAGE_SIZE).unwrap_or_default())
+            .unwrap_or_default();
         let window_state = WindowState::load();
 
         tracing::info!(
@@ -1178,7 +1188,7 @@ impl DitoxApp {
         ];
 
         let app = DitoxApp {
-            db: Arc::new(Mutex::new(db)),
+            db,
             config,
             search_query: String::new(),
             selected_index: 0,
@@ -1232,7 +1242,11 @@ impl DitoxApp {
                         },
                     };
                     if result.is_ok() {
-                        let _ = self.db.lock().unwrap().touch(&entry.id);
+                        let id = entry.id.clone();
+                        // Fire-and-forget: we're about to exit, no need to wait.
+                        let _ = self.db.dispatch(move |d| {
+                            let _ = d.touch(&id);
+                        });
                         tracing::info!("Copied: {}", entry.preview(30));
                     }
                 }
@@ -1263,7 +1277,10 @@ impl DitoxApp {
                 // Actually delete the entry (after confirmation for favorites)
                 let was_in_preview = matches!(self.view_mode, ViewMode::EntryPanel(_));
                 let was_in_confirm = matches!(self.view_mode, ViewMode::ConfirmDelete(_));
-                let _ = self.db.lock().unwrap().delete(&id);
+                // Block on delete — `refresh_entries` below queries
+                // the new state, and on a busy actor we'd otherwise
+                // race and re-show the deleted row briefly.
+                let _ = self.db.call(move |d| d.delete(&id));
                 self.refresh_entries();
                 // Close modal after deletion
                 if was_in_preview || was_in_confirm {
@@ -1282,7 +1299,10 @@ impl DitoxApp {
 
             Message::ToggleFavorite(id) => {
                 if self.view_mode == ViewMode::Main {
-                    let _ = self.db.lock().unwrap().toggle_favorite(&id);
+                    // Same reasoning as `ConfirmDeleteEntry`: we
+                    // refresh immediately after, so block on the
+                    // round-trip to avoid stale display.
+                    let _ = self.db.call(move |d| d.toggle_favorite(&id));
                     self.refresh_entries();
                 }
             }
@@ -1330,18 +1350,23 @@ impl DitoxApp {
                     let filter_str = filter_str_ref.to_string();
                     let collection_id = collection_id_ref.map(|s| s.to_string());
 
-                    // Offload to background thread
+                    // Offload to a tokio blocking thread so the iced
+                    // render loop doesn't stall on the actor
+                    // round-trip. The actor itself runs the SQL on
+                    // its own thread.
                     return Task::perform(
                         async move {
                             tokio::task::spawn_blocking(move || {
-                                let db = db.lock().unwrap();
-                                db.search_entries_filtered(
-                                    &query,
-                                    50,
-                                    &filter_str,
-                                    collection_id.as_deref(),
-                                )
-                                .map_err(|e| e.to_string())
+                                db.call(move |d| {
+                                    d.search_entries_filtered(
+                                        &query,
+                                        50,
+                                        &filter_str,
+                                        collection_id.as_deref(),
+                                    )
+                                    .map_err(|e| e.to_string())
+                                })
+                                .unwrap_or_else(|e| Err(e.to_string()))
                             })
                             .await
                             .unwrap()
@@ -1611,7 +1636,10 @@ impl DitoxApp {
                             },
                         };
                         if result.is_ok() {
-                            let _ = self.db.lock().unwrap().touch(&entry.id);
+                            let id = entry.id.clone();
+                            let _ = self.db.dispatch(move |d| {
+                                let _ = d.touch(&id);
+                            });
                             tracing::info!("Copied: {}", entry.preview(30));
                         }
                     }
@@ -1644,11 +1672,19 @@ impl DitoxApp {
         let filter = self.active_tab_filter().clone();
         let (filter_str, collection_id) = filter.db_filter();
         let offset = self.current_page * PAGE_SIZE;
+        let filter_owned = filter_str.to_string();
+        let collection_owned = collection_id.map(|s| s.to_string());
         self.entries = self
             .db
-            .lock()
-            .unwrap()
-            .get_page_filtered(offset, PAGE_SIZE, filter_str, collection_id)
+            .call(move |d| {
+                d.get_page_filtered(
+                    offset,
+                    PAGE_SIZE,
+                    &filter_owned,
+                    collection_owned.as_deref(),
+                )
+                .unwrap_or_default()
+            })
             .unwrap_or_default();
         self.selected_index = 0;
     }
@@ -2559,40 +2595,50 @@ impl DitoxApp {
         };
 
         if self.search_query.is_empty() {
-            // Normal pagination
-            if let Ok(entries) = self.db.lock().unwrap().get_page_filtered(
-                self.current_page * self.config.general.max_entries,
-                self.config.general.max_entries,
-                filter,
-                collection_id,
-            ) {
+            // Normal pagination. Owned strings so the closure is `'static`.
+            let filter_owned = filter.to_string();
+            let collection_owned = collection_id.map(|s| s.to_string());
+            let offset = self.current_page * self.config.general.max_entries;
+            let limit = self.config.general.max_entries;
+
+            let f = filter_owned.clone();
+            let c = collection_owned.clone();
+            if let Ok(Ok(entries)) = self
+                .db
+                .call(move |d| d.get_page_filtered(offset, limit, &f, c.as_deref()))
+            {
                 self.entries = entries;
             }
             // Update counts
-            if let Ok(count) = self
+            if let Ok(Ok(count)) = self
                 .db
-                .lock()
-                .unwrap()
-                .count_filtered(filter, collection_id)
+                .call(move |d| d.count_filtered(&filter_owned, collection_owned.as_deref()))
             {
                 self.total_count = count;
             }
         } else {
             // Search mode - use new search_entries_filtered
-            match self.db.lock().unwrap().search_entries_filtered(
-                &self.search_query,
-                self.config.general.max_entries,
-                filter,
-                collection_id,
-            ) {
-                Ok(entries) => {
+            let query = self.search_query.clone();
+            let limit = self.config.general.max_entries;
+            let filter_owned = filter.to_string();
+            let collection_owned = collection_id.map(|s| s.to_string());
+            let result = self.db.call(move |d| {
+                d.search_entries_filtered(&query, limit, &filter_owned, collection_owned.as_deref())
+            });
+            match result {
+                Ok(Ok(entries)) => {
                     self.total_count = entries.len();
                     self.entries = entries;
                     // Reset to first page for search results
                     self.current_page = 0;
                 }
+                Ok(Err(e)) => {
+                    tracing::error!("search error: {}", e);
+                    self.entries.clear();
+                    self.total_count = 0;
+                }
                 Err(e) => {
-                    eprintln!("Search error: {}", e);
+                    tracing::error!("db actor error: {}", e);
                     self.entries.clear();
                     self.total_count = 0;
                 }

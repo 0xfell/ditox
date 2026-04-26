@@ -17,23 +17,20 @@ mod cli;
 mod startup;
 
 use clap::Parser;
+use ditox_core::logging;
 use ditox_core::{Config, Database, Result};
 
 fn main() {
     if let Err(e) = run() {
+        // Last-resort: tracing may not be initialised on early errors.
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
 }
 
 fn run() -> Result<()> {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("ditox_gui=info")),
-        )
-        .init();
+    // Initialise logging via the shared helper. RUST_LOG honoured.
+    logging::init(logging::Mode::Stderr);
 
     let cli = cli::Cli::parse();
     let action = cli.action();
@@ -56,6 +53,17 @@ fn run() -> Result<()> {
 
     // Load config and database
     let config = Config::load()?;
+    if let Some(override_dir) = config.apply_storage_override()? {
+        tracing::info!("data_dir override active: {}", override_dir.display());
+        if Config::legacy_db_exists_outside(&override_dir) {
+            tracing::warn!(
+                "data_dir override points at {} (no ditox.db there yet) but \
+                 a legacy default ditox.db exists. The override starts a \
+                 new history; copy or move the legacy DB if you want it.",
+                override_dir.display()
+            );
+        }
+    }
     let db = Database::open()?;
     db.init_schema()?;
 
