@@ -1,6 +1,6 @@
 # ADR 0001: Layer-shell strategy for the Linux GUI
 
-> **Status:** Accepted (pending real-compositor visual verification)
+> **Status:** Accepted (Hyprland verified; Sway/KDE/GNOME pending)
 > **Date:** 2026-04-26
 > **Phase:** 0 — Foundation (task 022)
 > **Deciders:** project lead + claude-opus-4-7
@@ -144,12 +144,10 @@ $ du -h target/release/a1-spike
 | Stripped binary size         | 23 MB                     | likely smaller (no iced)   |
 | Migration effort (Phase 4)   | Replace one `iced::application(…)` call site | Rewrite `view`, `update`, theming, image cache, scrollables, focus management |
 
-> **Visual verification still pending.** The author of this ADR is
-> running in a CI-style environment without a graphical Wayland
-> session. The A1 spike compiles to a runnable binary, but
-> "appears at bottom-left of Hyprland" / "Esc closes" must be
-> confirmed by a human running it on a real compositor before
-> Phase 4 starts. See "Verification checklist" below.
+> **Hyprland verified 2026-04-26.** Project lead ran the A1 spike
+> on a real Hyprland session and confirmed it works as designed.
+> Sway / KDE / GNOME / longevity tests remain pending; see
+> "Verification checklist" below.
 
 ## Decision
 
@@ -234,13 +232,9 @@ The spike's compilation alone is not proof of correctness. Before
 task 026 lands the following must be observed by a human on a real
 compositor:
 
-- [x] On Hyprland (current Arch master, verified 2026-04-26):
-  - [x] `cd spike/a1-iced-layershell && nix develop -c cargo run --release`
-  - [x] panel appears at bottom-left of the active monitor
-  - [x] keyboard focus lands on the panel (no extra `hyprctl`
-    commands needed)
-  - [x] Esc closes the process; exit code 0
-  - [x] ↑↓ moves the highlight; Enter prints + exits
+- [x] On Hyprland — confirmed working by project lead 2026-04-26
+  (`cd spike/a1-iced-layershell && nix develop -c cargo run --release`,
+  reported "works well" — panel, focus, Esc, ↑↓, Enter all behave).
 - [ ] On Sway (latest stable) — unverified; expected to work since
   both Sway and Hyprland implement `zwlr_layer_shell_v1`. Check
   before Phase 4 lands.

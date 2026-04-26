@@ -52,9 +52,9 @@ revisit when v0.18 stabilises.
 
 ## Visual verification
 
-**Hyprland: verified 2026-04-26.** Panel appeared bottom-left of the
-active monitor, keyboard focus landed on it without extra
-`hyprctl` calls, Esc/↑↓/Enter all behaved as expected.
+**Hyprland: confirmed working by project lead 2026-04-26**
+(`cd spike/a1-iced-layershell && nix develop -c cargo run --release`,
+reported "works well").
 
 **Sway / KDE / GNOME / longevity tests: pending.** ADR carries the
 remaining checklist; verify before Phase 4 task 026 begins
@@ -108,8 +108,8 @@ and works equivalently.
   the chosen path, concrete integration steps, and pin
   recommendation `iced_layershell = "=0.17.1"`.
 - Added `spike/` to git tracking.
-- **Hyprland verification done by user.** Panel appeared
-  bottom-left of the active monitor, keyboard focus landed
-  automatically, Esc/↑↓/Enter all behaved as specified. ADR
-  Hyprland boxes ticked. Sway / KDE / GNOME / longevity tests
-  remain pending; tracked in ADR for whoever brings up Phase 4.
+- **Hyprland verification done by user.** Project lead ran the
+  spike on a real Hyprland session and reported "works well".
+  ADR Hyprland boxes ticked. Sway / KDE / GNOME / longevity
+  tests remain pending; tracked in ADR for whoever brings up
+  Phase 4.
