@@ -22,7 +22,7 @@ use iced::widget::scrollable::RelativeOffset;
 use iced::widget::Id as WidgetId;
 use iced::widget::{
     button, column, container, image as iced_image, mouse_area, operation, row, scrollable, text,
-    text_input, Column, Row, Space,
+    text_input, tooltip, Column, Row, Space,
 };
 use iced::window::Direction;
 use iced::{
@@ -1200,6 +1200,28 @@ mod styles {
                 radius: Radius::new(8.0),
             },
             shadow: Shadow::default(),
+            snap: false,
+        }
+    }
+
+    // Phase 4 sub-task 4.9: tooltip-as-preview panel. Elevated
+    // background + subtle border + 4 px radius. The tooltip
+    // widget handles positioning + hover-delay + auto-hide; we
+    // only style the surrounding container.
+    pub fn tooltip_panel(_theme: &iced::Theme) -> container::Style {
+        container::Style {
+            background: Some(Background::Color(colors::BG_ELEVATED)),
+            text_color: Some(colors::TEXT_PRIMARY),
+            border: Border {
+                color: Color::from_rgba(colors::ACCENT.r, colors::ACCENT.g, colors::ACCENT.b, 0.3),
+                width: 1.0,
+                radius: Radius::new(4.0),
+            },
+            shadow: Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
+                offset: iced::Vector::new(0.0, 2.0),
+                blur_radius: 8.0,
+            },
             snap: false,
         }
     }
@@ -3001,7 +3023,38 @@ impl DitoxApp {
             .padding([6, 8])
             .width(Length::Fixed(32.0));
 
-        row![entry_btn, fav_btn, del_btn]
+        // Phase 4 sub-task 4.9: tooltip-as-preview. Wrap the
+        // entry button in iced's built-in `tooltip` widget. Hover
+        // → preview appears to the right with a longer slice of
+        // the entry text (text entries) or a larger thumbnail
+        // (image entries). iced's tooltip already handles the
+        // hover-delay + auto-hide-on-leave so no extra state
+        // tracking is needed at the DitoxApp level.
+        let tooltip_content: Element<'_, Message> = match entry.entry_type {
+            EntryType::Text => container(
+                text(entry.preview(500))
+                    .size(11)
+                    .color(colors::TEXT_PRIMARY),
+            )
+            .max_width(360.0)
+            .padding(8)
+            .style(styles::tooltip_panel)
+            .into(),
+            EntryType::Image => {
+                let path_string = entry
+                    .image_path()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                container(self.view_thumbnail(&path_string, 256, 256))
+                    .padding(8)
+                    .style(styles::tooltip_panel)
+                    .into()
+            }
+        };
+
+        let entry_with_tooltip = tooltip(entry_btn, tooltip_content, tooltip::Position::Right);
+
+        row![entry_with_tooltip, fav_btn, del_btn]
             .spacing(4)
             .align_y(iced::Alignment::Center)
             .padding([0, 4])
