@@ -382,3 +382,69 @@ Total workspace test count after this session: **121 tests** (was
 72 at session start; +49 added: 8 db_actor + 6 v3 migration + 8
 format + 11 canonicalise + 8 capture_config + 4 v3 search + 4
 insert_multi). All clippy `-D warnings` + fmt clean.
+
+### 2026-04-26 — sub-task 1.6 FormatAggregator landed
+
+New `ditox-core/src/aggregator.rs` with `FormatAggregator` trait
+(`format_name() -> &str`, `aggregate(&self, parts: &[&[u8]]) ->
+Result<Vec<u8>, AggregateError>`) plus five impls:
+
+- **`PlainTextAggregator { separator: String }`** — UTF-8
+  validation + `String::join`-style concatenation. Rejects
+  invalid UTF-8 with `AggregateError::InvalidUtf8 { index }`.
+- **`HtmlEnvelopeAggregator { source_url: Option<String> }`** —
+  wraps the byte concat of N HTML fragments in a Windows "HTML
+  Format" clipboard envelope. Header is exactly **97 bytes**
+  fixed (8-digit zero-padded offsets), so the four offsets are
+  computable up-front without a second pass. Round-trip
+  through `canonicalise::html_envelope` returns the joined
+  fragments byte-for-byte (asserted by test).
+- **`RtfAggregator`** — wraps each input's body in `{}` inside a
+  fresh `{\rtf1\ansi …}` envelope, separated by `\par`. Body
+  extraction uses a small prologue stripper that walks
+  `\rtf1\ansi\ansicpg…\deff…\deflang…` control words and stops
+  at the first `{` (destination group like `\fonttbl`) or
+  literal text. Non-RTF inputs are escaped (`\` `{` `}` get a
+  leading backslash) and emitted as literal text.
+- **`UriListAggregator`** — RFC-2483 line-list join, normalises
+  to CRLF, drops blank and `#`-comment lines, preserves
+  duplicates and order (user-explicit selection). **Deviation
+  from spec design:** dropped the `mode = HDrop | UriList`
+  enum — Windows `CF_HDROP` inputs are converted to URI lists
+  at the capture layer (Phase 1.4), so the aggregator never
+  sees raw HDROP bytes. Single mode is cleaner.
+- **`ImageStackAggregator { axis: StackAxis }`** — decodes
+  PNG/JPEG/WebP via the workspace `image` crate, pastes each
+  input into a transparent RGBA8 canvas at
+  `(0, cumulative_y)` (vertical) or `(cumulative_x, 0)`
+  (horizontal), output dimensions are sum-on-stack-axis +
+  max-on-cross-axis. Always emits PNG (only workspace
+  feature with alpha). Inputs are **not resized** —
+  cross-axis padding is fully transparent.
+
+`AggregateError` enum: `Empty`, `ImageDecode { index, source }`,
+`ImageEncode(image::ImageError)`, `InvalidUtf8 { index }`. All
+variants `#[error]`-derived via `thiserror`.
+
+Trait is object-safe (`Box<dyn FormatAggregator>` works) — the
+planned UI in Phase 4-5 will hold the aggregator behind a trait
+object chosen by the user's selected format. Asserted by the
+`aggregators_are_object_safe` test.
+
+32 unit tests added in `ditox-core/src/aggregator.rs::tests`,
+covering: empty rejection per impl, single-part identity/wrap,
+multi-part join behaviour, format-name correctness, invalid
+UTF-8 rejection (text aggregators), HTML envelope offset math
++ round-trip via `html_envelope()`, RTF prologue stripping,
+RTF metacharacter escaping for plain-text inputs, RTF
+destination-group preservation, URI-list CRLF normalisation +
+comment/blank-line dropping, image stacking with transparent
+padding, image decode-error indexing.
+
+Workspace test count after this session: **153 tests**
+(+32 aggregator). All clippy `-D warnings` + fmt clean.
+
+**Phase 1 status: 7/9 sub-tasks done.** Remaining: 1.3
+(Linux event-driven via `wl-clipboard-rs`) and 1.4 (Windows
+`AddClipboardFormatListener`). Both require platform-specific
+testing.

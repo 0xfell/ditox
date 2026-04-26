@@ -4,6 +4,7 @@
 //! used by both the TUI and GUI frontends.
 
 pub mod actions;
+pub mod aggregator;
 pub mod app;
 pub mod capture;
 pub mod clipboard;
