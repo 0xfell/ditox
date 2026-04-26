@@ -36,6 +36,10 @@ wl-clipboard-rs = "0.9.3"
 libc = "0.2.186"
 arboard = "3.6.1"
 sysinfo = "0.38.4"
+# Cross-platform file locking (advisory flock on Unix, LockFileEx on Windows)
+fs2 = "0.4.3"
+# Signal handling (Unix-only; we use cfg gates)
+ctrlc = { version = "3.4.5", features = ["termination"] }
 
 # TUI-specific
 ratatui = "0.30.0"

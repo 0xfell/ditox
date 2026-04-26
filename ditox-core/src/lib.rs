@@ -5,13 +5,18 @@
 
 pub mod actions;
 pub mod app;
+pub mod capture;
 pub mod clipboard;
 pub mod collection;
 pub mod config;
 pub mod content_type;
 pub mod db;
+pub mod db_actor;
 pub mod entry;
 pub mod error;
+pub mod format;
+pub mod logging;
+pub mod platform;
 pub mod stats;
 pub mod watcher;
 
@@ -22,6 +27,7 @@ pub use clipboard::Clipboard;
 pub use collection::Collection;
 pub use config::Config;
 pub use db::Database;
+pub use db_actor::{DbActorJoin, DbHandle};
 pub use entry::{Entry, EntryType};
 pub use error::{DitoxError, Result};
 pub use stats::Stats;
