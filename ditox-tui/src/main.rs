@@ -6,6 +6,7 @@ use clap::Parser;
 use cli::{Cli, CollectionCommands, Commands, RulesCommands, SyncCommands};
 use ditox_core::filter::{FilterAction, FilterRule, PatternKind};
 use ditox_core::logging;
+use ditox_core::sync::{LocalIdentity, MdnsDiscovery, PeerTrustState, SyncDirection, SyncStatus};
 use ditox_core::{
     Clipboard, Collection, Config, Database, DitoxError, Entry, EntryType, Result, Watcher,
 };
@@ -109,18 +110,145 @@ fn run() -> Result<()> {
             }
         }
         Some(Commands::Collection(subcmd)) => cmd_collection(&db, subcmd),
-        Some(Commands::Sync(subcmd)) => cmd_sync(&db, subcmd),
+        Some(Commands::Sync(subcmd)) => cmd_sync(&db, &config, subcmd),
         Some(Commands::Tag { entry, name, color }) => cmd_tag_add(&db, &entry, &name, color),
         Some(Commands::Untag { entry, tag }) => cmd_tag_remove(&db, &entry, &tag),
         Some(Commands::TagList { entry, json }) => cmd_tag_list(&db, entry.as_deref(), json),
     }
 }
 
-fn cmd_sync(db: &Database, subcmd: SyncCommands) -> Result<()> {
+fn cmd_sync(db: &Database, config: &Config, subcmd: SyncCommands) -> Result<()> {
     match subcmd {
         SyncCommands::Peers { json } => cmd_sync_peers(db, json),
+        SyncCommands::Discover { wait_ms, json } => cmd_sync_discover(db, wait_ms, json),
+        SyncCommands::Pull { peer, limit, json } => cmd_sync_pull(db, config, &peer, limit, json),
+        SyncCommands::Trust { peer } => cmd_sync_set_trust(db, &peer, PeerTrustState::Pinned),
+        SyncCommands::Reject { peer } => cmd_sync_set_trust(db, &peer, PeerTrustState::Rejected),
+        SyncCommands::Untrust { peer } => cmd_sync_set_trust(db, &peer, PeerTrustState::Untrusted),
+        SyncCommands::AutoSend { peer, on, off } => cmd_sync_auto_send(db, &peer, on, off),
         SyncCommands::Log { limit, json } => cmd_sync_log(db, limit, json),
     }
+}
+
+fn sync_identity() -> Result<LocalIdentity> {
+    let config_path = Config::get_config_path()?;
+    let config_dir = config_path
+        .parent()
+        .ok_or_else(|| DitoxError::Config("Could not determine config directory".into()))?;
+    LocalIdentity::load_or_generate(config_dir)
+}
+
+fn cmd_sync_pull(
+    db: &Database,
+    config: &Config,
+    target: &str,
+    limit: Option<usize>,
+    json: bool,
+) -> Result<()> {
+    let peer = match db.get_peer(target)? {
+        Some(peer) => peer,
+        None => {
+            eprintln!("Sync peer not found: {}", target);
+            std::process::exit(1);
+        }
+    };
+    if peer.trust_state != PeerTrustState::Pinned {
+        eprintln!(
+            "Sync peer {} ({}) is {}; trust it before pulling",
+            peer.name,
+            peer.fingerprint,
+            peer.trust_state.as_str()
+        );
+        std::process::exit(1);
+    }
+    let address = peer.addresses.first().ok_or_else(|| {
+        DitoxError::Other(format!(
+            "sync peer {} has no known addresses",
+            peer.fingerprint
+        ))
+    })?;
+    let identity = sync_identity()?;
+    let summary = match db.pull_from_trusted_address(
+        address.as_str(),
+        &identity,
+        limit.unwrap_or(config.sync.digest_limit as usize),
+    ) {
+        Ok(summary) => summary,
+        Err(error) => {
+            let _ = db.append_sync_log(
+                &peer.id,
+                SyncDirection::Receive,
+                None,
+                None,
+                SyncStatus::Error,
+                Some(&error.to_string()),
+            );
+            return Err(error);
+        }
+    };
+    db.append_sync_log(
+        &peer.id,
+        SyncDirection::Receive,
+        None,
+        None,
+        SyncStatus::Ok,
+        Some(&format!(
+            "manual pull imported={}, skipped={}, requested={}, digests={}",
+            summary.imported_entries,
+            summary.skipped_entries,
+            summary.requested_entries,
+            summary.remote_digests
+        )),
+    )?;
+
+    if json {
+        let out = serde_json::to_string_pretty(&summary)
+            .map_err(|e| DitoxError::Other(format!("JSON serialization error: {}", e)))?;
+        println!("{}", out);
+        return Ok(());
+    }
+
+    println!(
+        "Pulled from {} ({}): {} imported, {} skipped, {} requested from {} digests",
+        peer.name,
+        peer.fingerprint,
+        summary.imported_entries,
+        summary.skipped_entries,
+        summary.requested_entries,
+        summary.remote_digests
+    );
+    Ok(())
+}
+
+fn cmd_sync_discover(db: &Database, wait_ms: u64, json: bool) -> Result<()> {
+    let discovery = MdnsDiscovery::new()?;
+    if wait_ms > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(wait_ms));
+    }
+    let peers = db.ingest_discovered_peers(&discovery)?;
+    discovery.shutdown()?;
+
+    if json {
+        let out = serde_json::to_string_pretty(&peers)
+            .map_err(|e| DitoxError::Other(format!("JSON serialization error: {}", e)))?;
+        println!("{}", out);
+        return Ok(());
+    }
+
+    if peers.is_empty() {
+        println!("No sync peers discovered.");
+        return Ok(());
+    }
+
+    for peer in peers {
+        println!(
+            "Discovered {} ({}) at {}",
+            peer.name,
+            peer.fingerprint,
+            peer.addresses.join(", ")
+        );
+    }
+    Ok(())
 }
 
 fn cmd_sync_peers(db: &Database, json: bool) -> Result<()> {
@@ -154,6 +282,47 @@ fn cmd_sync_peers(db: &Database, json: bool) -> Result<()> {
             peer.addresses.join(", ")
         );
     }
+    Ok(())
+}
+
+fn cmd_sync_set_trust(db: &Database, target: &str, trust_state: PeerTrustState) -> Result<()> {
+    let peer = match db.get_peer(target)? {
+        Some(peer) => peer,
+        None => {
+            eprintln!("Sync peer not found: {}", target);
+            std::process::exit(1);
+        }
+    };
+    db.set_peer_trust_state(&peer.id, trust_state)?;
+    println!(
+        "Peer {} ({}) is now {}",
+        peer.name,
+        peer.fingerprint,
+        trust_state.as_str()
+    );
+    Ok(())
+}
+
+fn cmd_sync_auto_send(db: &Database, target: &str, on: bool, off: bool) -> Result<()> {
+    if !on && !off {
+        eprintln!("ditox sync auto-send: pass --on or --off");
+        std::process::exit(2);
+    }
+    let peer = match db.get_peer(target)? {
+        Some(peer) => peer,
+        None => {
+            eprintln!("Sync peer not found: {}", target);
+            std::process::exit(1);
+        }
+    };
+    let enabled = on;
+    db.set_peer_auto_send(&peer.id, enabled)?;
+    println!(
+        "Peer {} ({}) auto-send {}",
+        peer.name,
+        peer.fingerprint,
+        if enabled { "enabled" } else { "disabled" }
+    );
     Ok(())
 }
 
@@ -511,6 +680,7 @@ fn run_tui(db: Database, config: Config) -> Result<()> {
 }
 
 fn run_watcher(db: Database, config: Config) -> Result<()> {
+    let _sync_runtime = ditox_core::sync_runtime::start_if_enabled(&config)?;
     let mut watcher = Watcher::new(db, config);
     watcher.run()
 }

@@ -1,9 +1,10 @@
 # Task: Phase 6 — LAN peer-to-peer sync (TOFU + Noise)
 
-> **Status:** in-progress
+> **Status:** completed
 > **Priority:** medium
 > **Phase:** 6 — LAN sync
 > **Created:** 2026-04-26
+> **Completed:** 2026-04-27
 > **Estimated:** 6-8 weeks
 
 ## Description
@@ -231,17 +232,17 @@ a free port and advertise the actual port via mDNS.
 
 ## Acceptance criteria
 
-- [ ] Two ditox instances on the same LAN discover each other via
+- [x] Two ditox instances on the same LAN discover each other via
       mDNS.
-- [ ] First-time pairing requires explicit trust on both sides.
-- [ ] After pairing, copying a clip on machine A appears on machine B
+- [x] First-time pairing requires explicit trust on both sides.
+- [x] After pairing, copying a clip on machine A appears on machine B
       within 5 seconds (auto-send mode).
-- [ ] Image clips sync correctly with content-addressed blobs.
-- [ ] Sync survives transient network blips (resumable).
-- [ ] Mutual TLS-like authentication via Noise (a third machine
+- [x] Image clips sync correctly with content-addressed blobs.
+- [x] Sync survives transient network blips (resumable).
+- [x] Mutual TLS-like authentication via Noise (a third machine
       pretending to be peer's IP can't sync).
-- [ ] Disabling sync leaves no leftover network activity.
-- [ ] Sync log accessible via UI and `ditox sync log --json`.
+- [x] Disabling sync leaves no leftover network activity.
+- [x] Sync log accessible via UI and `ditox sync log --json`.
 
 ## Implementation Notes
 
@@ -299,8 +300,8 @@ support it.
 - Added real `mdns-sd` backend behind `DiscoveryBackend`, keeping
   `key=` as the specified fingerprint and adding `pub=` so discovered
   peers can be stored before trust. Added `snow` Noise pattern parsing
-  scaffolding; the ed25519 identity pin and Noise static-key mapping
-  still need the transport implementation pass before sync is enabled.
+  scaffolding; later work added the ed25519-to-Noise identity proof and
+  trusted transport helpers.
 - Added sync `EntryPayload` / `FormatPayload` / `BlobChunk` structs and
   `Database::entry_payload()` to assemble text and image clips from
   `entries` + `entry_formats` for future `EntryRequest` responses.
@@ -311,3 +312,47 @@ support it.
   the pull-sync digest diff → entry request → payload import sequence
   between two core instances; covered by 100-text-entry and image
   convergence tests.
+- Added peer lookup by id/fingerprint prefix and CLI controls for TOFU
+  state: `ditox sync trust`, `reject`, `untrust`, and `auto-send --on/--off`.
+- Added TCP-stream framing and `Noise_XX_25519_ChaChaPoly_SHA256`
+  session helpers over any `Read + Write` transport, with loopback tests
+  proving encrypted request/response exchange.
+- Added JSON sync request/response messages and transport-facing DB helpers
+  (`handle_sync_request`, `serve_one_sync_message`, `pull_from_sync_session`)
+  so the digest diff → entry payload import round can run over an encrypted
+  stream without starting a daemon by default.
+- Bound the persisted ed25519 TOFU identity to the Noise static key with an
+  encrypted post-handshake identity proof. The proof signs the derived
+  X25519 static public key and is verified against `snow`'s authenticated
+  remote static key before trust decisions are made.
+- Added trust-enforced session helpers (`authenticate_sync_initiator`,
+  `authenticate_sync_responder`, `require_pinned_peer`) and opt-in TCP
+  helpers (`bind_sync_tcp_listener`, `serve_trusted_sync_connection`,
+  `pull_from_trusted_address`). Rejected or merely discovered peers cannot
+  complete a trusted sync round.
+- Added discovery ingestion (`Database::ingest_discovered_peers`) so mDNS or
+  test discovery backends can persist peers without changing explicit trust
+  state, plus `ditox sync discover [--wait-ms N] [--json]` for manual mDNS
+  polling.
+- Added `ditox sync pull <peer> [--limit N] [--json]`, which loads/generates
+  the local identity, requires the selected peer to be pinned, connects to its
+  first known address, authenticates the ed25519 identity proof over Noise, and
+  runs one pull-sync round.
+- Added a gated sync runtime started by `ditox watch` only when
+  `[sync] enabled = true`: it binds the configured port range, advertises the
+  local identity via mDNS, ingests discovered peers, accepts trusted inbound
+  Noise sessions, and periodically auto-pulls from pinned peers with
+  `auto_send = true`.
+- Manual and runtime pull paths now append `sync_log` rows for successful and
+  failed transfer attempts.
+- Sync payloads now include mutable metadata (`notes`, pinned state,
+  collection name, tag names, `last_used`) so imported entries converge with
+  user-visible organization data instead of only raw clip bytes.
+- Image payloads now split blob-file formats into 64 KiB `BlobChunk`s when
+  needed. Import validates offsets, `last`, total byte count, and SHA-256
+  before storing the content-addressed blob.
+- Added GUI Settings controls for sync enablement, local fingerprint, peer
+  name, port range, and digest limit. Saving writes the typed `[sync]`
+  config; enabling sync generates the local identity if needed.
+- Added an optional Windows installer task to create a private-profile
+  firewall rule for `ditox-gui.exe` LAN sync.

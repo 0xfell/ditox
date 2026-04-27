@@ -5,6 +5,7 @@ use ditox_core::foreground::{ForegroundSnapshot, ForegroundTracker};
 use ditox_core::paste::keystroke::KeystrokeSequence;
 use ditox_core::paste::sentinel::PasteSentinel;
 use ditox_core::paste::synthesize::{paste_with_chain, Synthesizer};
+use ditox_core::sync::LocalIdentity;
 // Phase 4 sub-task 4.3: do NOT import `ditox_core::Result` here. The
 // `iced_layershell::to_layer_message` macro expands a `TryInto` impl
 // that uses bare `Result<T, E>` which must resolve to `std::result::Result`
@@ -82,6 +83,14 @@ fn open_path_external(path: &str) {
 
 fn config_mtime(path: &std::path::Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+fn sync_identity_fingerprint() -> ditox_core::Result<String> {
+    let config_path = Config::get_config_path()?;
+    let config_dir = config_path.parent().ok_or_else(|| {
+        ditox_core::DitoxError::Config("Could not determine config directory".into())
+    })?;
+    Ok(LocalIdentity::load_or_generate(config_dir)?.fingerprint())
 }
 
 fn gui_key_combo(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<String> {
@@ -1615,6 +1624,11 @@ pub enum Message {
     SettingsThemeTextChanged(String),
     SettingsThemeBorderChanged(String),
     SettingsThemeMutedChanged(String),
+    SettingsSyncNameChanged(String),
+    SettingsSyncPortChanged(String),
+    SettingsSyncPortScanEndChanged(String),
+    SettingsSyncDigestLimitChanged(String),
+    ToggleSettingsSyncEnabled,
     ToggleSettingsHideOnBlur,
     SaveSettings,
     ToggleMultiSelect,
@@ -1786,6 +1800,11 @@ pub struct DitoxApp {
     settings_theme_text: String,
     settings_theme_border: String,
     settings_theme_muted: String,
+    settings_sync_name: String,
+    settings_sync_port: String,
+    settings_sync_port_scan_end: String,
+    settings_sync_digest_limit: String,
+    settings_sync_fingerprint: Option<String>,
     settings_status: Option<String>,
     multi_select: bool,
     selected_entry_ids: HashSet<String>,
@@ -1895,6 +1914,15 @@ impl DitoxApp {
         let settings_theme_text = config.ui.theme.text.clone();
         let settings_theme_border = config.ui.theme.border.clone();
         let settings_theme_muted = config.ui.theme.muted.clone();
+        let settings_sync_name = config.sync.name.clone().unwrap_or_default();
+        let settings_sync_port = config.sync.port.to_string();
+        let settings_sync_port_scan_end = config.sync.port_scan_end.to_string();
+        let settings_sync_digest_limit = config.sync.digest_limit.to_string();
+        let settings_sync_fingerprint = if config.sync.enabled {
+            sync_identity_fingerprint().ok()
+        } else {
+            None
+        };
         let config_path = Config::get_config_path().ok();
         let config_mtime = config_path.as_ref().and_then(|p| config_mtime(p));
 
@@ -1938,6 +1966,11 @@ impl DitoxApp {
             settings_theme_text,
             settings_theme_border,
             settings_theme_muted,
+            settings_sync_name,
+            settings_sync_port,
+            settings_sync_port_scan_end,
+            settings_sync_digest_limit,
+            settings_sync_fingerprint,
             settings_status: None,
             multi_select: false,
             selected_entry_ids: HashSet::new(),
@@ -2600,6 +2633,34 @@ impl DitoxApp {
                 self.settings_theme_muted = value;
             }
 
+            Message::SettingsSyncNameChanged(value) => {
+                self.settings_sync_name = value;
+            }
+
+            Message::SettingsSyncPortChanged(value) => {
+                self.settings_sync_port = value;
+            }
+
+            Message::SettingsSyncPortScanEndChanged(value) => {
+                self.settings_sync_port_scan_end = value;
+            }
+
+            Message::SettingsSyncDigestLimitChanged(value) => {
+                self.settings_sync_digest_limit = value;
+            }
+
+            Message::ToggleSettingsSyncEnabled => {
+                self.config.sync.enabled = !self.config.sync.enabled;
+                if self.config.sync.enabled && self.settings_sync_fingerprint.is_none() {
+                    match sync_identity_fingerprint() {
+                        Ok(fingerprint) => self.settings_sync_fingerprint = Some(fingerprint),
+                        Err(error) => {
+                            self.settings_status = Some(format!("Sync identity failed: {error}"))
+                        }
+                    }
+                }
+            }
+
             Message::ToggleSettingsHideOnBlur => {
                 self.config.gui.hide_on_blur = !self.config.gui.hide_on_blur;
             }
@@ -2620,6 +2681,30 @@ impl DitoxApp {
                         return Task::none();
                     }
                 };
+                let sync_port = match self.settings_sync_port.trim().parse::<u16>() {
+                    Ok(v) if v > 0 => v,
+                    _ => {
+                        self.settings_status = Some("sync port must be 1-65535".into());
+                        return Task::none();
+                    }
+                };
+                let sync_port_scan_end =
+                    match self.settings_sync_port_scan_end.trim().parse::<u16>() {
+                        Ok(v) if v >= sync_port => v,
+                        _ => {
+                            self.settings_status =
+                                Some("sync port scan end must be >= port".into());
+                            return Task::none();
+                        }
+                    };
+                let sync_digest_limit = match self.settings_sync_digest_limit.trim().parse::<u32>()
+                {
+                    Ok(v) if v > 0 => v,
+                    _ => {
+                        self.settings_status = Some("sync digest limit must be positive".into());
+                        return Task::none();
+                    }
+                };
 
                 self.config.general.max_entries = max_entries;
                 self.config.general.poll_interval_ms = poll_interval;
@@ -2627,6 +2712,13 @@ impl DitoxApp {
                 self.config.ui.theme.text = self.settings_theme_text.clone();
                 self.config.ui.theme.border = self.settings_theme_border.clone();
                 self.config.ui.theme.muted = self.settings_theme_muted.clone();
+                self.config.sync.name = match self.settings_sync_name.trim() {
+                    "" => None,
+                    name => Some(name.to_string()),
+                };
+                self.config.sync.port = sync_port;
+                self.config.sync.port_scan_end = sync_port_scan_end;
+                self.config.sync.digest_limit = sync_digest_limit;
                 self.poll_interval_ms = poll_interval;
                 POLL_INTERVAL_MS.store(poll_interval, std::sync::atomic::Ordering::Relaxed);
 
@@ -4038,6 +4130,62 @@ impl DitoxApp {
                     .style(styles::search_input),
             ]
             .align_y(iced::Alignment::Center),
+            Space::new().height(10),
+            text("Sync").size(12).color(colors::TEXT_SECONDARY),
+            row![
+                text("Enable LAN sync")
+                    .size(12)
+                    .color(colors::TEXT_SECONDARY),
+                Space::new().width(Length::Fill),
+                button(
+                    text(if self.config.sync.enabled {
+                        "ON"
+                    } else {
+                        "OFF"
+                    })
+                    .size(11)
+                )
+                .style(if self.config.sync.enabled {
+                    styles::tab_active
+                } else {
+                    styles::tab_inactive
+                })
+                .on_press(Message::ToggleSettingsSyncEnabled)
+                .padding([4, 12]),
+            ]
+            .align_y(iced::Alignment::Center),
+            row![
+                text("Fingerprint").size(12).color(colors::TEXT_SECONDARY),
+                Space::new().width(Length::Fill),
+                text(
+                    self.settings_sync_fingerprint
+                        .as_deref()
+                        .unwrap_or("Enable sync to generate")
+                )
+                .size(10)
+                .color(colors::TEXT_MUTED),
+            ]
+            .align_y(iced::Alignment::Center),
+            self.view_setting_text(
+                "Peer name",
+                &self.settings_sync_name,
+                Message::SettingsSyncNameChanged
+            ),
+            self.view_setting_text(
+                "Port",
+                &self.settings_sync_port,
+                Message::SettingsSyncPortChanged
+            ),
+            self.view_setting_text(
+                "Port scan end",
+                &self.settings_sync_port_scan_end,
+                Message::SettingsSyncPortScanEndChanged
+            ),
+            self.view_setting_text(
+                "Digest limit",
+                &self.settings_sync_digest_limit,
+                Message::SettingsSyncDigestLimitChanged
+            ),
             Space::new().height(10),
             text("Theme").size(12).color(colors::TEXT_SECONDARY),
             self.view_setting_text(

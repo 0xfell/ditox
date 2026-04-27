@@ -3,14 +3,17 @@ use crate::entry::{Entry, EntryType};
 use crate::error::{DitoxError, Result};
 use crate::stats::{Stats, TopEntry};
 use crate::sync::{
-    AdvertisedPeer, BlobChunk, EntryDigest, EntryPayload, FormatBody, FormatPayload, Peer,
-    PeerTrustState, SyncDirection, SyncLogEntry, SyncRoundSummary, SyncStatus,
+    decode_sync_json, encode_sync_json, AdvertisedPeer, BlobChunk, DiscoveryBackend, EntryDigest,
+    EntryPayload, FormatBody, FormatPayload, LocalIdentity, NoiseSession, Peer, PeerTrustState,
+    SyncDirection, SyncLogEntry, SyncRequest, SyncResponse, SyncRoundSummary, SyncStatus,
+    BLOB_CHUNK_BYTES,
 };
 use crate::tag::Tag;
 use chrono::{DateTime, Duration, Utc};
 use directories::ProjectDirs;
 use rusqlite::{params, Connection, OptionalExtension};
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
@@ -232,6 +235,71 @@ fn image_extension_from_format(format_name: &str) -> String {
             .to_string(),
         _ => "png".to_string(),
     }
+}
+
+fn blob_body_from_data(blob_hash: String, total_bytes: u64, data: Vec<u8>) -> FormatBody {
+    let chunks: Vec<_> = data
+        .chunks(BLOB_CHUNK_BYTES)
+        .enumerate()
+        .map(|(index, chunk)| BlobChunk {
+            blob_hash: blob_hash.clone(),
+            total_bytes,
+            offset: (index * BLOB_CHUNK_BYTES) as u64,
+            data: chunk.to_vec(),
+            last: (index + 1) * BLOB_CHUNK_BYTES >= total_bytes as usize,
+        })
+        .collect();
+    if chunks.len() == 1 {
+        FormatBody::BlobChunk(chunks.into_iter().next().expect("one chunk exists"))
+    } else {
+        FormatBody::BlobChunks(chunks)
+    }
+}
+
+fn chunks_to_blob_bytes(chunks: &[BlobChunk]) -> Result<(String, u64, Vec<u8>)> {
+    let first = chunks
+        .first()
+        .ok_or_else(|| DitoxError::Other("sync blob payload has no chunks".into()))?;
+    let mut sorted = chunks.to_vec();
+    sorted.sort_by_key(|chunk| chunk.offset);
+    let mut data = Vec::with_capacity(first.total_bytes as usize);
+    let mut expected_offset = 0_u64;
+    for (index, chunk) in sorted.iter().enumerate() {
+        if chunk.blob_hash != first.blob_hash {
+            return Err(DitoxError::Other("sync blob chunks mix hashes".into()));
+        }
+        if chunk.total_bytes != first.total_bytes {
+            return Err(DitoxError::Other("sync blob chunks mix total sizes".into()));
+        }
+        if chunk.offset != expected_offset {
+            return Err(DitoxError::Other(format!(
+                "sync blob chunk offset mismatch: expected {}, got {}",
+                expected_offset, chunk.offset
+            )));
+        }
+        expected_offset += chunk.data.len() as u64;
+        let is_last = index + 1 == sorted.len();
+        if chunk.last != is_last {
+            return Err(DitoxError::Other(
+                "sync blob chunk last flag mismatch".into(),
+            ));
+        }
+        data.extend_from_slice(&chunk.data);
+    }
+    if data.len() as u64 != first.total_bytes {
+        return Err(DitoxError::Other(format!(
+            "sync blob size mismatch: expected {}, got {}",
+            first.total_bytes,
+            data.len()
+        )));
+    }
+    let actual_hash = Entry::compute_hash(&data);
+    if actual_hash != first.blob_hash {
+        return Err(DitoxError::Other(
+            "sync blob hash verification failed".into(),
+        ));
+    }
+    Ok((first.blob_hash.clone(), first.total_bytes, data))
 }
 
 /// Canonical `entries.canonical_format` value for a single-format
@@ -2173,6 +2241,17 @@ impl Database {
             Some(entry) => entry,
             None => return Ok(None),
         };
+        let collection = match entry.collection_id.as_deref() {
+            Some(id) => self
+                .get_collection_by_id(id)?
+                .map(|collection| collection.name),
+            None => None,
+        };
+        let tags = self
+            .get_tags_for_entry(entry_id)?
+            .into_iter()
+            .map(|tag| tag.name)
+            .collect();
         let mut stmt = self.conn.prepare(
             "SELECT format_name, storage, content, blob_hash, blob_ext, byte_size, format_hash
              FROM entry_formats
@@ -2206,13 +2285,7 @@ impl Database {
                     })?;
                     let path = Self::image_path(&hash, &ext)?;
                     let data = std::fs::read(path)?;
-                    FormatBody::BlobChunk(BlobChunk {
-                        blob_hash: hash,
-                        total_bytes: byte_size as u64,
-                        offset: 0,
-                        data,
-                        last: true,
-                    })
+                    blob_body_from_data(hash, byte_size as u64, data)
                 }
                 other => {
                     return Err(DitoxError::Other(format!(
@@ -2235,6 +2308,9 @@ impl Database {
             created_at: entry.created_at.to_rfc3339(),
             last_used: entry.last_used.to_rfc3339(),
             pinned: entry.favorite,
+            notes: entry.notes,
+            collection,
+            tags,
             formats,
         }))
     }
@@ -2254,13 +2330,18 @@ impl Database {
             .map_err(|e| DitoxError::Other(format!("invalid payload last_used: {e}")))?
             .with_timezone(&Utc);
 
+        let collection_id = match payload.collection.as_deref() {
+            Some(name) => Some(self.get_or_create_collection_by_name(name)?.id),
+            None => None,
+        };
+
         let mut entry = match payload.entry_type.as_str() {
             "text" => {
                 let content = match &canonical.body {
                     FormatBody::Inline(bytes) => String::from_utf8(bytes.clone()).map_err(|e| {
                         DitoxError::Other(format!("invalid text payload utf-8: {e}"))
                     })?,
-                    FormatBody::BlobChunk(_) => {
+                    FormatBody::BlobChunk(_) | FormatBody::BlobChunks(_) => {
                         return Err(DitoxError::Other(
                             "text payload canonical format must be inline".into(),
                         ))
@@ -2269,8 +2350,11 @@ impl Database {
                 Entry::new_text(content)
             }
             "image" => {
-                let chunk = match &canonical.body {
-                    FormatBody::BlobChunk(chunk) => chunk,
+                let (blob_hash, total_bytes, data) = match &canonical.body {
+                    FormatBody::BlobChunk(chunk) => {
+                        chunks_to_blob_bytes(std::slice::from_ref(chunk))?
+                    }
+                    FormatBody::BlobChunks(chunks) => chunks_to_blob_bytes(chunks)?,
                     FormatBody::Inline(_) => {
                         return Err(DitoxError::Other(
                             "image payload canonical format must be blob_file".into(),
@@ -2278,8 +2362,8 @@ impl Database {
                     }
                 };
                 let ext = image_extension_from_format(&canonical.format_name);
-                Self::store_image_blob(&chunk.blob_hash, &ext, &chunk.data)?;
-                Entry::new_image(chunk.blob_hash.clone(), chunk.total_bytes as usize, ext)
+                Self::store_image_blob(&blob_hash, &ext, &data)?;
+                Entry::new_image(blob_hash, total_bytes as usize, ext)
             }
             other => {
                 return Err(DitoxError::Other(format!(
@@ -2294,19 +2378,30 @@ impl Database {
         entry.created_at = created_at;
         entry.last_used = last_used;
         entry.favorite = payload.pinned;
+        entry.notes = payload.notes.clone();
+        entry.collection_id = collection_id;
 
         let extras: Vec<ExtraFormat> = payload
             .formats
             .iter()
             .skip(1)
             .map(|format| match &format.body {
-                FormatBody::Inline(bytes) => ExtraFormat::new(&format.format_name, bytes.clone()),
+                FormatBody::Inline(bytes) => {
+                    Ok(ExtraFormat::new(&format.format_name, bytes.clone()))
+                }
                 FormatBody::BlobChunk(chunk) => {
-                    ExtraFormat::new(&format.format_name, chunk.data.clone())
+                    Ok(ExtraFormat::new(&format.format_name, chunk.data.clone()))
+                }
+                FormatBody::BlobChunks(chunks) => {
+                    let (_, _, data) = chunks_to_blob_bytes(chunks)?;
+                    Ok(ExtraFormat::new(&format.format_name, data))
                 }
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         self.insert_multi(&entry, &extras)?;
+        for tag_name in &payload.tags {
+            self.add_tag_to_entry_by_name(&entry.id, tag_name, None)?;
+        }
         Ok(true)
     }
 
@@ -2330,6 +2425,155 @@ impl Database {
                     }
                 }
                 None => summary.skipped_entries += 1,
+            }
+        }
+
+        Ok(summary)
+    }
+
+    pub fn handle_sync_request(&self, request: SyncRequest) -> Result<SyncResponse> {
+        match request {
+            SyncRequest::ListDigests { limit, since } => Ok(SyncResponse::Digests {
+                entries: self.entry_digests(limit, since.as_deref())?,
+            }),
+            SyncRequest::GetEntry { id } => Ok(SyncResponse::Entry {
+                entry: self.entry_payload(&id)?.map(Box::new),
+            }),
+        }
+    }
+
+    pub fn handle_sync_message(&self, payload: &[u8]) -> Result<Vec<u8>> {
+        let request: SyncRequest = decode_sync_json(payload)?;
+        encode_sync_json(&self.handle_sync_request(request)?)
+    }
+
+    pub fn serve_one_sync_message(
+        &self,
+        session: &mut NoiseSession,
+        stream: &mut (impl Read + Write),
+    ) -> Result<()> {
+        let request = session.read_message(stream)?;
+        let response = self.handle_sync_message(&request)?;
+        session.write_message(stream, &response)
+    }
+
+    pub fn authenticate_sync_initiator(
+        &self,
+        session: &mut NoiseSession,
+        stream: &mut (impl Read + Write),
+        identity: &LocalIdentity,
+    ) -> Result<Peer> {
+        let remote = session.authenticate_initiator(stream, identity)?;
+        self.require_pinned_peer(&remote.public_key)
+    }
+
+    pub fn authenticate_sync_responder(
+        &self,
+        session: &mut NoiseSession,
+        stream: &mut (impl Read + Write),
+        identity: &LocalIdentity,
+    ) -> Result<Peer> {
+        let remote = session.authenticate_responder(stream, identity)?;
+        self.require_pinned_peer(&remote.public_key)
+    }
+
+    pub fn serve_trusted_sync_connection(
+        &self,
+        stream: &mut (impl Read + Write),
+        identity: &LocalIdentity,
+        max_messages: usize,
+    ) -> Result<Peer> {
+        let mut session = NoiseSession::responder(stream, identity)?;
+        let peer = self.authenticate_sync_responder(&mut session, stream, identity)?;
+        for _ in 0..max_messages {
+            match self.serve_one_sync_message(&mut session, stream) {
+                Ok(()) => {}
+                Err(DitoxError::Io(error))
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::UnexpectedEof
+                            | std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::BrokenPipe
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.mark_peer_synced(&peer.id)?;
+        Ok(peer)
+    }
+
+    pub fn pull_from_trusted_address(
+        &self,
+        address: impl ToSocketAddrs,
+        identity: &LocalIdentity,
+        limit: usize,
+    ) -> Result<SyncRoundSummary> {
+        let mut stream = TcpStream::connect(address)?;
+        let mut session = NoiseSession::initiator(&mut stream, identity)?;
+        let peer = self.authenticate_sync_initiator(&mut session, &mut stream, identity)?;
+        let summary = self.pull_from_sync_session(&mut session, &mut stream, limit)?;
+        self.mark_peer_synced(&peer.id)?;
+        Ok(summary)
+    }
+
+    pub fn pull_from_sync_session(
+        &self,
+        session: &mut NoiseSession,
+        stream: &mut (impl Read + Write),
+        limit: usize,
+    ) -> Result<SyncRoundSummary> {
+        let request = encode_sync_json(&SyncRequest::ListDigests { limit, since: None })?;
+        session.write_message(stream, &request)?;
+        let response: SyncResponse = decode_sync_json(&session.read_message(stream)?)?;
+        let remote_digests = match response {
+            SyncResponse::Digests { entries } => entries,
+            SyncResponse::Error { message } => {
+                return Err(DitoxError::Other(format!(
+                    "sync peer returned error: {message}"
+                )))
+            }
+            SyncResponse::Entry { .. } => {
+                return Err(DitoxError::Other(
+                    "sync peer returned entry when digests were requested".into(),
+                ))
+            }
+        };
+        let missing_ids = self.missing_entry_ids_from_digests(&remote_digests)?;
+        let mut summary = SyncRoundSummary {
+            remote_digests: remote_digests.len(),
+            requested_entries: missing_ids.len(),
+            imported_entries: 0,
+            skipped_entries: 0,
+        };
+
+        for id in missing_ids {
+            let request = encode_sync_json(&SyncRequest::GetEntry { id })?;
+            session.write_message(stream, &request)?;
+            let response: SyncResponse = decode_sync_json(&session.read_message(stream)?)?;
+            match response {
+                SyncResponse::Entry {
+                    entry: Some(payload),
+                } => {
+                    if self.insert_entry_payload(&payload)? {
+                        summary.imported_entries += 1;
+                    } else {
+                        summary.skipped_entries += 1;
+                    }
+                }
+                SyncResponse::Entry { entry: None } => summary.skipped_entries += 1,
+                SyncResponse::Error { message } => {
+                    return Err(DitoxError::Other(format!(
+                        "sync peer returned error: {message}"
+                    )))
+                }
+                SyncResponse::Digests { .. } => {
+                    return Err(DitoxError::Other(
+                        "sync peer returned digests when entry was requested".into(),
+                    ))
+                }
             }
         }
 
@@ -2378,6 +2622,15 @@ impl Database {
         )
     }
 
+    pub fn ingest_discovered_peers(&self, discovery: &impl DiscoveryBackend) -> Result<Vec<Peer>> {
+        let advertised = discovery.discover()?;
+        let mut peers = Vec::with_capacity(advertised.len());
+        for peer in advertised {
+            peers.push(self.upsert_advertised_peer(&peer)?);
+        }
+        Ok(peers)
+    }
+
     pub fn list_peers(&self) -> Result<Vec<Peer>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, public_key, fingerprint, trust_state, auto_send,
@@ -2405,6 +2658,22 @@ impl Database {
             .map_err(DitoxError::from)
     }
 
+    pub fn get_peer(&self, target: &str) -> Result<Option<Peer>> {
+        self.conn
+            .query_row(
+                "SELECT id, name, public_key, fingerprint, trust_state, auto_send,
+                        last_seen, last_sync, addresses, created_at
+                 FROM peers
+                 WHERE id = ?1 OR fingerprint = ?1 OR fingerprint LIKE ?2
+                 ORDER BY CASE WHEN id = ?1 OR fingerprint = ?1 THEN 0 ELSE 1 END
+                 LIMIT 1",
+                params![target, format!("{target}%")],
+                Self::row_to_peer,
+            )
+            .optional()
+            .map_err(DitoxError::from)
+    }
+
     pub fn set_peer_trust_state(&self, peer_id: &str, trust_state: PeerTrustState) -> Result<bool> {
         let rows = self.conn.execute(
             "UPDATE peers SET trust_state = ?1 WHERE id = ?2",
@@ -2419,6 +2688,23 @@ impl Database {
             params![if auto_send { 1_i64 } else { 0_i64 }, peer_id],
         )?;
         Ok(rows > 0)
+    }
+
+    pub fn require_pinned_peer(&self, public_key: &[u8; 32]) -> Result<Peer> {
+        let peer = self
+            .get_peer_by_public_key(public_key)?
+            .ok_or_else(|| DitoxError::Other("sync peer is not known or trusted".into()))?;
+        match peer.trust_state {
+            PeerTrustState::Pinned => Ok(peer),
+            PeerTrustState::Untrusted => Err(DitoxError::Other(format!(
+                "sync peer {} is not trusted",
+                peer.fingerprint
+            ))),
+            PeerTrustState::Rejected => Err(DitoxError::Other(format!(
+                "sync peer {} is rejected",
+                peer.fingerprint
+            ))),
+        }
     }
 
     pub fn mark_peer_synced(&self, peer_id: &str) -> Result<bool> {
@@ -2698,6 +2984,15 @@ impl Database {
 
         let collection = stmt.query_row([name], Self::row_to_collection).optional()?;
 
+        Ok(collection)
+    }
+
+    pub fn get_or_create_collection_by_name(&self, name: &str) -> Result<Collection> {
+        if let Some(collection) = self.get_collection_by_name(name)? {
+            return Ok(collection);
+        }
+        let collection = Collection::new(name.to_string());
+        self.create_collection(&collection)?;
         Ok(collection)
     }
 

@@ -28,6 +28,7 @@ ed25519-dalek.workspace = true
 rand_core.workspace = true
 mdns-sd.workspace = true
 snow.workspace = true
+x25519-dalek.workspace = true
 
 # Search
 nucleo-matcher.workspace = true

@@ -27,6 +27,7 @@ pub mod scripting;
 pub mod search;
 pub mod stats;
 pub mod sync;
+pub mod sync_runtime;
 pub mod tag;
 pub mod transforms;
 pub mod url_template;

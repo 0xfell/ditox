@@ -1,13 +1,15 @@
 use crate::error::{DitoxError, Result};
 use base64::Engine;
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand_core::OsRng;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::net::ToSocketAddrs;
+use std::io::{Read, Write};
+use std::net::{TcpListener, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const SERVICE_TYPE: &str = "_ditox._tcp.local.";
@@ -15,8 +17,12 @@ pub const NOISE_PATTERN: &str = "Noise_XX_25519_ChaChaPoly_SHA256";
 pub const DEFAULT_PORT: u16 = 9001;
 pub const MAX_PORT: u16 = 9100;
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_NOISE_MESSAGE_BYTES: usize = 65_535;
+pub const MAX_NOISE_PLAINTEXT_BYTES: usize = MAX_NOISE_MESSAGE_BYTES - 16;
+pub const IDENTITY_PROOF_DOMAIN: &[u8] = b"ditox-sync-identity-proof-v1";
+pub const BLOB_CHUNK_BYTES: usize = 64 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryDigest {
     pub id: String,
     pub entry_hash: String,
@@ -24,7 +30,7 @@ pub struct EntryDigest {
     pub pinned: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryPayload {
     pub id: String,
     pub entry_hash: String,
@@ -33,24 +39,31 @@ pub struct EntryPayload {
     pub created_at: String,
     pub last_used: String,
     pub pinned: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub formats: Vec<FormatPayload>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FormatPayload {
     pub format_name: String,
     pub format_hash: String,
     pub body: FormatBody,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FormatBody {
     Inline(Vec<u8>),
     BlobChunk(BlobChunk),
+    BlobChunks(Vec<BlobChunk>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlobChunk {
     pub blob_hash: String,
     pub total_bytes: u64,
@@ -59,7 +72,7 @@ pub struct BlobChunk {
     pub last: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SyncRoundSummary {
     pub remote_digests: usize,
     pub requested_entries: usize,
@@ -105,6 +118,83 @@ pub fn decode_frame(frame: &[u8]) -> Result<&[u8]> {
         )));
     }
     Ok(&frame[4..])
+}
+
+pub fn write_sync_frame(writer: &mut impl Write, payload: &[u8]) -> Result<()> {
+    let frame = encode_frame(payload)?;
+    writer.write_all(&frame)?;
+    Ok(())
+}
+
+pub fn read_sync_frame(reader: &mut impl Read) -> Result<Vec<u8>> {
+    let mut prefix = [0_u8; 4];
+    reader.read_exact(&mut prefix)?;
+    let len = u32::from_be_bytes(prefix) as usize;
+    if len > MAX_FRAME_BYTES {
+        return Err(DitoxError::Other(format!(
+            "sync frame too large: {len} bytes"
+        )));
+    }
+    let mut payload = vec![0_u8; len];
+    reader.read_exact(&mut payload)?;
+    Ok(payload)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SyncRequest {
+    ListDigests { limit: usize, since: Option<String> },
+    GetEntry { id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SyncResponse {
+    Digests { entries: Vec<EntryDigest> },
+    Entry { entry: Option<Box<EntryPayload>> },
+    Error { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdentityProof {
+    pub protocol_version: u32,
+    pub public_key: [u8; 32],
+    pub fingerprint: String,
+    pub noise_static_public_key: [u8; 32],
+    pub signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedPeerIdentity {
+    pub public_key: [u8; 32],
+    pub fingerprint: String,
+    pub noise_static_public_key: [u8; 32],
+}
+
+pub fn encode_sync_json<T: Serialize>(message: &T) -> Result<Vec<u8>> {
+    serde_json::to_vec(message)
+        .map_err(|e| DitoxError::Other(format!("failed to encode sync message: {e}")))
+}
+
+pub fn decode_sync_json<T: for<'de> Deserialize<'de>>(payload: &[u8]) -> Result<T> {
+    serde_json::from_slice(payload)
+        .map_err(|e| DitoxError::Other(format!("failed to decode sync message: {e}")))
+}
+
+pub fn bind_sync_tcp_listener(ports: impl IntoIterator<Item = u16>) -> Result<TcpListener> {
+    let mut last_error = None;
+    for port in ports {
+        match TcpListener::bind(("0.0.0.0", port)) {
+            Ok(listener) => return Ok(listener),
+            Err(error) => last_error = Some((port, error)),
+        }
+    }
+    match last_error {
+        Some((port, error)) => Err(DitoxError::Other(format!(
+            "failed to bind sync TCP listener through port {port}: {error}"
+        ))),
+        None => Err(DitoxError::Other("sync TCP port range is empty".into())),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -359,6 +449,202 @@ impl NoiseConfig {
     }
 }
 
+pub struct NoiseSession {
+    state: snow::TransportState,
+}
+
+impl NoiseSession {
+    pub fn initiator(stream: &mut (impl Read + Write), identity: &LocalIdentity) -> Result<Self> {
+        let config = NoiseConfig::new()?;
+        let static_key = noise_static_key(identity);
+        let mut handshake = config
+            .builder()
+            .local_private_key(&static_key)
+            .map_err(|e| DitoxError::Other(format!("invalid Noise static key: {e}")))?
+            .build_initiator()
+            .map_err(|e| DitoxError::Other(format!("failed to build Noise initiator: {e}")))?;
+        let mut out = vec![0_u8; MAX_NOISE_MESSAGE_BYTES];
+        let len = handshake
+            .write_message(&[], &mut out)
+            .map_err(|e| DitoxError::Other(format!("failed to write Noise handshake: {e}")))?;
+        write_sync_frame(stream, &out[..len])?;
+
+        let msg = read_sync_frame(stream)?;
+        let mut buf = vec![0_u8; MAX_NOISE_MESSAGE_BYTES];
+        handshake
+            .read_message(&msg, &mut buf)
+            .map_err(|e| DitoxError::Other(format!("failed to read Noise handshake: {e}")))?;
+
+        let len = handshake
+            .write_message(&[], &mut out)
+            .map_err(|e| DitoxError::Other(format!("failed to write Noise handshake: {e}")))?;
+        write_sync_frame(stream, &out[..len])?;
+        let state = handshake
+            .into_transport_mode()
+            .map_err(|e| DitoxError::Other(format!("failed to enter Noise transport mode: {e}")))?;
+        Ok(Self { state })
+    }
+
+    pub fn responder(stream: &mut (impl Read + Write), identity: &LocalIdentity) -> Result<Self> {
+        let config = NoiseConfig::new()?;
+        let static_key = noise_static_key(identity);
+        let mut handshake = config
+            .builder()
+            .local_private_key(&static_key)
+            .map_err(|e| DitoxError::Other(format!("invalid Noise static key: {e}")))?
+            .build_responder()
+            .map_err(|e| DitoxError::Other(format!("failed to build Noise responder: {e}")))?;
+        let mut buf = vec![0_u8; MAX_NOISE_MESSAGE_BYTES];
+
+        let msg = read_sync_frame(stream)?;
+        handshake
+            .read_message(&msg, &mut buf)
+            .map_err(|e| DitoxError::Other(format!("failed to read Noise handshake: {e}")))?;
+
+        let mut out = vec![0_u8; MAX_NOISE_MESSAGE_BYTES];
+        let len = handshake
+            .write_message(&[], &mut out)
+            .map_err(|e| DitoxError::Other(format!("failed to write Noise handshake: {e}")))?;
+        write_sync_frame(stream, &out[..len])?;
+
+        let msg = read_sync_frame(stream)?;
+        handshake
+            .read_message(&msg, &mut buf)
+            .map_err(|e| DitoxError::Other(format!("failed to read Noise handshake: {e}")))?;
+        let state = handshake
+            .into_transport_mode()
+            .map_err(|e| DitoxError::Other(format!("failed to enter Noise transport mode: {e}")))?;
+        Ok(Self { state })
+    }
+
+    pub fn write_message(&mut self, writer: &mut impl Write, plaintext: &[u8]) -> Result<()> {
+        if plaintext.len() > MAX_NOISE_PLAINTEXT_BYTES {
+            return Err(DitoxError::Other(format!(
+                "Noise plaintext too large: {} bytes",
+                plaintext.len()
+            )));
+        }
+        let mut out = vec![0_u8; plaintext.len() + 16];
+        let len = self
+            .state
+            .write_message(plaintext, &mut out)
+            .map_err(|e| DitoxError::Other(format!("failed to encrypt sync message: {e}")))?;
+        write_sync_frame(writer, &out[..len])
+    }
+
+    pub fn read_message(&mut self, reader: &mut impl Read) -> Result<Vec<u8>> {
+        let ciphertext = read_sync_frame(reader)?;
+        if ciphertext.len() > MAX_NOISE_MESSAGE_BYTES {
+            return Err(DitoxError::Other(format!(
+                "Noise message too large: {} bytes",
+                ciphertext.len()
+            )));
+        }
+        let mut out = vec![0_u8; ciphertext.len()];
+        let len = self
+            .state
+            .read_message(&ciphertext, &mut out)
+            .map_err(|e| DitoxError::Other(format!("failed to decrypt sync message: {e}")))?;
+        out.truncate(len);
+        Ok(out)
+    }
+
+    pub fn remote_static_public_key(&self) -> Result<[u8; 32]> {
+        let remote = self
+            .state
+            .get_remote_static()
+            .ok_or_else(|| DitoxError::Other("Noise peer did not present a static key".into()))?;
+        remote
+            .try_into()
+            .map_err(|_| DitoxError::Other("Noise peer static key must be 32 bytes".into()))
+    }
+
+    pub fn authenticate_initiator(
+        &mut self,
+        stream: &mut (impl Read + Write),
+        identity: &LocalIdentity,
+    ) -> Result<VerifiedPeerIdentity> {
+        let proof = identity.identity_proof()?;
+        self.write_message(stream, &encode_sync_json(&proof)?)?;
+        let remote: IdentityProof = decode_sync_json(&self.read_message(stream)?)?;
+        remote.verify(self.remote_static_public_key()?)
+    }
+
+    pub fn authenticate_responder(
+        &mut self,
+        stream: &mut (impl Read + Write),
+        identity: &LocalIdentity,
+    ) -> Result<VerifiedPeerIdentity> {
+        let remote: IdentityProof = decode_sync_json(&self.read_message(stream)?)?;
+        let verified = remote.verify(self.remote_static_public_key()?)?;
+        let proof = identity.identity_proof()?;
+        self.write_message(stream, &encode_sync_json(&proof)?)?;
+        Ok(verified)
+    }
+}
+
+pub fn noise_static_key(identity: &LocalIdentity) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"ditox-sync-noise-static-v1");
+    hasher.update(identity.private_key());
+    hasher.finalize().into()
+}
+
+pub fn noise_static_public_key(identity: &LocalIdentity) -> [u8; 32] {
+    let secret = X25519StaticSecret::from(noise_static_key(identity));
+    X25519PublicKey::from(&secret).to_bytes()
+}
+
+fn identity_proof_payload(public_key: &[u8; 32], noise_static_public_key: &[u8; 32]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(IDENTITY_PROOF_DOMAIN.len() + 4 + 32 + 32);
+    payload.extend_from_slice(IDENTITY_PROOF_DOMAIN);
+    payload.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+    payload.extend_from_slice(public_key);
+    payload.extend_from_slice(noise_static_public_key);
+    payload
+}
+
+impl IdentityProof {
+    pub fn verify(&self, expected_noise_static: [u8; 32]) -> Result<VerifiedPeerIdentity> {
+        if self.protocol_version != PROTOCOL_VERSION {
+            return Err(DitoxError::Other(format!(
+                "unsupported sync identity proof version: {}",
+                self.protocol_version
+            )));
+        }
+        if self.noise_static_public_key != expected_noise_static {
+            return Err(DitoxError::Other(
+                "sync identity proof does not match Noise static key".into(),
+            ));
+        }
+        validate_public_key(&self.public_key)?;
+        let expected_fingerprint = public_key_fingerprint(&self.public_key);
+        if self.fingerprint != expected_fingerprint {
+            return Err(DitoxError::Other(
+                "sync identity proof fingerprint does not match public key".into(),
+            ));
+        }
+        let signature: [u8; 64] =
+            self.signature.as_slice().try_into().map_err(|_| {
+                DitoxError::Other("sync identity signature must be 64 bytes".into())
+            })?;
+        let signature = Signature::from_bytes(&signature);
+        let verifying_key = VerifyingKey::from_bytes(&self.public_key)
+            .map_err(|e| DitoxError::Other(format!("invalid sync identity public key: {e}")))?;
+        verifying_key
+            .verify(
+                &identity_proof_payload(&self.public_key, &self.noise_static_public_key),
+                &signature,
+            )
+            .map_err(|e| DitoxError::Other(format!("invalid sync identity signature: {e}")))?;
+        Ok(VerifiedPeerIdentity {
+            public_key: self.public_key,
+            fingerprint: self.fingerprint.clone(),
+            noise_static_public_key: self.noise_static_public_key,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalIdentity {
     signing_key: SigningKey,
@@ -385,6 +671,26 @@ impl LocalIdentity {
 
     pub fn public_key_base64(&self) -> String {
         base64::engine::general_purpose::STANDARD.encode(self.public_key())
+    }
+
+    pub fn identity_proof(&self) -> Result<IdentityProof> {
+        let public_key = self.public_key();
+        let noise_static_public_key = noise_static_public_key(self);
+        let signature = self
+            .signing_key
+            .sign(&identity_proof_payload(
+                &public_key,
+                &noise_static_public_key,
+            ))
+            .to_bytes()
+            .to_vec();
+        Ok(IdentityProof {
+            protocol_version: PROTOCOL_VERSION,
+            public_key,
+            fingerprint: public_key_fingerprint(&public_key),
+            noise_static_public_key,
+            signature,
+        })
     }
 
     pub fn load_or_generate(config_dir: impl AsRef<Path>) -> Result<Self> {
@@ -483,7 +789,7 @@ fn write_private_key(path: &Path, body: &str) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PeerTrustState {
     Untrusted,
@@ -512,7 +818,7 @@ impl PeerTrustState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Peer {
     pub id: String,
     pub name: String,
@@ -526,7 +832,7 @@ pub struct Peer {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SyncDirection {
     Send,
@@ -542,7 +848,7 @@ impl SyncDirection {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SyncStatus {
     Ok,
@@ -550,7 +856,7 @@ pub enum SyncStatus {
     Rejected,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncLogEntry {
     pub id: i64,
     pub peer_id: String,
@@ -575,6 +881,8 @@ impl SyncStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
 
     #[test]
     fn fingerprint_is_first_twelve_sha256_bytes_hex() {
@@ -642,6 +950,110 @@ mod tests {
         let mut frame = encode_frame(b"abc").unwrap();
         frame.push(b'd');
         assert!(decode_frame(&frame).is_err());
+    }
+
+    #[test]
+    fn stream_frame_io_round_trips_payload() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_sync_frame(&mut stream).unwrap()
+        });
+
+        let mut client = TcpStream::connect(addr).unwrap();
+        write_sync_frame(&mut client, b"hello over tcp").unwrap();
+
+        assert_eq!(handle.join().unwrap(), b"hello over tcp");
+    }
+
+    #[test]
+    fn tcp_listener_binding_scans_port_range() {
+        let occupied = TcpListener::bind("127.0.0.1:0").unwrap();
+        let occupied_port = occupied.local_addr().unwrap().port();
+        let listener = bind_sync_tcp_listener([occupied_port, 0]).unwrap();
+
+        assert_ne!(listener.local_addr().unwrap().port(), occupied_port);
+    }
+
+    #[test]
+    fn sync_json_messages_round_trip() {
+        let request = SyncRequest::ListDigests {
+            limit: 50,
+            since: Some("2026-04-27T00:00:00Z".to_string()),
+        };
+        let encoded = encode_sync_json(&request).unwrap();
+        let decoded: SyncRequest = decode_sync_json(&encoded).unwrap();
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn identity_proof_binds_ed25519_identity_to_noise_static_key() {
+        let identity = LocalIdentity::generate();
+        let proof = identity.identity_proof().unwrap();
+        let verified = proof.verify(noise_static_public_key(&identity)).unwrap();
+
+        assert_eq!(verified.public_key, identity.public_key());
+        assert_eq!(verified.fingerprint, identity.fingerprint());
+    }
+
+    #[test]
+    fn identity_proof_rejects_noise_static_mismatch() {
+        let identity = LocalIdentity::generate();
+        let other = LocalIdentity::generate();
+        let proof = identity.identity_proof().unwrap();
+
+        assert!(proof.verify(noise_static_public_key(&other)).is_err());
+    }
+
+    #[test]
+    fn noise_session_encrypts_messages_over_tcp() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let responder_identity = LocalIdentity::generate();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut session = NoiseSession::responder(&mut stream, &responder_identity).unwrap();
+            let msg = session.read_message(&mut stream).unwrap();
+            assert_eq!(msg, b"ping");
+            session.write_message(&mut stream, b"pong").unwrap();
+        });
+
+        let initiator_identity = LocalIdentity::generate();
+        let mut client = TcpStream::connect(addr).unwrap();
+        let mut session = NoiseSession::initiator(&mut client, &initiator_identity).unwrap();
+        session.write_message(&mut client, b"ping").unwrap();
+        let reply = session.read_message(&mut client).unwrap();
+
+        handle.join().unwrap();
+        assert_eq!(reply, b"pong");
+    }
+
+    #[test]
+    fn noise_session_authenticates_ed25519_identity_over_tcp() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let responder_identity = LocalIdentity::generate();
+        let responder_public = responder_identity.public_key();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut session = NoiseSession::responder(&mut stream, &responder_identity).unwrap();
+            session
+                .authenticate_responder(&mut stream, &responder_identity)
+                .unwrap()
+                .public_key
+        });
+
+        let initiator_identity = LocalIdentity::generate();
+        let initiator_public = initiator_identity.public_key();
+        let mut client = TcpStream::connect(addr).unwrap();
+        let mut session = NoiseSession::initiator(&mut client, &initiator_identity).unwrap();
+        let verified_responder = session
+            .authenticate_initiator(&mut client, &initiator_identity)
+            .unwrap();
+
+        assert_eq!(verified_responder.public_key, responder_public);
+        assert_eq!(handle.join().unwrap(), initiator_public);
     }
 
     #[test]

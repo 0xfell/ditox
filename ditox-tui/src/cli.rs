@@ -264,6 +264,63 @@ pub enum SyncCommands {
         json: bool,
     },
 
+    /// Poll mDNS-SD once and persist currently discovered peers.
+    Discover {
+        /// Milliseconds to wait for mDNS responses before reading results.
+        #[arg(long, default_value = "1500")]
+        wait_ms: u64,
+
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Pull recent clips from a trusted peer by id or fingerprint prefix.
+    Pull {
+        /// Peer id, full fingerprint, or fingerprint prefix.
+        peer: String,
+
+        /// Maximum remote digest entries to inspect.
+        #[arg(short, long)]
+        limit: Option<usize>,
+
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Pin/trust a peer by id or fingerprint prefix.
+    Trust {
+        /// Peer id, full fingerprint, or fingerprint prefix.
+        peer: String,
+    },
+
+    /// Reject a peer by id or fingerprint prefix.
+    Reject {
+        /// Peer id, full fingerprint, or fingerprint prefix.
+        peer: String,
+    },
+
+    /// Return a peer to the untrusted state.
+    Untrust {
+        /// Peer id, full fingerprint, or fingerprint prefix.
+        peer: String,
+    },
+
+    /// Toggle automatic sending to a trusted peer.
+    AutoSend {
+        /// Peer id, full fingerprint, or fingerprint prefix.
+        peer: String,
+
+        /// Enable automatic sending.
+        #[arg(long, conflicts_with = "off")]
+        on: bool,
+
+        /// Disable automatic sending.
+        #[arg(long, conflicts_with = "on")]
+        off: bool,
+    },
+
     /// Show recent sync activity.
     Log {
         /// Number of rows to show.

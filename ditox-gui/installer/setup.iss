@@ -54,6 +54,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "startupicon"; Description: "Run Ditox when Windows starts"; GroupDescription: "Startup:"
+Name: "firewallsync"; Description: "Allow Ditox LAN sync through Windows Firewall"; GroupDescription: "Network:"
 
 [Files]
 ; Main executable
@@ -75,6 +76,9 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilen
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Ditox"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startupicon
 
 [Run]
+; Optional Windows Firewall rule for Phase 6 LAN sync. Requires an elevated
+; install; if the user chose non-admin install this task may be skipped by Windows.
+Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Ditox LAN Sync"" dir=in action=allow program=""{app}\{#MyAppExeName}"" profile=private"; Flags: runhidden; Tasks: firewallsync
 ; Option to launch after install
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
