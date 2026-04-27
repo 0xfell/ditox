@@ -5,6 +5,7 @@ use rand_core::OsRng;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -91,8 +92,22 @@ impl AdvertisedPeer {
                 base64::engine::general_purpose::STANDARD
                     .encode(public_key_fingerprint_bytes(&self.public_key))
             ),
+            format!(
+                "pub={}",
+                base64::engine::general_purpose::STANDARD.encode(self.public_key)
+            ),
             format!("name={}", self.name),
         ]
+    }
+
+    fn txt_property_values(&self) -> (String, String, String, String) {
+        (
+            self.protocol_version.to_string(),
+            base64::engine::general_purpose::STANDARD
+                .encode(public_key_fingerprint_bytes(&self.public_key)),
+            base64::engine::general_purpose::STANDARD.encode(self.public_key),
+            self.name.clone(),
+        )
     }
 }
 
@@ -140,6 +155,164 @@ impl DiscoveryBackend for InMemoryDiscovery {
             .map_err(|_| DitoxError::Other("sync discovery lock poisoned".into()))?;
         peers.remove(fingerprint);
         Ok(())
+    }
+}
+
+pub struct MdnsDiscovery {
+    daemon: mdns_sd::ServiceDaemon,
+    receiver: Mutex<mdns_sd::Receiver<mdns_sd::ServiceEvent>>,
+    registered_fullnames: Mutex<HashMap<String, String>>,
+}
+
+impl MdnsDiscovery {
+    pub fn new() -> Result<Self> {
+        let daemon = mdns_sd::ServiceDaemon::new()
+            .map_err(|e| DitoxError::Other(format!("failed to start mDNS daemon: {e}")))?;
+        let receiver = daemon
+            .browse(SERVICE_TYPE)
+            .map_err(|e| DitoxError::Other(format!("failed to browse ditox mDNS: {e}")))?;
+        Ok(Self {
+            daemon,
+            receiver: Mutex::new(receiver),
+            registered_fullnames: Mutex::new(HashMap::new()),
+        })
+    }
+
+    fn peer_to_service_info(peer: &AdvertisedPeer) -> Result<mdns_sd::ServiceInfo> {
+        let socket_addr =
+            peer.address.to_socket_addrs()?.next().ok_or_else(|| {
+                DitoxError::Other(format!("invalid sync address: {}", peer.address))
+            })?;
+        let instance = format!("ditox-{}", &peer.fingerprint[..8]);
+        let host = format!("{instance}.local.");
+        let ip = socket_addr.ip().to_string();
+        let port = socket_addr.port();
+        let (version, key, public_key, name) = peer.txt_property_values();
+        let properties = [
+            ("version", version.as_str()),
+            ("key", key.as_str()),
+            ("pub", public_key.as_str()),
+            ("name", name.as_str()),
+        ];
+        mdns_sd::ServiceInfo::new(SERVICE_TYPE, &instance, &host, ip, port, &properties[..])
+            .map_err(|e| DitoxError::Other(format!("failed to create ditox mDNS service: {e}")))
+    }
+
+    fn resolved_to_peer(resolved: &mdns_sd::ResolvedService) -> Option<AdvertisedPeer> {
+        let version = resolved
+            .get_property_val_str("version")?
+            .parse::<u32>()
+            .ok()?;
+        if version != PROTOCOL_VERSION {
+            return None;
+        }
+        let public_key = base64::engine::general_purpose::STANDARD
+            .decode(resolved.get_property_val_str("pub")?)
+            .ok()?;
+        let public_key = validate_public_key(&public_key).ok()?;
+        let fingerprint = public_key_fingerprint(&public_key);
+        let advertised_fingerprint = resolved.get_property_val_str("key")?;
+        let expected_key = base64::engine::general_purpose::STANDARD
+            .encode(public_key_fingerprint_bytes(&public_key));
+        if advertised_fingerprint != expected_key {
+            return None;
+        }
+        let name = resolved
+            .get_property_val_str("name")
+            .unwrap_or_else(|| resolved.get_fullname())
+            .to_string();
+        let address = resolved
+            .get_addresses_v4()
+            .into_iter()
+            .next()
+            .map(|ip| format!("{}:{}", ip, resolved.get_port()))
+            .unwrap_or_else(|| format!("{}:{}", resolved.get_hostname(), resolved.get_port()));
+        Some(AdvertisedPeer {
+            name,
+            public_key,
+            fingerprint,
+            address,
+            protocol_version: version,
+        })
+    }
+
+    pub fn shutdown(&self) -> Result<()> {
+        self.daemon
+            .shutdown()
+            .map(|_| ())
+            .map_err(|e| DitoxError::Other(format!("failed to stop mDNS daemon: {e}")))
+    }
+}
+
+impl DiscoveryBackend for MdnsDiscovery {
+    fn advertise(&self, peer: AdvertisedPeer) -> Result<()> {
+        let service = Self::peer_to_service_info(&peer)?;
+        let fullname = service.get_fullname().to_string();
+        self.daemon
+            .register(service)
+            .map_err(|e| DitoxError::Other(format!("failed to register ditox mDNS: {e}")))?;
+        let mut registered = self
+            .registered_fullnames
+            .lock()
+            .map_err(|_| DitoxError::Other("mDNS registry lock poisoned".into()))?;
+        registered.insert(peer.fingerprint, fullname);
+        Ok(())
+    }
+
+    fn discover(&self) -> Result<Vec<AdvertisedPeer>> {
+        let receiver = self
+            .receiver
+            .lock()
+            .map_err(|_| DitoxError::Other("mDNS receiver lock poisoned".into()))?;
+        let mut peers = HashMap::new();
+        while let Ok(event) = receiver.try_recv() {
+            if let mdns_sd::ServiceEvent::ServiceResolved(resolved) = event {
+                if let Some(peer) = Self::resolved_to_peer(&resolved) {
+                    peers.insert(peer.fingerprint.clone(), peer);
+                }
+            }
+        }
+        let mut peers: Vec<_> = peers.into_values().collect();
+        peers.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
+        Ok(peers)
+    }
+
+    fn remove(&self, fingerprint: &str) -> Result<()> {
+        let fullname = {
+            let mut registered = self
+                .registered_fullnames
+                .lock()
+                .map_err(|_| DitoxError::Other("mDNS registry lock poisoned".into()))?;
+            registered.remove(fingerprint)
+        };
+        if let Some(fullname) = fullname {
+            self.daemon
+                .unregister(&fullname)
+                .map_err(|e| DitoxError::Other(format!("failed to unregister ditox mDNS: {e}")))?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NoiseConfig {
+    params: snow::params::NoiseParams,
+}
+
+impl NoiseConfig {
+    pub fn new() -> Result<Self> {
+        let params = NOISE_PATTERN
+            .parse::<snow::params::NoiseParams>()
+            .map_err(|e| DitoxError::Other(format!("invalid Noise pattern: {e}")))?;
+        Ok(Self { params })
+    }
+
+    pub fn params(&self) -> &snow::params::NoiseParams {
+        &self.params
+    }
+
+    pub fn builder(&self) -> snow::Builder<'_> {
+        snow::Builder::new(self.params.clone())
     }
 }
 
@@ -381,9 +554,19 @@ mod tests {
                     base64::engine::general_purpose::STANDARD
                         .encode(public_key_fingerprint_bytes(&key))
                 ),
+                format!(
+                    "pub={}",
+                    base64::engine::general_purpose::STANDARD.encode(key)
+                ),
                 "name=desk".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn noise_config_parses_expected_pattern() {
+        let config = NoiseConfig::new().unwrap();
+        let _builder = config.builder();
     }
 
     #[test]

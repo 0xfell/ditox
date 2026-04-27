@@ -296,3 +296,8 @@ support it.
 - Added `Database::missing_entry_ids_from_digests()` so pull sync can
   diff a remote manifest against local content-addressed hashes before
   issuing `EntryRequest`.
+- Added real `mdns-sd` backend behind `DiscoveryBackend`, keeping
+  `key=` as the specified fingerprint and adding `pub=` so discovered
+  peers can be stored before trust. Added `snow` Noise pattern parsing
+  scaffolding; the ed25519 identity pin and Noise static-key mapping
+  still need the transport implementation pass before sync is enabled.

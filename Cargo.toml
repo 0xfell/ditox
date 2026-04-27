@@ -35,6 +35,8 @@ rhai = { version = "1.23.6", default-features = false, features = ["std", "sync"
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 base64 = "0.22.1"
+mdns-sd = { version = "0.19.1", default-features = false }
+snow = "0.10.0"
 
 # Platform-specific
 wl-clipboard-rs = "0.9.3"
