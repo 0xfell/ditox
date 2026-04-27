@@ -1,6 +1,6 @@
 # Task: Phase 6 — LAN peer-to-peer sync (TOFU + Noise)
 
-> **Status:** planned
+> **Status:** in-progress
 > **Priority:** medium
 > **Phase:** 6 — LAN sync
 > **Created:** 2026-04-26
@@ -274,3 +274,17 @@ support it.
 
 ### 2026-04-26
 - Task file created (epic).
+
+### 2026-04-27
+- Started Phase 6 groundwork.
+- Added `[sync]` config (`enabled = false` default, port range, name,
+  digest limit).
+- Added `ditox_core::sync` identity/protocol primitives: ed25519 local
+  identity generation/persistence, public-key fingerprint helper, peer
+  trust/log models, protocol constants.
+- Bumped schema v6 → v7 with `peers` and `sync_log` tables plus indexes.
+- Added DB helpers for discovered-peer upsert, trust/auto-send updates,
+  last-sync marking, sync log append/list.
+- Added `ditox sync peers [--json]` and `ditox sync log [--json]`.
+- Added tests for config defaults/parsing, identity round-trip,
+  fingerprinting, v7 migration, and peer trust preservation.

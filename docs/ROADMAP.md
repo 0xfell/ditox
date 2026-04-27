@@ -9,9 +9,9 @@
 | Category | Count |
 |----------|-------|
 | Completed | 27 |
-| In Progress | 4 |
+| In Progress | 5 |
 | Planned (Phase 0 — Foundation) | 0 |
-| Planned (Phase 1-8 epics + carry-overs) | 7 |
+| Planned (Phase 1-8 epics + carry-overs) | 6 |
 
 ---
 
@@ -44,6 +44,7 @@ Internal UI design in [`notes/ui-replication.md`](notes/ui-replication.md).
 | [Windows installer & distribution](tasks/in-progress/004-windows-installer-distribution.md) | Inno Setup installer + code-signing (signing pending cert) |
 | [Windows 11 support](tasks/in-progress/010-windows-11-support.md) | Largely complete; CLI-test gaps remain |
 | [028 Hotkeys, IPC, Rhai scripting](tasks/in-progress/028-phase-5-hotkeys-ipc-scripting.md) | Schema v6 hotkeys, expanded IPC, `ditox save`, Rhai capture hooks |
+| [029 LAN peer-to-peer sync](tasks/in-progress/029-phase-6-lan-sync.md) | Schema v7 peers/sync log, ed25519 identity, sync config, CLI log/peer inspection |
 | [GUI improvements](tasks/in-progress/gui-improvements.md) | Pre-Phase-4 punch list; some items folded into Phase 4 |
 
 ---
@@ -58,7 +59,6 @@ _All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; rea
 
 | Task | Description | Schema |
 |------|-------------|--------|
-| [029 LAN peer-to-peer sync](tasks/planned/029-phase-6-lan-sync.md) | mDNS + ed25519 TOFU + Noise transport, content-addressed | v6 → v7 |
 | [030 Distribution & i18n](tasks/planned/030-phase-7-distribution-i18n.md) | Choco/Winget/AUR/Flatpak/MSIX, signing, 5 locales, crash reporting | none |
 | [031 macOS port](tasks/planned/031-phase-8-macos.md) | NSPasteboard, Accessibility flow, .app bundle, Cask, notarisation | none |
 | [032 Windows multi-format capture](tasks/planned/032-phase-1-windows-multi-format.md) | Spun out from 023 sub-task 1.4: `AddClipboardFormatListener` event-driven capture; needs Windows-side validation | none |

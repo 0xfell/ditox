@@ -95,6 +95,43 @@ pub struct Config {
     pub actions: crate::url_template::ActionsConfig,
     /// Phase 4 sub-task 4.4: GUI launcher behaviour.
     pub gui: GuiConfig,
+    /// Phase 6: opt-in LAN peer-to-peer sync. Disabled by default.
+    pub sync: SyncConfig,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
+pub struct SyncConfig {
+    /// Enables all sync network activity. Defaults off.
+    pub enabled: bool,
+    /// TCP port preference. If occupied, the sync runtime scans upward
+    /// through [`port_scan_end`](Self::port_scan_end).
+    pub port: u16,
+    /// Inclusive upper bound for sync port fallback scanning.
+    pub port_scan_end: u16,
+    /// User-visible LAN peer name advertised through mDNS-SD.
+    pub name: Option<String>,
+    /// Recent digest size used by pull-based sync rounds.
+    pub digest_limit: u32,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 9001,
+            port_scan_end: 9100,
+            name: None,
+            digest_limit: 100,
+        }
+    }
+}
+
+impl SyncConfig {
+    pub fn port_range(&self) -> std::ops::RangeInclusive<u16> {
+        let end = self.port_scan_end.max(self.port);
+        self.port..=end
+    }
 }
 
 /// Phase 4 sub-task 4.4 — GUI launcher behaviour.
@@ -1078,6 +1115,37 @@ mod paste_config_tests {
         let parsed: Config = toml::from_str(toml).unwrap();
         assert!(!parsed.paste.disabled);
         assert!(parsed.paste.keystrokes.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod sync_config_tests {
+    use super::*;
+
+    #[test]
+    fn default_sync_config_is_disabled_lan_port_range() {
+        let c = SyncConfig::default();
+        assert!(!c.enabled);
+        assert_eq!(c.port, 9001);
+        assert_eq!(c.port_scan_end, 9100);
+        assert_eq!(c.port_range(), 9001..=9100);
+    }
+
+    #[test]
+    fn sync_section_parses_from_toml() {
+        let toml = r#"
+            [sync]
+            enabled = true
+            port = 9050
+            port_scan_end = 9060
+            name = "workstation"
+            digest_limit = 250
+        "#;
+        let parsed: Config = toml::from_str(toml).unwrap();
+        assert!(parsed.sync.enabled);
+        assert_eq!(parsed.sync.port_range(), 9050..=9060);
+        assert_eq!(parsed.sync.name.as_deref(), Some("workstation"));
+        assert_eq!(parsed.sync.digest_limit, 250);
     }
 }
 

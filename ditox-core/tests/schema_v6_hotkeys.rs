@@ -14,7 +14,7 @@ fn schema_v6_adds_hotkey_columns_and_index() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(version, "6");
+    assert_eq!(version, "7");
 
     let mut columns = db
         .connection()

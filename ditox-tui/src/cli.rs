@@ -218,6 +218,10 @@ pub enum Commands {
     #[command(subcommand)]
     Collection(CollectionCommands),
 
+    /// Inspect LAN sync peers and activity log
+    #[command(subcommand)]
+    Sync(SyncCommands),
+
     /// Add a tag to an entry
     Tag {
         /// Entry index (1-based) or UUID
@@ -246,6 +250,27 @@ pub enum Commands {
         entry: Option<String>,
 
         /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SyncCommands {
+    /// List known LAN peers discovered or paired by sync.
+    Peers {
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show recent sync activity.
+    Log {
+        /// Number of rows to show.
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+
+        /// Output as JSON.
         #[arg(long)]
         json: bool,
     },

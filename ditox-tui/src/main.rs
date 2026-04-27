@@ -3,7 +3,7 @@ mod keybindings;
 mod ui;
 
 use clap::Parser;
-use cli::{Cli, CollectionCommands, Commands, RulesCommands};
+use cli::{Cli, CollectionCommands, Commands, RulesCommands, SyncCommands};
 use ditox_core::filter::{FilterAction, FilterRule, PatternKind};
 use ditox_core::logging;
 use ditox_core::{
@@ -109,9 +109,95 @@ fn run() -> Result<()> {
             }
         }
         Some(Commands::Collection(subcmd)) => cmd_collection(&db, subcmd),
+        Some(Commands::Sync(subcmd)) => cmd_sync(&db, subcmd),
         Some(Commands::Tag { entry, name, color }) => cmd_tag_add(&db, &entry, &name, color),
         Some(Commands::Untag { entry, tag }) => cmd_tag_remove(&db, &entry, &tag),
         Some(Commands::TagList { entry, json }) => cmd_tag_list(&db, entry.as_deref(), json),
+    }
+}
+
+fn cmd_sync(db: &Database, subcmd: SyncCommands) -> Result<()> {
+    match subcmd {
+        SyncCommands::Peers { json } => cmd_sync_peers(db, json),
+        SyncCommands::Log { limit, json } => cmd_sync_log(db, limit, json),
+    }
+}
+
+fn cmd_sync_peers(db: &Database, json: bool) -> Result<()> {
+    let peers = db.list_peers()?;
+    if json {
+        let out = serde_json::to_string_pretty(&peers)
+            .map_err(|e| DitoxError::Other(format!("JSON serialization error: {}", e)))?;
+        println!("{}", out);
+        return Ok(());
+    }
+
+    if peers.is_empty() {
+        println!("No sync peers known.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<10} {:<24} {:<10} {:<9} {:<20} ADDRESSES",
+        "STATE", "FINGERPRINT", "AUTO_SEND", "LAST_SEEN", "NAME"
+    );
+    let bar = "─".repeat(96);
+    println!("{}", bar);
+    for peer in peers {
+        println!(
+            "{:<10} {:<24} {:<10} {:<9} {:<20} {}",
+            peer.trust_state.as_str(),
+            peer.fingerprint,
+            if peer.auto_send { "yes" } else { "no" },
+            peer.last_seen.as_deref().unwrap_or("-"),
+            peer.name,
+            peer.addresses.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn cmd_sync_log(db: &Database, limit: usize, json: bool) -> Result<()> {
+    let rows = db.list_sync_log(limit)?;
+    if json {
+        let out = serde_json::to_string_pretty(&rows)
+            .map_err(|e| DitoxError::Other(format!("JSON serialization error: {}", e)))?;
+        println!("{}", out);
+        return Ok(());
+    }
+
+    if rows.is_empty() {
+        println!("No sync activity logged.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<25} {:<8} {:<8} {:<10} {:<12} MESSAGE",
+        "WHEN", "DIR", "STATUS", "BYTES", "PEER"
+    );
+    let bar = "─".repeat(96);
+    println!("{}", bar);
+    for row in rows {
+        println!(
+            "{:<25} {:<8} {:<8} {:<10} {:<12} {}",
+            row.occurred_at,
+            row.direction,
+            row.status,
+            row.bytes
+                .map(|bytes| bytes.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            short_id(&row.peer_id),
+            row.message.as_deref().unwrap_or("-")
+        );
+    }
+    Ok(())
+}
+
+fn short_id(id: &str) -> &str {
+    if id.len() > 8 {
+        &id[..8]
+    } else {
+        id
     }
 }
 

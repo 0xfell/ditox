@@ -2,6 +2,7 @@ use crate::collection::Collection;
 use crate::entry::{Entry, EntryType};
 use crate::error::{DitoxError, Result};
 use crate::stats::{Stats, TopEntry};
+use crate::sync::{Peer, PeerTrustState, SyncDirection, SyncLogEntry, SyncStatus};
 use crate::tag::Tag;
 use chrono::{DateTime, Duration, Utc};
 use directories::ProjectDirs;
@@ -23,7 +24,8 @@ use std::sync::RwLock;
 ///   pattern-based capture-time pipeline (drop / transform / tag).
 /// - 5: tags table + entry_tags many-to-many table (Phase 4b).
 /// - 6: per-clip global/local hotkey columns (Phase 5).
-pub const SCHEMA_VERSION: i64 = 6;
+/// - 7: LAN sync peers + sync log tables (Phase 6).
+pub const SCHEMA_VERSION: i64 = 7;
 
 /// Subdirectory inside `images/` that holds files quarantined by
 /// `ditox repair --fix-hashes` because their on-disk hash didn't match the
@@ -826,6 +828,12 @@ impl Database {
             self.write_schema_version(6)?;
         }
 
+        // Schema v7: LAN sync trust/pairing metadata and audit log.
+        if self.read_schema_version().unwrap_or(0) < 7 {
+            self.migrate_to_v7()?;
+            self.write_schema_version(7)?;
+        }
+
         // Startup reconciliation: drain any pending prunes left from a crash,
         // and sweep stale `.tmp` files from previous aborted writes. Cheap
         // (milliseconds) and self-healing on every open.
@@ -1220,6 +1228,48 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS idx_entries_global_hotkey
                  ON entries(global_hotkey)
                  WHERE global_hotkey IS NOT NULL;",
+        )?;
+
+        Ok(())
+    }
+
+    fn migrate_to_v7(&self) -> Result<()> {
+        tracing::info!("applying schema migration v6 -> v7 (LAN sync peers)");
+
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS peers (
+                id            TEXT PRIMARY KEY,
+                name          TEXT NOT NULL,
+                public_key    BLOB NOT NULL UNIQUE,
+                fingerprint   TEXT NOT NULL,
+                trust_state   TEXT NOT NULL CHECK (trust_state IN ('untrusted', 'pinned', 'rejected')),
+                auto_send     INTEGER NOT NULL DEFAULT 0,
+                last_seen     TEXT,
+                last_sync     TEXT,
+                addresses     TEXT NOT NULL,
+                created_at    TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_peers_fingerprint
+                ON peers(fingerprint);
+            CREATE INDEX IF NOT EXISTS idx_peers_trust_state
+                ON peers(trust_state);
+
+            CREATE TABLE IF NOT EXISTS sync_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                peer_id     TEXT NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
+                direction   TEXT NOT NULL CHECK (direction IN ('send', 'receive')),
+                entry_id    TEXT,
+                bytes       INTEGER,
+                status      TEXT NOT NULL CHECK (status IN ('ok', 'error', 'rejected')),
+                message     TEXT,
+                occurred_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_sync_log_peer_time
+                ON sync_log(peer_id, occurred_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_sync_log_entry
+                ON sync_log(entry_id);",
         )?;
 
         Ok(())
@@ -2067,6 +2117,164 @@ impl Database {
             .query_map([], Self::row_to_entry)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(entries)
+    }
+
+    pub fn upsert_discovered_peer(
+        &self,
+        name: &str,
+        public_key: &[u8; 32],
+        addresses: &[String],
+    ) -> Result<Peer> {
+        let fingerprint = crate::sync::public_key_fingerprint(public_key);
+        let now = Utc::now().to_rfc3339();
+        let addresses_json = serde_json::to_string(addresses)
+            .map_err(|e| DitoxError::Other(format!("failed to encode peer addresses: {e}")))?;
+
+        self.conn.execute(
+            "INSERT INTO peers
+               (id, name, public_key, fingerprint, trust_state, auto_send, last_seen, addresses, created_at)
+             VALUES (?1, ?2, ?3, ?4, 'untrusted', 0, ?5, ?6, ?5)
+             ON CONFLICT(public_key) DO UPDATE SET
+               name = excluded.name,
+               fingerprint = excluded.fingerprint,
+               last_seen = excluded.last_seen,
+               addresses = excluded.addresses",
+            params![
+                uuid::Uuid::new_v4().to_string(),
+                name,
+                public_key.as_slice(),
+                fingerprint,
+                now,
+                addresses_json
+            ],
+        )?;
+
+        self.get_peer_by_public_key(public_key)?
+            .ok_or_else(|| DitoxError::NotFound("inserted sync peer".into()))
+    }
+
+    pub fn list_peers(&self) -> Result<Vec<Peer>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, public_key, fingerprint, trust_state, auto_send,
+                    last_seen, last_sync, addresses, created_at
+             FROM peers
+             ORDER BY last_seen DESC, created_at DESC",
+        )?;
+        let peers = stmt
+            .query_map([], Self::row_to_peer)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(peers)
+    }
+
+    pub fn get_peer_by_public_key(&self, public_key: &[u8; 32]) -> Result<Option<Peer>> {
+        self.conn
+            .query_row(
+                "SELECT id, name, public_key, fingerprint, trust_state, auto_send,
+                        last_seen, last_sync, addresses, created_at
+                 FROM peers
+                 WHERE public_key = ?1",
+                params![public_key.as_slice()],
+                Self::row_to_peer,
+            )
+            .optional()
+            .map_err(DitoxError::from)
+    }
+
+    pub fn set_peer_trust_state(&self, peer_id: &str, trust_state: PeerTrustState) -> Result<bool> {
+        let rows = self.conn.execute(
+            "UPDATE peers SET trust_state = ?1 WHERE id = ?2",
+            params![trust_state.as_str(), peer_id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn set_peer_auto_send(&self, peer_id: &str, auto_send: bool) -> Result<bool> {
+        let rows = self.conn.execute(
+            "UPDATE peers SET auto_send = ?1 WHERE id = ?2",
+            params![if auto_send { 1_i64 } else { 0_i64 }, peer_id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn mark_peer_synced(&self, peer_id: &str) -> Result<bool> {
+        let rows = self.conn.execute(
+            "UPDATE peers SET last_sync = ?1 WHERE id = ?2",
+            params![Utc::now().to_rfc3339(), peer_id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn append_sync_log(
+        &self,
+        peer_id: &str,
+        direction: SyncDirection,
+        entry_id: Option<&str>,
+        bytes: Option<i64>,
+        status: SyncStatus,
+        message: Option<&str>,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO sync_log
+               (peer_id, direction, entry_id, bytes, status, message, occurred_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                peer_id,
+                direction.as_str(),
+                entry_id,
+                bytes,
+                status.as_str(),
+                message,
+                Utc::now().to_rfc3339()
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn list_sync_log(&self, limit: usize) -> Result<Vec<SyncLogEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, peer_id, direction, entry_id, bytes, status, message, occurred_at
+             FROM sync_log
+             ORDER BY occurred_at DESC, id DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![limit as i64], |row| {
+                Ok(SyncLogEntry {
+                    id: row.get(0)?,
+                    peer_id: row.get(1)?,
+                    direction: row.get(2)?,
+                    entry_id: row.get(3)?,
+                    bytes: row.get(4)?,
+                    status: row.get(5)?,
+                    message: row.get(6)?,
+                    occurred_at: row.get(7)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    fn row_to_peer(row: &rusqlite::Row<'_>) -> rusqlite::Result<Peer> {
+        let trust_state_raw: String = row.get(4)?;
+        let addresses_json: String = row.get(8)?;
+        let trust_state = PeerTrustState::parse(&trust_state_raw).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+        let addresses = serde_json::from_str(&addresses_json).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+        Ok(Peer {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            public_key: row.get(2)?,
+            fingerprint: row.get(3)?,
+            trust_state,
+            auto_send: row.get::<_, i64>(5)? != 0,
+            last_seen: row.get(6)?,
+            last_sync: row.get(7)?,
+            addresses,
+            created_at: row.get(9)?,
+        })
     }
 
     /// Get top entries by usage count (for quick snippets)
