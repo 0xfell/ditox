@@ -291,3 +291,5 @@ support it.
 - Added discovery groundwork: advertised-peer records, mDNS TXT record
   generation, a `DiscoveryBackend` trait, deterministic in-memory
   discovery for two-instance tests, and DB ingestion for advertised peers.
+- Added `proto/ditox-sync.proto`, length-prefixed frame helpers, and
+  `Database::entry_digests()` for pull-sync manifest exchange.

@@ -1,7 +1,7 @@
 use ditox_core::sync::{
     public_key_fingerprint, AdvertisedPeer, PeerTrustState, SyncDirection, SyncStatus,
 };
-use ditox_core::Database;
+use ditox_core::{Database, Entry};
 
 #[test]
 fn schema_v7_adds_peer_tables() {
@@ -43,6 +43,33 @@ fn advertised_peer_can_be_persisted_as_discovered_peer() {
     assert_eq!(peer.name, advertised.name);
     assert_eq!(peer.fingerprint, advertised.fingerprint);
     assert_eq!(peer.addresses, vec![advertised.address]);
+}
+
+#[test]
+fn entry_digests_are_recent_hash_manifests() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open_at(dir.path().join("ditox.db")).unwrap();
+    db.init_schema().unwrap();
+
+    let first = Entry::new_text("first".into());
+    let first_id = first.id.clone();
+    let second = Entry::new_text("second".into());
+    let second_hash = second.hash.clone();
+    db.insert(&first).unwrap();
+    db.insert(&second).unwrap();
+    db.toggle_favorite(&second.id).unwrap();
+
+    let since = db
+        .get_by_id(&first_id)
+        .unwrap()
+        .unwrap()
+        .created_at
+        .to_rfc3339();
+    let digests = db.entry_digests(10, Some(&since)).unwrap();
+
+    assert_eq!(digests.len(), 1);
+    assert_eq!(digests[0].entry_hash, second_hash);
+    assert!(digests[0].pinned);
 }
 
 #[test]

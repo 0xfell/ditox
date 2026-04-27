@@ -2,7 +2,9 @@ use crate::collection::Collection;
 use crate::entry::{Entry, EntryType};
 use crate::error::{DitoxError, Result};
 use crate::stats::{Stats, TopEntry};
-use crate::sync::{AdvertisedPeer, Peer, PeerTrustState, SyncDirection, SyncLogEntry, SyncStatus};
+use crate::sync::{
+    AdvertisedPeer, EntryDigest, Peer, PeerTrustState, SyncDirection, SyncLogEntry, SyncStatus,
+};
 use crate::tag::Tag;
 use chrono::{DateTime, Duration, Utc};
 use directories::ProjectDirs;
@@ -2117,6 +2119,31 @@ impl Database {
             .query_map([], Self::row_to_entry)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(entries)
+    }
+
+    pub fn entry_digests(
+        &self,
+        limit: usize,
+        since_iso8601: Option<&str>,
+    ) -> Result<Vec<EntryDigest>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, hash, COALESCE(last_used, created_at) AS updated_at, pinned
+             FROM entries
+             WHERE ?1 IS NULL OR COALESCE(last_used, created_at) > ?1
+             ORDER BY updated_at DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![since_iso8601, limit as i64], |row| {
+                Ok(EntryDigest {
+                    id: row.get(0)?,
+                    entry_hash: row.get(1)?,
+                    updated_at: row.get(2)?,
+                    pinned: row.get::<_, i64>(3)? != 0,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     pub fn upsert_discovered_peer(

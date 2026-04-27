@@ -13,6 +13,55 @@ pub const SERVICE_TYPE: &str = "_ditox._tcp.local.";
 pub const NOISE_PATTERN: &str = "Noise_XX_25519_ChaChaPoly_SHA256";
 pub const DEFAULT_PORT: u16 = 9001;
 pub const MAX_PORT: u16 = 9100;
+pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EntryDigest {
+    pub id: String,
+    pub entry_hash: String,
+    pub updated_at: String,
+    pub pinned: bool,
+}
+
+pub fn encode_frame(payload: &[u8]) -> Result<Vec<u8>> {
+    if payload.len() > MAX_FRAME_BYTES {
+        return Err(DitoxError::Other(format!(
+            "sync frame too large: {} bytes",
+            payload.len()
+        )));
+    }
+    let len = u32::try_from(payload.len())
+        .map_err(|_| DitoxError::Other("sync frame length exceeds u32".into()))?;
+    let mut frame = Vec::with_capacity(4 + payload.len());
+    frame.extend_from_slice(&len.to_be_bytes());
+    frame.extend_from_slice(payload);
+    Ok(frame)
+}
+
+pub fn decode_frame(frame: &[u8]) -> Result<&[u8]> {
+    if frame.len() < 4 {
+        return Err(DitoxError::Other(
+            "sync frame is missing length prefix".into(),
+        ));
+    }
+    let len = u32::from_be_bytes(
+        frame[..4]
+            .try_into()
+            .expect("slice with exactly four bytes"),
+    ) as usize;
+    if len > MAX_FRAME_BYTES {
+        return Err(DitoxError::Other(format!(
+            "sync frame too large: {len} bytes"
+        )));
+    }
+    if frame.len() - 4 != len {
+        return Err(DitoxError::Other(format!(
+            "sync frame length mismatch: prefix={len}, actual={}",
+            frame.len() - 4
+        )));
+    }
+    Ok(&frame[4..])
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AdvertisedPeer {
@@ -352,6 +401,21 @@ mod tests {
 
         discovery.remove(&second.fingerprint).unwrap();
         assert!(discovery.discover().unwrap().is_empty());
+    }
+
+    #[test]
+    fn frame_encoding_round_trips_payload() {
+        let payload = b"protobuf bytes";
+        let frame = encode_frame(payload).unwrap();
+        assert_eq!(&frame[..4], &(payload.len() as u32).to_be_bytes());
+        assert_eq!(decode_frame(&frame).unwrap(), payload);
+    }
+
+    #[test]
+    fn frame_decoder_rejects_length_mismatch() {
+        let mut frame = encode_frame(b"abc").unwrap();
+        frame.push(b'd');
+        assert!(decode_frame(&frame).is_err());
     }
 
     #[test]
