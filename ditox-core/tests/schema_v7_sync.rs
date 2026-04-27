@@ -1,4 +1,6 @@
-use ditox_core::sync::{public_key_fingerprint, PeerTrustState, SyncDirection, SyncStatus};
+use ditox_core::sync::{
+    public_key_fingerprint, AdvertisedPeer, PeerTrustState, SyncDirection, SyncStatus,
+};
 use ditox_core::Database;
 
 #[test]
@@ -27,6 +29,20 @@ fn schema_v7_adds_peer_tables() {
         .unwrap();
     assert_eq!(peers_count, 0);
     assert_eq!(log_count, 0);
+}
+
+#[test]
+fn advertised_peer_can_be_persisted_as_discovered_peer() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open_at(dir.path().join("ditox.db")).unwrap();
+    db.init_schema().unwrap();
+
+    let advertised = AdvertisedPeer::new("desk", [4u8; 32], "127.0.0.1:9001");
+    let peer = db.upsert_advertised_peer(&advertised).unwrap();
+
+    assert_eq!(peer.name, advertised.name);
+    assert_eq!(peer.fingerprint, advertised.fingerprint);
+    assert_eq!(peer.addresses, vec![advertised.address]);
 }
 
 #[test]

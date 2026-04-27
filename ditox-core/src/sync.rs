@@ -4,13 +4,95 @@ use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand_core::OsRng;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const SERVICE_TYPE: &str = "_ditox._tcp.local.";
 pub const NOISE_PATTERN: &str = "Noise_XX_25519_ChaChaPoly_SHA256";
 pub const DEFAULT_PORT: u16 = 9001;
 pub const MAX_PORT: u16 = 9100;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AdvertisedPeer {
+    pub name: String,
+    pub public_key: [u8; 32],
+    pub fingerprint: String,
+    pub address: String,
+    pub protocol_version: u32,
+}
+
+impl AdvertisedPeer {
+    pub fn new(name: impl Into<String>, public_key: [u8; 32], address: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            fingerprint: public_key_fingerprint(&public_key),
+            public_key,
+            address: address.into(),
+            protocol_version: PROTOCOL_VERSION,
+        }
+    }
+
+    pub fn txt_records(&self) -> Vec<String> {
+        vec![
+            format!("version={}", self.protocol_version),
+            format!(
+                "key={}",
+                base64::engine::general_purpose::STANDARD
+                    .encode(public_key_fingerprint_bytes(&self.public_key))
+            ),
+            format!("name={}", self.name),
+        ]
+    }
+}
+
+pub trait DiscoveryBackend: Send + Sync {
+    fn advertise(&self, peer: AdvertisedPeer) -> Result<()>;
+    fn discover(&self) -> Result<Vec<AdvertisedPeer>>;
+    fn remove(&self, fingerprint: &str) -> Result<()>;
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct InMemoryDiscovery {
+    peers: Arc<Mutex<HashMap<String, AdvertisedPeer>>>,
+}
+
+impl InMemoryDiscovery {
+    pub fn shared() -> Self {
+        Self::default()
+    }
+}
+
+impl DiscoveryBackend for InMemoryDiscovery {
+    fn advertise(&self, peer: AdvertisedPeer) -> Result<()> {
+        let mut peers = self
+            .peers
+            .lock()
+            .map_err(|_| DitoxError::Other("sync discovery lock poisoned".into()))?;
+        peers.insert(peer.fingerprint.clone(), peer);
+        Ok(())
+    }
+
+    fn discover(&self) -> Result<Vec<AdvertisedPeer>> {
+        let peers = self
+            .peers
+            .lock()
+            .map_err(|_| DitoxError::Other("sync discovery lock poisoned".into()))?;
+        let mut found: Vec<_> = peers.values().cloned().collect();
+        found.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
+        Ok(found)
+    }
+
+    fn remove(&self, fingerprint: &str) -> Result<()> {
+        let mut peers = self
+            .peers
+            .lock()
+            .map_err(|_| DitoxError::Other("sync discovery lock poisoned".into()))?;
+        peers.remove(fingerprint);
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalIdentity {
@@ -88,8 +170,14 @@ impl LocalIdentity {
 }
 
 pub fn public_key_fingerprint(public_key: &[u8; 32]) -> String {
+    hex::encode(public_key_fingerprint_bytes(public_key))
+}
+
+pub fn public_key_fingerprint_bytes(public_key: &[u8; 32]) -> [u8; 12] {
     let digest = Sha256::digest(public_key);
-    hex::encode(&digest[..12])
+    digest[..12]
+        .try_into()
+        .expect("SHA-256 digest prefix length is fixed")
 }
 
 pub fn validate_public_key(public_key: &[u8]) -> Result<[u8; 32]> {
@@ -228,6 +316,42 @@ mod tests {
         let key = [7u8; 32];
         let digest = Sha256::digest(key);
         assert_eq!(public_key_fingerprint(&key), hex::encode(&digest[..12]));
+    }
+
+    #[test]
+    fn advertised_peer_txt_records_match_mdns_contract() {
+        let key = [3u8; 32];
+        let peer = AdvertisedPeer::new("desk", key, "127.0.0.1:9001");
+        assert_eq!(peer.fingerprint, public_key_fingerprint(&key));
+        assert_eq!(
+            peer.txt_records(),
+            vec![
+                "version=1".to_string(),
+                format!(
+                    "key={}",
+                    base64::engine::general_purpose::STANDARD
+                        .encode(public_key_fingerprint_bytes(&key))
+                ),
+                "name=desk".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn in_memory_discovery_advertises_updates_and_removes() {
+        let discovery = InMemoryDiscovery::shared();
+        let key = [1u8; 32];
+        let first = AdvertisedPeer::new("one", key, "127.0.0.1:9001");
+        let second = AdvertisedPeer::new("two", key, "127.0.0.1:9002");
+
+        discovery.advertise(first.clone()).unwrap();
+        assert_eq!(discovery.discover().unwrap(), vec![first]);
+
+        discovery.advertise(second.clone()).unwrap();
+        assert_eq!(discovery.discover().unwrap(), vec![second.clone()]);
+
+        discovery.remove(&second.fingerprint).unwrap();
+        assert!(discovery.discover().unwrap().is_empty());
     }
 
     #[test]

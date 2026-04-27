@@ -288,3 +288,6 @@ support it.
 - Added `ditox sync peers [--json]` and `ditox sync log [--json]`.
 - Added tests for config defaults/parsing, identity round-trip,
   fingerprinting, v7 migration, and peer trust preservation.
+- Added discovery groundwork: advertised-peer records, mDNS TXT record
+  generation, a `DiscoveryBackend` trait, deterministic in-memory
+  discovery for two-instance tests, and DB ingestion for advertised peers.

@@ -2,7 +2,7 @@ use crate::collection::Collection;
 use crate::entry::{Entry, EntryType};
 use crate::error::{DitoxError, Result};
 use crate::stats::{Stats, TopEntry};
-use crate::sync::{Peer, PeerTrustState, SyncDirection, SyncLogEntry, SyncStatus};
+use crate::sync::{AdvertisedPeer, Peer, PeerTrustState, SyncDirection, SyncLogEntry, SyncStatus};
 use crate::tag::Tag;
 use chrono::{DateTime, Duration, Utc};
 use directories::ProjectDirs;
@@ -2151,6 +2151,14 @@ impl Database {
 
         self.get_peer_by_public_key(public_key)?
             .ok_or_else(|| DitoxError::NotFound("inserted sync peer".into()))
+    }
+
+    pub fn upsert_advertised_peer(&self, peer: &AdvertisedPeer) -> Result<Peer> {
+        self.upsert_discovered_peer(
+            &peer.name,
+            &peer.public_key,
+            std::slice::from_ref(&peer.address),
+        )
     }
 
     pub fn list_peers(&self) -> Result<Vec<Peer>> {
