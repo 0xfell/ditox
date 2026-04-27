@@ -4,7 +4,7 @@ use crate::error::{DitoxError, Result};
 use crate::stats::{Stats, TopEntry};
 use crate::sync::{
     AdvertisedPeer, BlobChunk, EntryDigest, EntryPayload, FormatBody, FormatPayload, Peer,
-    PeerTrustState, SyncDirection, SyncLogEntry, SyncStatus,
+    PeerTrustState, SyncDirection, SyncLogEntry, SyncRoundSummary, SyncStatus,
 };
 use crate::tag::Tag;
 use chrono::{DateTime, Duration, Utc};
@@ -2308,6 +2308,32 @@ impl Database {
             .collect();
         self.insert_multi(&entry, &extras)?;
         Ok(true)
+    }
+
+    pub fn pull_from_database(&self, remote: &Database, limit: usize) -> Result<SyncRoundSummary> {
+        let remote_digests = remote.entry_digests(limit, None)?;
+        let missing_ids = self.missing_entry_ids_from_digests(&remote_digests)?;
+        let mut summary = SyncRoundSummary {
+            remote_digests: remote_digests.len(),
+            requested_entries: missing_ids.len(),
+            imported_entries: 0,
+            skipped_entries: 0,
+        };
+
+        for id in missing_ids {
+            match remote.entry_payload(&id)? {
+                Some(payload) => {
+                    if self.insert_entry_payload(&payload)? {
+                        summary.imported_entries += 1;
+                    } else {
+                        summary.skipped_entries += 1;
+                    }
+                }
+                None => summary.skipped_entries += 1,
+            }
+        }
+
+        Ok(summary)
     }
 
     pub fn upsert_discovered_peer(

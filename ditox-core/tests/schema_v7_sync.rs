@@ -220,6 +220,61 @@ fn image_entry_payload_import_converges_second_database() {
 }
 
 #[test]
+fn pull_from_database_converges_one_hundred_text_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = Database::open_at(dir.path().join("source.db")).unwrap();
+    let dest = Database::open_at(dir.path().join("dest.db")).unwrap();
+    source.init_schema().unwrap();
+    dest.init_schema().unwrap();
+
+    for i in 0..100 {
+        source
+            .insert(&Entry::new_text(format!("entry {i:03}")))
+            .unwrap();
+    }
+
+    let summary = dest.pull_from_database(&source, 100).unwrap();
+    assert_eq!(summary.remote_digests, 100);
+    assert_eq!(summary.requested_entries, 100);
+    assert_eq!(summary.imported_entries, 100);
+    assert_eq!(summary.skipped_entries, 0);
+    assert_eq!(dest.count().unwrap(), 100);
+
+    let noop = dest.pull_from_database(&source, 100).unwrap();
+    assert_eq!(noop.requested_entries, 0);
+    assert_eq!(noop.imported_entries, 0);
+}
+
+#[test]
+fn pull_from_database_converges_image_entry() {
+    let _guard = DATA_DIR_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    set_data_dir_override(Some(dir.path().to_path_buf())).unwrap();
+
+    let source = Database::open_at(dir.path().join("source.db")).unwrap();
+    let dest = Database::open_at(dir.path().join("dest.db")).unwrap();
+    source.init_schema().unwrap();
+    dest.init_schema().unwrap();
+    let bytes = b"image pull bytes";
+    let hash = Entry::compute_hash(bytes);
+    Database::store_image_blob(&hash, "png", bytes).unwrap();
+    source
+        .insert(&Entry::new_image(
+            hash.clone(),
+            bytes.len(),
+            "png".to_string(),
+        ))
+        .unwrap();
+
+    let summary = dest.pull_from_database(&source, 10).unwrap();
+    let copied = dest.get_by_hash(&hash).unwrap().unwrap();
+    set_data_dir_override(None).unwrap();
+
+    assert_eq!(summary.imported_entries, 1);
+    assert_eq!(copied.entry_type.as_str(), "image");
+}
+
+#[test]
 fn discovered_peer_preserves_explicit_trust_on_refresh() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open_at(dir.path().join("ditox.db")).unwrap();

@@ -307,3 +307,7 @@ support it.
 - Extended payload metadata and added `Database::insert_entry_payload()`
   so a second database can import text and image payloads idempotently
   by content hash.
+- Added `Database::pull_from_database()` and `SyncRoundSummary` to run
+  the pull-sync digest diff → entry request → payload import sequence
+  between two core instances; covered by 100-text-entry and image
+  convergence tests.

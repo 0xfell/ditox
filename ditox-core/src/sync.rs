@@ -59,6 +59,14 @@ pub struct BlobChunk {
     pub last: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+pub struct SyncRoundSummary {
+    pub remote_digests: usize,
+    pub requested_entries: usize,
+    pub imported_entries: usize,
+    pub skipped_entries: usize,
+}
+
 pub fn encode_frame(payload: &[u8]) -> Result<Vec<u8>> {
     if payload.len() > MAX_FRAME_BYTES {
         return Err(DitoxError::Other(format!(
