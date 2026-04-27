@@ -13,7 +13,8 @@ use ditox_core::paste::synthesize::{paste_with_chain, Synthesizer};
 // breaks macro expansion. The one site that wanted `ditox_core::Result`
 // (`run_with`) qualifies it explicitly below.
 use ditox_core::{
-    Clipboard, Collection, Config, Database, DbHandle, Entry, EntryType, Tag, Watcher,
+    capture::RawClip, Clipboard, Collection, Config, Database, DbHandle, Entry, EntryType, Tag,
+    Watcher,
 };
 #[cfg(windows)]
 use global_hotkey::{
@@ -2074,6 +2075,52 @@ impl DitoxApp {
                     }
                     Err(e) => cmd.reply_err(&e),
                 },
+                Command::CollectionAdd {
+                    name,
+                    color,
+                    keybind,
+                } => {
+                    let position = self.all_collections.len() as i32;
+                    let collection = Collection::with_options(name, color, keybind, position);
+                    match self.db.call(move |d| d.create_collection(&collection)) {
+                        Ok(Ok(())) => {
+                            self.refresh_tag_cache();
+                            cmd.reply_ok();
+                        }
+                        Ok(Err(e)) => cmd.reply_err(&e.to_string()),
+                        Err(e) => cmd.reply_err(&e.to_string()),
+                    }
+                }
+                Command::TagEntry { entry_id, tag_name } => match self
+                    .db
+                    .call(move |d| d.add_tag_to_entry_by_name(&entry_id, &tag_name, None))
+                {
+                    Ok(Ok(_)) => {
+                        self.refresh_entries();
+                        cmd.reply_ok();
+                    }
+                    Ok(Err(e)) => cmd.reply_err(&e.to_string()),
+                    Err(e) => cmd.reply_err(&e.to_string()),
+                },
+                Command::ScriptRun {
+                    script_id,
+                    entry_id,
+                } => match self.run_script_on_entry(&script_id, &entry_id) {
+                    Ok(output) => cmd.reply_ok_with(&output),
+                    Err(e) => cmd.reply_err(&e),
+                },
+                Command::ScriptReload => {
+                    // Scripts are loaded on each capture/run today, so reload is a
+                    // validation command rather than a cache invalidation step.
+                    match ditox_core::scripting::ScriptEngine::new().load_dir(
+                        &ditox_core::scripting::scripts_root()
+                            .unwrap_or_default()
+                            .join("capture"),
+                    ) {
+                        Ok(scripts) => cmd.reply_ok_with(&format!("scripts={}", scripts.len())),
+                        Err(e) => cmd.reply_err(&e.to_string()),
+                    }
+                }
                 Command::ReloadConfig => {
                     self.config_mtime = None;
                     self.reload_config_if_changed();
@@ -2125,6 +2172,38 @@ impl DitoxApp {
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "not-found".to_string())
+    }
+
+    fn run_script_on_entry(
+        &self,
+        script_id: &str,
+        entry_id: &str,
+    ) -> std::result::Result<String, String> {
+        let entry = self.entry_by_id(entry_id)?;
+        if entry.entry_type != EntryType::Text {
+            return Err("script-run only supports text entries".into());
+        }
+
+        let engine = ditox_core::scripting::ScriptEngine::new();
+        let script_path = ditox_core::scripting::scripts_root()
+            .map_err(|e| e.to_string())?
+            .join("capture")
+            .join(format!("{script_id}.rhai"));
+        let source = std::fs::read_to_string(&script_path)
+            .map_err(|e| format!("could not read {}: {e}", script_path.display()))?;
+        let script = engine
+            .compile(script_id.to_string(), &source)
+            .map_err(|e| e.to_string())?;
+        let mut clip = RawClip::text(entry.content);
+        match engine.run_capture_script(&script, &mut clip) {
+            Ok(ditox_core::scripting::Decision::Continue) => {
+                let output = clip.text_content().unwrap_or_default();
+                Clipboard::set_text(&output).map_err(|e| e.to_string())?;
+                Ok(output)
+            }
+            Ok(ditox_core::scripting::Decision::Drop) => Err("script returned drop".into()),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     /// Phase 4 sub-task 4.3: hide the main window via

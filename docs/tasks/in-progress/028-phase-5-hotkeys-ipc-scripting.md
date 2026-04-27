@@ -232,3 +232,15 @@ Document a small library of "starter scripts" in `docs/notes/scripts/`:
 
 Remaining validation requires live target sessions: Windows `RegisterHotKey`
 behaviour and Hyprland/Sway compositor bind execution/reload semantics.
+
+### 2026-04-27 — IPC completion pass
+- Filled in the remaining Phase 5 IPC command parser/daemon handlers:
+  `COLLECTION-ADD`, `TAG-ENTRY`, `SCRIPT-RUN`, and `SCRIPT-RELOAD`.
+- `SCRIPT-RUN <script-id> <entry-id>` now runs a named capture script from
+  `scripts/capture/<script-id>.rhai` against a text entry and copies the
+  transformed output without mutating history.
+- `SCRIPT-RELOAD` validates currently loadable capture scripts; scripts are
+  otherwise loaded on demand, so there is no daemon cache to invalidate yet.
+- Added parser tests for Phase 5 IPC verbs.
+- Verified with `nix develop -c cargo test --workspace` and
+  `nix develop -c cargo clippy --workspace --all-targets --locked -- -D warnings`.

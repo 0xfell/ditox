@@ -305,9 +305,26 @@ pub enum Command {
     Status,
     PasteClip(String),
     Emit(String),
+    CollectionAdd {
+        name: String,
+        color: Option<String>,
+        keybind: Option<char>,
+    },
+    TagEntry {
+        entry_id: String,
+        tag_name: String,
+    },
+    ScriptRun {
+        script_id: String,
+        entry_id: String,
+    },
+    ScriptReload,
     ReloadConfig,
     GetEntry(String),
-    ListEntries { limit: usize, json: bool },
+    ListEntries {
+        limit: usize,
+        json: bool,
+    },
 }
 
 fn parse_command(line: &str) -> Option<Command> {
@@ -321,6 +338,20 @@ fn parse_command(line: &str) -> Option<Command> {
         "STATUS" => Command::Status,
         "PASTE-CLIP" => Command::PasteClip(parts.next()?.to_string()),
         "EMIT" => Command::Emit(parts.next()?.to_string()),
+        "COLLECTION-ADD" => Command::CollectionAdd {
+            name: parts.next()?.to_string(),
+            color: parts.next().map(str::to_string),
+            keybind: parts.next().and_then(|s| s.chars().next()),
+        },
+        "TAG-ENTRY" => Command::TagEntry {
+            entry_id: parts.next()?.to_string(),
+            tag_name: parts.next()?.to_string(),
+        },
+        "SCRIPT-RUN" => Command::ScriptRun {
+            script_id: parts.next()?.to_string(),
+            entry_id: parts.next()?.to_string(),
+        },
+        "SCRIPT-RELOAD" => Command::ScriptReload,
         "RELOAD-CONFIG" => Command::ReloadConfig,
         "GET-ENTRY" => Command::GetEntry(parts.next()?.to_string()),
         "LIST-ENTRIES" => {
@@ -412,6 +443,44 @@ mod tests {
     fn parse_command_is_case_insensitive() {
         assert_eq!(parse_command("toggle"), Some(Command::Toggle));
         assert_eq!(parse_command("Show"), Some(Command::Show));
+    }
+
+    #[test]
+    fn parse_phase5_commands() {
+        assert_eq!(
+            parse_command("PASTE-CLIP abc"),
+            Some(Command::PasteClip("abc".into()))
+        );
+        assert_eq!(
+            parse_command("COLLECTION-ADD Work #ff00aa w"),
+            Some(Command::CollectionAdd {
+                name: "Work".into(),
+                color: Some("#ff00aa".into()),
+                keybind: Some('w'),
+            })
+        );
+        assert_eq!(
+            parse_command("TAG-ENTRY entry-1 rust"),
+            Some(Command::TagEntry {
+                entry_id: "entry-1".into(),
+                tag_name: "rust".into(),
+            })
+        );
+        assert_eq!(
+            parse_command("SCRIPT-RUN strip entry-1"),
+            Some(Command::ScriptRun {
+                script_id: "strip".into(),
+                entry_id: "entry-1".into(),
+            })
+        );
+        assert_eq!(parse_command("SCRIPT-RELOAD"), Some(Command::ScriptReload));
+        assert_eq!(
+            parse_command("LIST-ENTRIES 25 --json"),
+            Some(Command::ListEntries {
+                limit: 25,
+                json: true,
+            })
+        );
     }
 
     #[test]
