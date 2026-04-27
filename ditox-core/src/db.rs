@@ -223,6 +223,17 @@ fn normalise_image_mime(extension: &str) -> &'static str {
     }
 }
 
+fn image_extension_from_format(format_name: &str) -> String {
+    match format_name.strip_prefix("image/").unwrap_or(format_name) {
+        "jpeg" => "jpg".to_string(),
+        "png" | "gif" | "webp" | "bmp" | "tiff" => format_name
+            .strip_prefix("image/")
+            .unwrap_or(format_name)
+            .to_string(),
+        _ => "png".to_string(),
+    }
+}
+
 /// Canonical `entries.canonical_format` value for a single-format
 /// `Entry`. Uses `text/plain;charset=utf-8` for text and
 /// `image/<normalised-mime>` for images.
@@ -2219,8 +2230,84 @@ impl Database {
         Ok(Some(EntryPayload {
             id: entry.id,
             entry_hash: entry.hash,
+            entry_type: entry.entry_type.as_str().to_string(),
+            byte_size: entry.byte_size as u64,
+            created_at: entry.created_at.to_rfc3339(),
+            last_used: entry.last_used.to_rfc3339(),
+            pinned: entry.favorite,
             formats,
         }))
+    }
+
+    pub fn insert_entry_payload(&self, payload: &EntryPayload) -> Result<bool> {
+        if self.exists_by_hash(&payload.entry_hash)? {
+            return Ok(false);
+        }
+        let canonical = payload
+            .formats
+            .first()
+            .ok_or_else(|| DitoxError::Other("sync payload has no formats".into()))?;
+        let created_at = DateTime::parse_from_rfc3339(&payload.created_at)
+            .map_err(|e| DitoxError::Other(format!("invalid payload created_at: {e}")))?
+            .with_timezone(&Utc);
+        let last_used = DateTime::parse_from_rfc3339(&payload.last_used)
+            .map_err(|e| DitoxError::Other(format!("invalid payload last_used: {e}")))?
+            .with_timezone(&Utc);
+
+        let mut entry = match payload.entry_type.as_str() {
+            "text" => {
+                let content = match &canonical.body {
+                    FormatBody::Inline(bytes) => String::from_utf8(bytes.clone()).map_err(|e| {
+                        DitoxError::Other(format!("invalid text payload utf-8: {e}"))
+                    })?,
+                    FormatBody::BlobChunk(_) => {
+                        return Err(DitoxError::Other(
+                            "text payload canonical format must be inline".into(),
+                        ))
+                    }
+                };
+                Entry::new_text(content)
+            }
+            "image" => {
+                let chunk = match &canonical.body {
+                    FormatBody::BlobChunk(chunk) => chunk,
+                    FormatBody::Inline(_) => {
+                        return Err(DitoxError::Other(
+                            "image payload canonical format must be blob_file".into(),
+                        ))
+                    }
+                };
+                let ext = image_extension_from_format(&canonical.format_name);
+                Self::store_image_blob(&chunk.blob_hash, &ext, &chunk.data)?;
+                Entry::new_image(chunk.blob_hash.clone(), chunk.total_bytes as usize, ext)
+            }
+            other => {
+                return Err(DitoxError::Other(format!(
+                    "unknown payload entry_type: {other}"
+                )))
+            }
+        };
+
+        entry.id = payload.id.clone();
+        entry.hash = payload.entry_hash.clone();
+        entry.byte_size = payload.byte_size as usize;
+        entry.created_at = created_at;
+        entry.last_used = last_used;
+        entry.favorite = payload.pinned;
+
+        let extras: Vec<ExtraFormat> = payload
+            .formats
+            .iter()
+            .skip(1)
+            .map(|format| match &format.body {
+                FormatBody::Inline(bytes) => ExtraFormat::new(&format.format_name, bytes.clone()),
+                FormatBody::BlobChunk(chunk) => {
+                    ExtraFormat::new(&format.format_name, chunk.data.clone())
+                }
+            })
+            .collect();
+        self.insert_multi(&entry, &extras)?;
+        Ok(true)
     }
 
     pub fn upsert_discovered_peer(

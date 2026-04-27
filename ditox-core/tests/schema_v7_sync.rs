@@ -133,6 +133,37 @@ fn entry_payload_includes_inline_formats() {
 }
 
 #[test]
+fn text_entry_payload_import_converges_second_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = Database::open_at(dir.path().join("source.db")).unwrap();
+    let dest = Database::open_at(dir.path().join("dest.db")).unwrap();
+    source.init_schema().unwrap();
+    dest.init_schema().unwrap();
+
+    let entry = Entry::new_text("sync me".into());
+    source
+        .insert_multi(
+            &entry,
+            &[ExtraFormat::new("text/html", b"<p>sync me</p>".to_vec())],
+        )
+        .unwrap();
+    let payload = source.entry_payload(&entry.id).unwrap().unwrap();
+
+    assert!(dest.insert_entry_payload(&payload).unwrap());
+    assert!(!dest.insert_entry_payload(&payload).unwrap());
+    let copied = dest.get_by_hash(&entry.hash).unwrap().unwrap();
+    assert_eq!(copied.content, "sync me");
+    assert_eq!(
+        dest.entry_payload(&copied.id)
+            .unwrap()
+            .unwrap()
+            .formats
+            .len(),
+        2
+    );
+}
+
+#[test]
 fn entry_payload_includes_image_blob_chunk() {
     let _guard = DATA_DIR_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -161,6 +192,31 @@ fn entry_payload_includes_image_blob_chunk() {
         }
         other => panic!("expected blob chunk, got {other:?}"),
     }
+}
+
+#[test]
+fn image_entry_payload_import_converges_second_database() {
+    let _guard = DATA_DIR_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    set_data_dir_override(Some(dir.path().to_path_buf())).unwrap();
+
+    let source = Database::open_at(dir.path().join("source.db")).unwrap();
+    let dest = Database::open_at(dir.path().join("dest.db")).unwrap();
+    source.init_schema().unwrap();
+    dest.init_schema().unwrap();
+    let bytes = b"image bytes for import";
+    let hash = Entry::compute_hash(bytes);
+    Database::store_image_blob(&hash, "png", bytes).unwrap();
+    let entry = Entry::new_image(hash.clone(), bytes.len(), "png".to_string());
+    source.insert(&entry).unwrap();
+
+    let payload = source.entry_payload(&entry.id).unwrap().unwrap();
+    assert!(dest.insert_entry_payload(&payload).unwrap());
+    let copied = dest.get_by_hash(&hash).unwrap().unwrap();
+    set_data_dir_override(None).unwrap();
+
+    assert_eq!(copied.entry_type.as_str(), "image");
+    assert_eq!(copied.hash, hash);
 }
 
 #[test]

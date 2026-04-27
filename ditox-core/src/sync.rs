@@ -28,6 +28,11 @@ pub struct EntryDigest {
 pub struct EntryPayload {
     pub id: String,
     pub entry_hash: String,
+    pub entry_type: String,
+    pub byte_size: u64,
+    pub created_at: String,
+    pub last_used: String,
+    pub pinned: bool,
     pub formats: Vec<FormatPayload>,
 }
 

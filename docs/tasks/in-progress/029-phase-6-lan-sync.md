@@ -304,3 +304,6 @@ support it.
 - Added sync `EntryPayload` / `FormatPayload` / `BlobChunk` structs and
   `Database::entry_payload()` to assemble text and image clips from
   `entries` + `entry_formats` for future `EntryRequest` responses.
+- Extended payload metadata and added `Database::insert_entry_payload()`
+  so a second database can import text and image payloads idempotently
+  by content hash.
