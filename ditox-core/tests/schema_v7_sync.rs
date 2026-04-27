@@ -73,6 +73,36 @@ fn entry_digests_are_recent_hash_manifests() {
 }
 
 #[test]
+fn missing_entry_ids_from_digests_skips_existing_hashes() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open_at(dir.path().join("ditox.db")).unwrap();
+    db.init_schema().unwrap();
+
+    let local = Entry::new_text("already here".into());
+    db.insert(&local).unwrap();
+
+    let remote = vec![
+        ditox_core::sync::EntryDigest {
+            id: "remote-existing".to_string(),
+            entry_hash: local.hash.clone(),
+            updated_at: "2026-04-27T00:00:00Z".to_string(),
+            pinned: false,
+        },
+        ditox_core::sync::EntryDigest {
+            id: "remote-missing".to_string(),
+            entry_hash: "missing-hash".to_string(),
+            updated_at: "2026-04-27T00:00:01Z".to_string(),
+            pinned: false,
+        },
+    ];
+
+    assert_eq!(
+        db.missing_entry_ids_from_digests(&remote).unwrap(),
+        vec!["remote-missing".to_string()]
+    );
+}
+
+#[test]
 fn discovered_peer_preserves_explicit_trust_on_refresh() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open_at(dir.path().join("ditox.db")).unwrap();

@@ -2146,6 +2146,16 @@ impl Database {
         Ok(rows)
     }
 
+    pub fn missing_entry_ids_from_digests(&self, remote: &[EntryDigest]) -> Result<Vec<String>> {
+        let mut missing = Vec::new();
+        for digest in remote {
+            if !self.exists_by_hash(&digest.entry_hash)? {
+                missing.push(digest.id.clone());
+            }
+        }
+        Ok(missing)
+    }
+
     pub fn upsert_discovered_peer(
         &self,
         name: &str,

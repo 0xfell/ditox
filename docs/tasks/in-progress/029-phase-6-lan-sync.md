@@ -293,3 +293,6 @@ support it.
   discovery for two-instance tests, and DB ingestion for advertised peers.
 - Added `proto/ditox-sync.proto`, length-prefixed frame helpers, and
   `Database::entry_digests()` for pull-sync manifest exchange.
+- Added `Database::missing_entry_ids_from_digests()` so pull sync can
+  diff a remote manifest against local content-addressed hashes before
+  issuing `EntryRequest`.
