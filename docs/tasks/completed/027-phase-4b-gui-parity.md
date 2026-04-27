@@ -1,9 +1,11 @@
 # Task: Phase 4b — GUI feature parity
 
-> **Status:** planned
+> **Status:** completed
 > **Priority:** high
 > **Phase:** 4b — GUI parity
 > **Created:** 2026-04-26
+> **Started:** 2026-04-27
+> **Completed:** 2026-04-27
 > **Estimated:** 3-4 weeks
 
 ## Description
@@ -178,3 +180,71 @@ plus hex input.
 
 ### 2026-04-26
 - Task file created (epic).
+
+### 2026-04-27 — 4b.8 core tag groundwork landed
+- Task moved to in-progress. Started with the schema v4 -> v5 tags
+  groundwork so GUI and CLI tag surfaces share one tested core model.
+- Added `ditox_core::Tag`, `tags`, and `entry_tags`; bumped
+  `SCHEMA_VERSION` from 4 to 5; added explicit forward-only
+  `migrate_to_v5()` with indexes on both tag lookup directions.
+- Added DB helpers for tag CRUD, get-or-create by name, idempotent
+  entry/tag linking, unlinking, tag listing per entry, entry listing
+  per tag, and entry counts per tag.
+- Wired Phase 3 filter-rule `tag:<name>` actions into the watcher:
+  matching captures now create/link the tag after the entry insert
+  instead of logging a not-yet-implemented message.
+- Added CLI surface: `ditox tag <entry> <name> [--color]`,
+  `ditox untag <entry> <tag>`, and `ditox tag-list [entry] [--json]`.
+- Added GUI tag/filtering surface: tag chips, per-entry tag glyphs,
+  side-panel tag add/remove, and single-tag filtering composed with
+  the existing tab filters.
+- Added time-window tabs (`Yesterday`, `This Week`, `This Month`,
+  `Older`) and core DB filtering for them.
+- Added collection tabs from existing collections plus side-panel
+  reassignment/uncollected controls. This is the first collection GUI
+  surface; full create/rename/delete remains in 4b.2.
+- Added side-panel image zoom controls (`-`, `+`, `Fit`) with bounded
+  25%-400% zoom. Drag-pan/open-external remain in 4b.5.
+- Tests added: v4 -> v5 schema snapshot, tag CRUD/idempotent linking,
+  tag+time filtered query composition, watcher tag-rule integration,
+  and an end-to-end CLI tag round-trip.
+  Verified with `nix develop -c cargo test --workspace` and
+  `nix develop -c cargo clippy --workspace --all-targets --locked -- -D warnings`.
+
+### 2026-04-27 — settings, collections, and multi-select slice
+- Added typed config persistence via `Config::save()`, including TOML
+  serialization and atomic temp-file rename. The GUI settings page can
+  now edit and save core general/theme options and hide-on-blur.
+- Added collection CRUD controls to the GUI settings overlay: create,
+  select/edit, save, and delete. Collection refresh rebuilds the dynamic
+  tab strip and delete unassigns entries through the existing DB helper.
+- Added multi-select mode (`m` shortcut and toolbar button). In
+  multi-select mode, row clicks toggle selection instead of copying.
+- Added bulk action toolbar: copy joined text, delete selected, tag
+  selected, move selected to any existing collection, and apply a named
+  transform to selected text entries before copying the result.
+- Keyboard shortcuts now ignore events already captured by focused input
+  widgets, so typing in settings/search does not trigger launcher actions.
+- Verified with `nix develop -c cargo check -p ditox-gui`,
+  `nix develop -c cargo test --workspace`, and
+  `nix develop -c cargo clippy --workspace --all-targets --locked -- -D warnings`.
+
+### 2026-04-27 — close-out
+- Added an `Uncollected` pseudo-tab and DB filtering for entries without
+  a collection assignment.
+- Extended tag chips to support multiple active tags; filtering now
+  requires entries to have all selected tags. Tag chips include color text
+  when a color is configured.
+- Added side-panel image `Actual` and `Open` controls. `Open` delegates to
+  the platform opener (`xdg-open`, `open`, or `cmd /C start`).
+- Added config hot reload by watching the config file mtime on the GUI
+  tick; changed config updates refresh launcher settings and poll interval
+  without restarting.
+- Added GUI keybinding overrides under `[keybindings.gui]`, resolved before
+  the built-in default shortcuts. Supported action names include `hide`,
+  `move_up`, `move_down`, `copy`, `prev_page`, `next_page`, `prev_tab`,
+  `next_tab`, `preview`, `toggle_help`, and `toggle_multi_select`.
+- Phase 4b is closed with platform-live visual validation still dependent
+  on the target desktop sessions. Automated verification passed with
+  `nix develop -c cargo test --workspace` and
+  `nix develop -c cargo clippy --workspace --all-targets --locked -- -D warnings`.

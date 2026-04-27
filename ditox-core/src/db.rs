@@ -2,6 +2,7 @@ use crate::collection::Collection;
 use crate::entry::{Entry, EntryType};
 use crate::error::{DitoxError, Result};
 use crate::stats::{Stats, TopEntry};
+use crate::tag::Tag;
 use chrono::{DateTime, Duration, Utc};
 use directories::ProjectDirs;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -20,7 +21,9 @@ use std::sync::RwLock;
 ///   for backwards-compat single-format search; Phase 2+ may consolidate.
 /// - 4: filter rules table (Phase 3 sub-task 3.4) — `filter_rules` for
 ///   pattern-based capture-time pipeline (drop / transform / tag).
-pub const SCHEMA_VERSION: i64 = 4;
+/// - 5: tags table + entry_tags many-to-many table (Phase 4b).
+/// - 6: per-clip global/local hotkey columns (Phase 5).
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// Subdirectory inside `images/` that holds files quarantined by
 /// `ditox repair --fix-hashes` because their on-disk hash didn't match the
@@ -301,11 +304,17 @@ enum FilterParams<'a> {
     None,
     Type(&'a str),
     Date(String),
+    DateRange(String, String),
     Collection(&'a str),
+    Uncollected,
     Favorite, // No params, just WHERE favorite = 1
 }
 
 impl Database {
+    pub fn connection(&self) -> &Connection {
+        &self.conn
+    }
+
     pub fn open() -> Result<Self> {
         let db_path = Self::get_db_path()?;
 
@@ -804,6 +813,19 @@ impl Database {
             self.write_schema_version(4)?;
         }
 
+        // Schema v5: tags (Phase 4b). Adds a many-to-many tag model
+        // independent of flat collections.
+        if self.read_schema_version().unwrap_or(0) < 5 {
+            self.migrate_to_v5()?;
+            self.write_schema_version(5)?;
+        }
+
+        // Schema v6: per-clip hotkey bindings.
+        if self.read_schema_version().unwrap_or(0) < 6 {
+            self.migrate_to_v6()?;
+            self.write_schema_version(6)?;
+        }
+
         // Startup reconciliation: drain any pending prunes left from a crash,
         // and sweep stale `.tmp` files from previous aborted writes. Cheap
         // (milliseconds) and self-healing on every open.
@@ -1152,6 +1174,69 @@ impl Database {
         Ok(())
     }
 
+    /// Schema v4 -> v5 migration. Adds many-to-many entry tags.
+    ///
+    /// Tags are separate from collections: a tag can be attached to many
+    /// entries and an entry can have many tags. `ON DELETE CASCADE` keeps
+    /// `entry_tags` self-cleaning when either side is removed.
+    fn migrate_to_v5(&self) -> Result<()> {
+        tracing::info!("applying schema migration v4 -> v5 (tags)");
+
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS tags (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL UNIQUE,
+                color      TEXT,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS entry_tags (
+                entry_id TEXT NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+                tag_id   TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                PRIMARY KEY (entry_id, tag_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_entry_tags_tag
+                ON entry_tags(tag_id);
+            CREATE INDEX IF NOT EXISTS idx_entry_tags_entry
+                ON entry_tags(entry_id);",
+        )?;
+
+        Ok(())
+    }
+
+    fn migrate_to_v6(&self) -> Result<()> {
+        tracing::info!("applying schema migration v5 -> v6 (clip hotkeys)");
+
+        if !self.table_has_column("entries", "global_hotkey")? {
+            self.conn
+                .execute_batch("ALTER TABLE entries ADD COLUMN global_hotkey TEXT;")?;
+        }
+        if !self.table_has_column("entries", "local_hotkey")? {
+            self.conn
+                .execute_batch("ALTER TABLE entries ADD COLUMN local_hotkey TEXT;")?;
+        }
+        self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_entries_global_hotkey
+                 ON entries(global_hotkey)
+                 WHERE global_hotkey IS NOT NULL;",
+        )?;
+
+        Ok(())
+    }
+
+    fn table_has_column(&self, table: &str, column: &str) -> Result<bool> {
+        let mut stmt = self.conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn read_schema_version(&self) -> Option<i64> {
         self.conn
             .query_row(
@@ -1360,8 +1445,8 @@ impl Database {
 
         let result = (|| -> Result<()> {
             let inserted = tx.execute(
-                "INSERT OR IGNORE INTO entries (id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id, image_extension, canonical_format)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                "INSERT OR IGNORE INTO entries (id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id, image_extension, canonical_format, global_hotkey, local_hotkey)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     entry.id,
                     entry.entry_type.as_str(),
@@ -1375,6 +1460,8 @@ impl Database {
                     entry.collection_id,
                     entry.image_extension,
                     canonical_format_for(entry),
+                    entry.global_hotkey,
+                    entry.local_hotkey,
                 ],
             )?;
 
@@ -1486,7 +1573,7 @@ impl Database {
 
     pub fn get_by_id(&self, id: &str) -> Result<Option<Entry>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id, image_extension
+            "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id, image_extension, global_hotkey, local_hotkey
              FROM entries WHERE id = ?1",
         )?;
 
@@ -1495,9 +1582,20 @@ impl Database {
         Ok(entry)
     }
 
+    pub fn get_by_hash(&self, hash: &str) -> Result<Option<Entry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id, image_extension, global_hotkey, local_hotkey
+             FROM entries WHERE hash = ?1",
+        )?;
+
+        let entry = stmt.query_row([hash], Self::row_to_entry).optional()?;
+
+        Ok(entry)
+    }
+
     pub fn get_by_index(&self, index: usize) -> Result<Option<Entry>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id, image_extension
+            "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id, image_extension, global_hotkey, local_hotkey
              FROM entries
              ORDER BY last_used DESC
              LIMIT 1 OFFSET ?1",
@@ -1666,7 +1764,12 @@ impl Database {
             FilterParams::None => self.conn.query_row(&sql, [], |row| row.get(0))?,
             FilterParams::Type(t) => self.conn.query_row(&sql, [t], |row| row.get(0))?,
             FilterParams::Date(d) => self.conn.query_row(&sql, [d], |row| row.get(0))?,
+            FilterParams::DateRange(start, end) => {
+                self.conn
+                    .query_row(&sql, params![start, end], |row| row.get(0))?
+            }
             FilterParams::Collection(c) => self.conn.query_row(&sql, [c], |row| row.get(0))?,
+            FilterParams::Uncollected => self.conn.query_row(&sql, [], |row| row.get(0))?,
             FilterParams::Favorite => self.conn.query_row(&sql, [], |row| row.get(0))?,
         };
         Ok(count as usize)
@@ -1918,6 +2021,16 @@ impl Database {
             notes: row.get(8)?,
             collection_id: row.get(9)?,
             image_extension: row.get(10)?,
+            global_hotkey: if row.as_ref().column_count() > 11 {
+                row.get(11)?
+            } else {
+                None
+            },
+            local_hotkey: if row.as_ref().column_count() > 12 {
+                row.get(12)?
+            } else {
+                None
+            },
         })
     }
 
@@ -1928,6 +2041,32 @@ impl Database {
             params![notes, id],
         )?;
         Ok(rows > 0)
+    }
+
+    pub fn set_entry_hotkeys(
+        &self,
+        id: &str,
+        global_hotkey: Option<&str>,
+        local_hotkey: Option<&str>,
+    ) -> Result<bool> {
+        let rows = self.conn.execute(
+            "UPDATE entries SET global_hotkey = ?1, local_hotkey = ?2 WHERE id = ?3",
+            params![global_hotkey, local_hotkey, id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn entries_with_global_hotkeys(&self) -> Result<Vec<Entry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id, image_extension, global_hotkey, local_hotkey
+             FROM entries
+             WHERE global_hotkey IS NOT NULL
+             ORDER BY global_hotkey ASC",
+        )?;
+        let entries = stmt
+            .query_map([], Self::row_to_entry)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(entries)
     }
 
     /// Get top entries by usage count (for quick snippets)
@@ -2227,6 +2366,35 @@ impl Database {
                     FilterParams::Date(today),
                 )
             }
+            "yesterday" => {
+                let start = (Utc::now() - Duration::hours(48)).to_rfc3339();
+                let end = (Utc::now() - Duration::hours(24)).to_rfc3339();
+                (
+                    " WHERE created_at > ?1 AND created_at <= ?2".to_string(),
+                    FilterParams::DateRange(start, end),
+                )
+            }
+            "this_week" => {
+                let start = (Utc::now() - Duration::days(7)).to_rfc3339();
+                (
+                    " WHERE created_at > ?1".to_string(),
+                    FilterParams::Date(start),
+                )
+            }
+            "this_month" => {
+                let start = (Utc::now() - Duration::days(30)).to_rfc3339();
+                (
+                    " WHERE created_at > ?1".to_string(),
+                    FilterParams::Date(start),
+                )
+            }
+            "older" => {
+                let cutoff = (Utc::now() - Duration::days(30)).to_rfc3339();
+                (
+                    " WHERE created_at <= ?1".to_string(),
+                    FilterParams::Date(cutoff),
+                )
+            }
             "collection" => {
                 if let Some(cid) = collection_id {
                     (
@@ -2237,6 +2405,10 @@ impl Database {
                     (String::new(), FilterParams::None)
                 }
             }
+            "uncollected" => (
+                " WHERE collection_id IS NULL".to_string(),
+                FilterParams::Uncollected,
+            ),
             _ => (String::new(), FilterParams::None),
         }
     }
@@ -2298,6 +2470,22 @@ impl Database {
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 Ok(entries)
             }
+            FilterParams::DateRange(ref start, ref end) => {
+                let sql = format!(
+                    "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id, image_extension
+                     FROM entries{}
+                     ORDER BY last_used DESC
+                     LIMIT ?3 OFFSET ?4",
+                    where_clause
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                let entries = stmt
+                    .query_map(params![start, end, limit as i64, offset as i64], |row| {
+                        Self::row_to_entry(row)
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(entries)
+            }
             FilterParams::Collection(c) => {
                 let sql = format!(
                     "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id, image_extension
@@ -2309,6 +2497,22 @@ impl Database {
                 let mut stmt = self.conn.prepare(&sql)?;
                 let entries = stmt
                     .query_map(params![c, limit as i64, offset as i64], |row| {
+                        Self::row_to_entry(row)
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(entries)
+            }
+            FilterParams::Uncollected => {
+                let sql = format!(
+                    "SELECT id, entry_type, content, hash, byte_size, created_at, last_used, pinned, notes, collection_id, image_extension
+                     FROM entries{}
+                     ORDER BY last_used DESC
+                     LIMIT ?1 OFFSET ?2",
+                    where_clause
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                let entries = stmt
+                    .query_map(params![limit as i64, offset as i64], |row| {
                         Self::row_to_entry(row)
                     })?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -2333,6 +2537,188 @@ impl Database {
         }
     }
 
+    pub fn get_page_filtered_with_tag(
+        &self,
+        offset: usize,
+        limit: usize,
+        filter: &str,
+        collection_id: Option<&str>,
+        tag_id: &str,
+    ) -> Result<Vec<Entry>> {
+        let (_, params_kind) = self.build_filter_clause(filter, collection_id);
+        let select = "SELECT e.id, e.entry_type, e.content, e.hash, e.byte_size,
+                            e.created_at, e.last_used, e.pinned, e.notes,
+                            e.collection_id, e.image_extension
+                     FROM entries e
+                     JOIN entry_tags et ON et.entry_id = e.id";
+
+        match params_kind {
+            FilterParams::None => {
+                let sql = format!(
+                    "{select}
+                     WHERE et.tag_id = ?1
+                     ORDER BY e.last_used DESC
+                     LIMIT ?2 OFFSET ?3"
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                let entries = stmt
+                    .query_map(
+                        params![tag_id, limit as i64, offset as i64],
+                        Self::row_to_entry,
+                    )?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(entries)
+            }
+            FilterParams::Type(v) => {
+                let sql = format!(
+                    "{select}
+                     WHERE et.tag_id = ?1 AND e.entry_type = ?2
+                     ORDER BY e.last_used DESC
+                     LIMIT ?3 OFFSET ?4"
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                let entries = stmt
+                    .query_map(
+                        params![tag_id, v, limit as i64, offset as i64],
+                        Self::row_to_entry,
+                    )?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(entries)
+            }
+            FilterParams::Collection(v) => {
+                let sql = format!(
+                    "{select}
+                     WHERE et.tag_id = ?1 AND e.collection_id = ?2
+                     ORDER BY e.last_used DESC
+                     LIMIT ?3 OFFSET ?4"
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                let entries = stmt
+                    .query_map(
+                        params![tag_id, v, limit as i64, offset as i64],
+                        Self::row_to_entry,
+                    )?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(entries)
+            }
+            FilterParams::Uncollected => {
+                let sql = format!(
+                    "{select}
+                     WHERE et.tag_id = ?1 AND e.collection_id IS NULL
+                     ORDER BY e.last_used DESC
+                     LIMIT ?2 OFFSET ?3"
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                let entries = stmt
+                    .query_map(
+                        params![tag_id, limit as i64, offset as i64],
+                        Self::row_to_entry,
+                    )?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(entries)
+            }
+            FilterParams::Favorite => {
+                let sql = format!(
+                    "{select}
+                     WHERE et.tag_id = ?1 AND e.pinned = 1
+                     ORDER BY e.last_used DESC
+                     LIMIT ?2 OFFSET ?3"
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                let entries = stmt
+                    .query_map(
+                        params![tag_id, limit as i64, offset as i64],
+                        Self::row_to_entry,
+                    )?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(entries)
+            }
+            FilterParams::Date(d) => {
+                let sql = format!(
+                    "{select}
+                     WHERE et.tag_id = ?1 AND e.created_at > ?2
+                     ORDER BY e.last_used DESC
+                     LIMIT ?3 OFFSET ?4"
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                let entries = stmt
+                    .query_map(
+                        params![tag_id, d, limit as i64, offset as i64],
+                        Self::row_to_entry,
+                    )?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(entries)
+            }
+            FilterParams::DateRange(start, end) => {
+                let sql = format!(
+                    "{select}
+                     WHERE et.tag_id = ?1 AND e.created_at > ?2 AND e.created_at <= ?3
+                     ORDER BY e.last_used DESC
+                     LIMIT ?4 OFFSET ?5"
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                let entries = stmt
+                    .query_map(
+                        params![tag_id, start, end, limit as i64, offset as i64],
+                        Self::row_to_entry,
+                    )?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(entries)
+            }
+        }
+    }
+
+    pub fn count_filtered_with_tag(
+        &self,
+        filter: &str,
+        collection_id: Option<&str>,
+        tag_id: &str,
+    ) -> Result<usize> {
+        let (_, params_kind) = self.build_filter_clause(filter, collection_id);
+        let base = "SELECT COUNT(*) FROM entries e JOIN entry_tags et ON et.entry_id = e.id";
+        let count: i64 = match params_kind {
+            FilterParams::None => {
+                self.conn
+                    .query_row(&format!("{base} WHERE et.tag_id = ?1"), [tag_id], |row| {
+                        row.get(0)
+                    })?
+            }
+            FilterParams::Type(v) => self.conn.query_row(
+                &format!("{base} WHERE et.tag_id = ?1 AND e.entry_type = ?2"),
+                params![tag_id, v],
+                |row| row.get(0),
+            )?,
+            FilterParams::Collection(v) => self.conn.query_row(
+                &format!("{base} WHERE et.tag_id = ?1 AND e.collection_id = ?2"),
+                params![tag_id, v],
+                |row| row.get(0),
+            )?,
+            FilterParams::Uncollected => self.conn.query_row(
+                &format!("{base} WHERE et.tag_id = ?1 AND e.collection_id IS NULL"),
+                [tag_id],
+                |row| row.get(0),
+            )?,
+            FilterParams::Favorite => self.conn.query_row(
+                &format!("{base} WHERE et.tag_id = ?1 AND e.pinned = 1"),
+                [tag_id],
+                |row| row.get(0),
+            )?,
+            FilterParams::Date(d) => self.conn.query_row(
+                &format!("{base} WHERE et.tag_id = ?1 AND e.created_at > ?2"),
+                params![tag_id, d],
+                |row| row.get(0),
+            )?,
+            FilterParams::DateRange(start, end) => self.conn.query_row(
+                &format!(
+                    "{base} WHERE et.tag_id = ?1 AND e.created_at > ?2 AND e.created_at <= ?3"
+                ),
+                params![tag_id, start, end],
+                |row| row.get(0),
+            )?,
+        };
+        Ok(count as usize)
+    }
+
     /// Helper to convert a row to a Collection
     fn row_to_collection(row: &rusqlite::Row) -> std::result::Result<Collection, rusqlite::Error> {
         let created_at_str: String = row.get(5)?;
@@ -2348,6 +2734,165 @@ impl Database {
             color: row.get(2)?,
             keybind: keybind_str.and_then(|s| s.chars().next()),
             position: row.get(4)?,
+            created_at,
+        })
+    }
+
+    // ============= Tag Methods (Phase 4b) =============
+
+    /// Create a new tag.
+    pub fn create_tag(&self, tag: &Tag) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO tags (id, name, color, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![tag.id, tag.name, tag.color, tag.created_at.to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    /// Return all tags ordered by name.
+    pub fn get_all_tags(&self) -> Result<Vec<Tag>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, color, created_at
+             FROM tags
+             ORDER BY name COLLATE NOCASE ASC, created_at ASC",
+        )?;
+        let tags = stmt
+            .query_map([], Self::row_to_tag)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(tags)
+    }
+
+    /// Look up a tag by id.
+    pub fn get_tag_by_id(&self, id: &str) -> Result<Option<Tag>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, color, created_at
+             FROM tags WHERE id = ?1",
+        )?;
+        let tag = stmt.query_row([id], Self::row_to_tag).optional()?;
+        Ok(tag)
+    }
+
+    /// Look up a tag by exact name.
+    pub fn get_tag_by_name(&self, name: &str) -> Result<Option<Tag>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, color, created_at
+             FROM tags WHERE name = ?1",
+        )?;
+        let tag = stmt.query_row([name], Self::row_to_tag).optional()?;
+        Ok(tag)
+    }
+
+    /// Create the tag if missing, then return the stored row.
+    pub fn get_or_create_tag(&self, name: &str, color: Option<&str>) -> Result<Tag> {
+        if let Some(tag) = self.get_tag_by_name(name)? {
+            return Ok(tag);
+        }
+
+        let tag = Tag::new(name, color.map(String::from));
+        self.create_tag(&tag)?;
+        Ok(tag)
+    }
+
+    /// Update a tag's name/color. Returns `true` iff a row was updated.
+    pub fn update_tag(&self, tag: &Tag) -> Result<bool> {
+        let rows = self.conn.execute(
+            "UPDATE tags SET name = ?1, color = ?2 WHERE id = ?3",
+            params![tag.name, tag.color, tag.id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Delete a tag. `entry_tags` rows are removed by foreign-key cascade.
+    pub fn delete_tag(&self, id: &str) -> Result<bool> {
+        let rows = self.conn.execute("DELETE FROM tags WHERE id = ?1", [id])?;
+        Ok(rows > 0)
+    }
+
+    /// Attach an existing tag to an entry. Idempotent.
+    pub fn add_tag_to_entry(&self, entry_id: &str, tag_id: &str) -> Result<bool> {
+        let rows = self.conn.execute(
+            "INSERT OR IGNORE INTO entry_tags (entry_id, tag_id)
+             VALUES (?1, ?2)",
+            params![entry_id, tag_id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Create a tag by name if needed, then attach it to an entry.
+    pub fn add_tag_to_entry_by_name(
+        &self,
+        entry_id: &str,
+        tag_name: &str,
+        color: Option<&str>,
+    ) -> Result<Tag> {
+        let tag = self.get_or_create_tag(tag_name, color)?;
+        self.add_tag_to_entry(entry_id, &tag.id)?;
+        Ok(tag)
+    }
+
+    /// Detach a tag from an entry by tag id. Returns `true` iff detached.
+    pub fn remove_tag_from_entry(&self, entry_id: &str, tag_id: &str) -> Result<bool> {
+        let rows = self.conn.execute(
+            "DELETE FROM entry_tags WHERE entry_id = ?1 AND tag_id = ?2",
+            params![entry_id, tag_id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Tags attached to a specific entry, ordered by name.
+    pub fn get_tags_for_entry(&self, entry_id: &str) -> Result<Vec<Tag>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.id, t.name, t.color, t.created_at
+             FROM tags t
+             JOIN entry_tags et ON et.tag_id = t.id
+             WHERE et.entry_id = ?1
+             ORDER BY t.name COLLATE NOCASE ASC, t.created_at ASC",
+        )?;
+        let tags = stmt
+            .query_map([entry_id], Self::row_to_tag)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(tags)
+    }
+
+    /// Entries carrying a tag, ordered by most recently used.
+    pub fn get_entries_with_tag(&self, tag_id: &str, limit: usize) -> Result<Vec<Entry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.id, e.entry_type, e.content, e.hash, e.byte_size,
+                    e.created_at, e.last_used, e.pinned, e.notes,
+                    e.collection_id, e.image_extension
+             FROM entries e
+             JOIN entry_tags et ON et.entry_id = e.id
+             WHERE et.tag_id = ?1
+             ORDER BY e.last_used DESC
+             LIMIT ?2",
+        )?;
+        let entries = stmt
+            .query_map(params![tag_id, limit as i64], Self::row_to_entry)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(entries)
+    }
+
+    /// Count entries attached to a tag.
+    pub fn count_entries_with_tag(&self, tag_id: &str) -> Result<usize> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM entry_tags WHERE tag_id = ?1",
+            [tag_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    fn row_to_tag(row: &rusqlite::Row) -> std::result::Result<Tag, rusqlite::Error> {
+        let created_at_str: String = row.get(3)?;
+        let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+
+        Ok(Tag {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            color: row.get(2)?,
             created_at,
         })
     }

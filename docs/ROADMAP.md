@@ -8,10 +8,10 @@
 
 | Category | Count |
 |----------|-------|
-| Completed | 26 |
-| In Progress | 3 |
+| Completed | 27 |
+| In Progress | 4 |
 | Planned (Phase 0 — Foundation) | 0 |
-| Planned (Phase 1-8 epics + carry-overs) | 9 |
+| Planned (Phase 1-8 epics + carry-overs) | 7 |
 
 ---
 
@@ -43,6 +43,7 @@ Internal UI design in [`notes/ui-replication.md`](notes/ui-replication.md).
 |------|-------------|
 | [Windows installer & distribution](tasks/in-progress/004-windows-installer-distribution.md) | Inno Setup installer + code-signing (signing pending cert) |
 | [Windows 11 support](tasks/in-progress/010-windows-11-support.md) | Largely complete; CLI-test gaps remain |
+| [028 Hotkeys, IPC, Rhai scripting](tasks/in-progress/028-phase-5-hotkeys-ipc-scripting.md) | Schema v6 hotkeys, expanded IPC, `ditox save`, Rhai capture hooks |
 | [GUI improvements](tasks/in-progress/gui-improvements.md) | Pre-Phase-4 punch list; some items folded into Phase 4 |
 
 ---
@@ -57,8 +58,6 @@ _All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; rea
 
 | Task | Description | Schema |
 |------|-------------|--------|
-| [027 GUI feature parity](tasks/planned/027-phase-4b-gui-parity.md) | Settings, collections, multi-select, tags, time chips, theming | v4 → v5 |
-| [028 Hotkeys, IPC, Rhai scripting](tasks/planned/028-phase-5-hotkeys-ipc-scripting.md) | Per-clip hotkeys, full IPC, sandboxed scripting hooks | v5 → v6 |
 | [029 LAN peer-to-peer sync](tasks/planned/029-phase-6-lan-sync.md) | mDNS + ed25519 TOFU + Noise transport, content-addressed | v6 → v7 |
 | [030 Distribution & i18n](tasks/planned/030-phase-7-distribution-i18n.md) | Choco/Winget/AUR/Flatpak/MSIX, signing, 5 locales, crash reporting | none |
 | [031 macOS port](tasks/planned/031-phase-8-macos.md) | NSPasteboard, Accessibility flow, .app bundle, Cask, notarisation | none |
@@ -73,6 +72,7 @@ _All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; rea
 
 | Task | Date | Description |
 |------|------|-------------|
+| [027 GUI feature parity](tasks/completed/027-phase-4b-gui-parity.md) | 2026-04-27 | Phase 4b: GUI parity slice landed. Schema v4→v5 tags with CLI commands; GUI tag chips, side-panel tag editor, multi-tag AND filtering, time-window chips, collection tabs and uncollected tab, settings persistence, collection CRUD, multi-select bulk actions, image zoom/open controls, config hot reload, and `[keybindings.gui]` overrides. Verified with workspace tests and strict clippy. |
 | [026 Ditto UX replication](tasks/completed/026-phase-4-ditto-ux.md) | 2026-04-26 | Phase 4: 11/12 sub-tasks landed. Single-instance lock + Unix-socket IPC; `iced_layershell` window dispatch on Hyprland/Sway/wlroots; configurable `[gui.position]` (default/at_previous/at_cursor/at_active_window_centre/fixed); always-on-top pin button (Top↔Overlay); modifier-held cycling activated on each summon; hide-on-blur with grace + paste-and-hide; foreground refresh on every Show/Toggle; tooltip-as-preview on hover; inline list extras (hotkey numbers + collection/notes glyphs); `--install-hyprland-config` helper. The daemon model is the most user-visible change in v0.4 — `ditox-gui` is now a long-running process across summons. Sub-task 4.5 (layer-shell drag handle) spun out as task 035. +26 tests, 513 total. |
 | [025 Power-user features](tasks/completed/025-phase-3-power-user.md) | 2026-04-26 | Phase 3: 8/8 sub-tasks landed (Linux + cross-platform pure code). 21 special-paste transforms (case styles, slugify, typoglycemia, datetime, GUID, etc.) with `ditox transform` CLI; per-app capture exclusion via the Phase 2 ForegroundTracker; CSS color swatches in TUI + GUI list rendering; filter rules engine (schema v3→v4 + first-match-wins drop/transform/tag pipeline + `ditox rules` CLI); Linux suspend/resume awareness via logind PrepareForSleep DBus signal; search-mode prefixes `/p` `/h` `/r` `/q` `/f`; per-resolution window state with legacy auto-migration; translate/web-search URL templates with `ditox open` CLI. +186 tests, 487 total. Image-stitching transforms, filter-transform wiring, Windows power monitor, and GUI context menu deferred. |
 | [024 Paste-back UX (Linux MVP)](tasks/completed/024-phase-2-paste-back.md) | 2026-04-26 | Phase 2: 7/9 sub-tasks. `ForegroundTracker` trait + `HyprctlForegroundTracker`; Linux synthesis chain (`hyprctl` → `wtype` → `ydotool` → `off`) with per-app `KeystrokeSequence` parser (vim's `"+gp` etc.); cross-process `PasteSentinel` so the watcher skips the paste-back's own re-capture; full GUI integration with pre-iced foreground snapshot, `paste_and_exit(entry)` flow, and a `SelectionCursor` primitive that advances on rapid re-fires (groundwork for Phase 4 modifier-held cycling). End-to-end verified live on Hyprland: hyprctl `sendshortcut` pasted text into ghostty. Sub-tasks 2.2 + 2.5 (Windows) spun out as 033; 2.3 cont (wlr-foreign-toplevel) as 034. +94 tests, 301 total. |

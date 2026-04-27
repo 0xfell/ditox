@@ -89,9 +89,19 @@ pub enum TabFilter {
     Favorites,
     /// Show entries created today
     Today,
+    /// Show entries created yesterday
+    Yesterday,
+    /// Show entries created during the last 7 days
+    ThisWeek,
+    /// Show entries created during the last 30 days
+    ThisMonth,
+    /// Show entries older than 30 days
+    Older,
     /// Show entries in a specific collection
     #[allow(dead_code)]
-    Collection(String), // collection_id
+    Collection { id: String, name: String },
+    /// Show entries that are not assigned to any collection
+    Uncollected,
 }
 
 impl TabFilter {
@@ -103,7 +113,12 @@ impl TabFilter {
             TabFilter::Images => "Images".to_string(),
             TabFilter::Favorites => "Favorites".to_string(),
             TabFilter::Today => "Today".to_string(),
-            TabFilter::Collection(name) => name.clone(),
+            TabFilter::Yesterday => "Yesterday".to_string(),
+            TabFilter::ThisWeek => "This Week".to_string(),
+            TabFilter::ThisMonth => "This Month".to_string(),
+            TabFilter::Older => "Older".to_string(),
+            TabFilter::Collection { name, .. } => name.clone(),
+            TabFilter::Uncollected => "Uncollected".to_string(),
         }
     }
 
@@ -115,7 +130,12 @@ impl TabFilter {
             TabFilter::Images => ("image", None),
             TabFilter::Favorites => ("favorite", None),
             TabFilter::Today => ("today", None),
-            TabFilter::Collection(id) => ("collection", Some(id.as_str())),
+            TabFilter::Yesterday => ("yesterday", None),
+            TabFilter::ThisWeek => ("this_week", None),
+            TabFilter::ThisMonth => ("this_month", None),
+            TabFilter::Older => ("older", None),
+            TabFilter::Collection { id, .. } => ("collection", Some(id.as_str())),
+            TabFilter::Uncollected => ("uncollected", None),
         }
     }
 }
@@ -1087,9 +1107,27 @@ impl App {
                         let today = Utc::now() - Duration::hours(24);
                         entry.created_at > today
                     }
-                    TabFilter::Collection(collection_id) => {
-                        entry.collection_id.as_ref() == Some(collection_id)
+                    TabFilter::Yesterday => {
+                        let start = Utc::now() - Duration::hours(48);
+                        let end = Utc::now() - Duration::hours(24);
+                        entry.created_at > start && entry.created_at <= end
                     }
+                    TabFilter::ThisWeek => {
+                        let start = Utc::now() - Duration::days(7);
+                        entry.created_at > start
+                    }
+                    TabFilter::ThisMonth => {
+                        let start = Utc::now() - Duration::days(30);
+                        entry.created_at > start
+                    }
+                    TabFilter::Older => {
+                        let cutoff = Utc::now() - Duration::days(30);
+                        entry.created_at <= cutoff
+                    }
+                    TabFilter::Collection {
+                        id: collection_id, ..
+                    } => entry.collection_id.as_ref() == Some(collection_id),
+                    TabFilter::Uncollected => entry.collection_id.is_none(),
                 }
             } else {
                 false

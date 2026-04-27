@@ -66,6 +66,12 @@ pub struct Entry {
     /// `(hash, image_extension)` — see `Database::image_path`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_extension: Option<String>,
+    /// Optional global hotkey for direct paste from outside the launcher.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global_hotkey: Option<String>,
+    /// Optional local launcher-only hotkey.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_hotkey: Option<String>,
 }
 
 impl Entry {
@@ -86,6 +92,8 @@ impl Entry {
             notes: None,
             collection_id: None,
             image_extension: None,
+            global_hotkey: None,
+            local_hotkey: None,
         }
     }
 
@@ -108,6 +116,8 @@ impl Entry {
             notes: None,
             collection_id: None,
             image_extension: Some(extension),
+            global_hotkey: None,
+            local_hotkey: None,
         }
     }
 

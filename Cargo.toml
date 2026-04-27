@@ -31,6 +31,7 @@ image = { version = "0.25.10", default-features = false, features = [
     "webp",
 ] }
 unicode-normalization = "0.1.24"
+rhai = { version = "1.23.6", default-features = false, features = ["std", "sync"] }
 
 # Platform-specific
 wl-clipboard-rs = "0.9.3"

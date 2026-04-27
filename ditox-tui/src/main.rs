@@ -69,6 +69,7 @@ fn run() -> Result<()> {
         Some(Commands::Get { target, json }) => cmd_get(&db, &target, json),
         Some(Commands::Search { query, limit, json }) => cmd_search(&db, &query, limit, json),
         Some(Commands::Copy { target }) => cmd_copy(&db, &target),
+        Some(Commands::Save) => cmd_save(&db),
         Some(Commands::Delete { target }) => cmd_delete(&mut db, &target),
         Some(Commands::Favorite { target }) => cmd_favorite(&db, &target),
         Some(Commands::Clear { confirm }) => cmd_clear(&mut db, confirm),
@@ -108,6 +109,9 @@ fn run() -> Result<()> {
             }
         }
         Some(Commands::Collection(subcmd)) => cmd_collection(&db, subcmd),
+        Some(Commands::Tag { entry, name, color }) => cmd_tag_add(&db, &entry, &name, color),
+        Some(Commands::Untag { entry, tag }) => cmd_tag_remove(&db, &entry, &tag),
+        Some(Commands::TagList { entry, json }) => cmd_tag_list(&db, entry.as_deref(), json),
     }
 }
 
@@ -546,6 +550,21 @@ fn cmd_copy(db: &Database, target: &str) -> Result<()> {
     }
 }
 
+fn cmd_save(db: &Database) -> Result<()> {
+    let text =
+        Clipboard::get_text()?.ok_or_else(|| DitoxError::Other("clipboard has no text".into()))?;
+    let hash = Clipboard::hash(text.as_bytes());
+    if let Some(existing) = db.get_by_hash(&hash)? {
+        db.touch(&existing.id)?;
+        println!("Saved duplicate: usage bumped for {}", existing.id);
+    } else {
+        let entry = Entry::new_text(text);
+        db.insert(&entry)?;
+        println!("Saved: {}", entry.preview(50));
+    }
+    Ok(())
+}
+
 fn cmd_clear(db: &mut Database, confirm: bool) -> Result<()> {
     if !confirm {
         print!("Clear all clipboard history? [y/N] ");
@@ -893,6 +912,103 @@ fn resolve_collection(db: &Database, target: &str) -> Result<Option<Collection>>
         return Ok(Some(col));
     }
     db.get_collection_by_name(target)
+}
+
+/// Helper to resolve a tag target (name or ID).
+fn resolve_tag(db: &Database, target: &str) -> Result<Option<ditox_core::Tag>> {
+    if let Some(tag) = db.get_tag_by_id(target)? {
+        return Ok(Some(tag));
+    }
+    db.get_tag_by_name(target)
+}
+
+fn cmd_tag_add(
+    db: &Database,
+    entry_target: &str,
+    tag_name: &str,
+    color: Option<String>,
+) -> Result<()> {
+    let entry = resolve_target(db, entry_target)?;
+    match entry {
+        Some(entry) => {
+            let tag = db.add_tag_to_entry_by_name(&entry.id, tag_name, color.as_deref())?;
+            println!("Tagged '{}' with '{}'", entry.preview(30), tag.name);
+            Ok(())
+        }
+        None => Err(DitoxError::NotFound(format!(
+            "Entry not found: {}",
+            entry_target
+        ))),
+    }
+}
+
+fn cmd_tag_remove(db: &Database, entry_target: &str, tag_target: &str) -> Result<()> {
+    let entry = resolve_target(db, entry_target)?;
+    let tag = resolve_tag(db, tag_target)?;
+
+    match (entry, tag) {
+        (Some(entry), Some(tag)) => {
+            if db.remove_tag_from_entry(&entry.id, &tag.id)? {
+                println!("Removed tag '{}' from '{}'", tag.name, entry.preview(30));
+                Ok(())
+            } else {
+                Err(DitoxError::NotFound(format!(
+                    "Entry '{}' does not have tag '{}'",
+                    entry_target, tag_target
+                )))
+            }
+        }
+        (None, _) => Err(DitoxError::NotFound(format!(
+            "Entry not found: {}",
+            entry_target
+        ))),
+        (_, None) => Err(DitoxError::NotFound(format!(
+            "Tag not found: {}",
+            tag_target
+        ))),
+    }
+}
+
+fn cmd_tag_list(db: &Database, entry_target: Option<&str>, json: bool) -> Result<()> {
+    let tags = if let Some(target) = entry_target {
+        let entry = resolve_target(db, target)?;
+        match entry {
+            Some(entry) => db.get_tags_for_entry(&entry.id)?,
+            None => return Err(DitoxError::NotFound(format!("Entry not found: {}", target))),
+        }
+    } else {
+        db.get_all_tags()?
+    };
+
+    if json {
+        let out = serde_json::to_string_pretty(&tags)
+            .map_err(|e| DitoxError::Other(format!("JSON serialization error: {}", e)))?;
+        println!("{}", out);
+        return Ok(());
+    }
+
+    if tags.is_empty() {
+        println!("No tags found.");
+        return Ok(());
+    }
+
+    println!("{:<22} {:<20} {:>7}", "ID", "NAME", "ENTRIES");
+    let bar = "─".repeat(54);
+    println!("{}", bar);
+    for tag in tags {
+        let entry_count = db.count_entries_with_tag(&tag.id)?;
+        let id_short = if tag.id.len() > 8 {
+            &tag.id[..8]
+        } else {
+            &tag.id
+        };
+        let color = tag.color.as_deref().unwrap_or("-");
+        println!(
+            "{:<22} {:<20} {:>7}  {}",
+            id_short, tag.name, entry_count, color
+        );
+    }
+    Ok(())
 }
 
 fn cmd_collection(db: &Database, subcmd: CollectionCommands) -> Result<()> {

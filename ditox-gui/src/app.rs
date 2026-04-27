@@ -12,7 +12,9 @@ use ditox_core::paste::synthesize::{paste_with_chain, Synthesizer};
 // `Result<T, DitoxError>` with a single generic) shadows std's and
 // breaks macro expansion. The one site that wanted `ditox_core::Result`
 // (`run_with`) qualifies it explicitly below.
-use ditox_core::{Clipboard, Config, Database, DbHandle, Entry, EntryType, Watcher};
+use ditox_core::{
+    Clipboard, Collection, Config, Database, DbHandle, Entry, EntryType, Tag, Watcher,
+};
 #[cfg(windows)]
 use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
@@ -32,9 +34,10 @@ use iced::{
 
 // Bootstrap Icons font
 const ICONS: Font = Font::with_name("bootstrap-icons");
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tray_icon::{
     menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     Icon, TrayIcon, TrayIconBuilder,
@@ -53,6 +56,75 @@ const ENTRY_LIST_ID: &str = "entry_list";
 
 /// Estimated height of each entry row in pixels
 const ENTRY_ROW_HEIGHT: f32 = 56.0;
+
+fn non_empty_trimmed(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn open_path_external(path: &str) {
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("cmd")
+        .args(["/C", "start", "", path])
+        .spawn();
+
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(path).spawn();
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open").arg(path).spawn();
+
+    if let Err(e) = result {
+        tracing::warn!("failed to open image externally: {e}");
+    }
+}
+
+fn config_mtime(path: &std::path::Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+fn gui_key_combo(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<String> {
+    let mut parts = Vec::new();
+    if modifiers.control() {
+        parts.push("ctrl".to_string());
+    }
+    if modifiers.alt() {
+        parts.push("alt".to_string());
+    }
+    if modifiers.shift() {
+        parts.push("shift".to_string());
+    }
+    let key = match key.as_ref() {
+        keyboard::Key::Named(keyboard::key::Named::Escape) => "esc".to_string(),
+        keyboard::Key::Named(keyboard::key::Named::ArrowUp) => "up".to_string(),
+        keyboard::Key::Named(keyboard::key::Named::ArrowDown) => "down".to_string(),
+        keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => "left".to_string(),
+        keyboard::Key::Named(keyboard::key::Named::ArrowRight) => "right".to_string(),
+        keyboard::Key::Named(keyboard::key::Named::Enter) => "enter".to_string(),
+        keyboard::Key::Named(keyboard::key::Named::Tab) => "tab".to_string(),
+        keyboard::Key::Character(c) => c.to_lowercase(),
+        _ => return None,
+    };
+    parts.push(key);
+    Some(parts.join("+"))
+}
+
+fn gui_action_message(action: &str) -> Option<Message> {
+    match action {
+        "hide" | "close" | "escape" => Some(Message::HideWindow),
+        "move_up" | "up" => Some(Message::MoveUp),
+        "move_down" | "down" => Some(Message::MoveDown),
+        "copy" | "copy_selected" => Some(Message::CopySelected),
+        "prev_page" => Some(Message::PrevPage),
+        "next_page" => Some(Message::NextPage),
+        "prev_tab" => Some(Message::PrevTab),
+        "next_tab" => Some(Message::NextTab),
+        "preview" | "toggle_preview" | "entry_panel" => Some(Message::ToggleSelectedEntryPanel),
+        "help" | "toggle_help" => Some(Message::ToggleHelp),
+        "multi_select" | "toggle_multi_select" => Some(Message::ToggleMultiSelect),
+        _ => None,
+    }
+}
 
 /// Scroll to make the selected item visible
 /// Returns a Task that snaps the scrollable to the appropriate position
@@ -1056,6 +1128,7 @@ mod icons {
     // notes glyphs). Bootstrap Icons codepoints.
     pub const FOLDER: char = '\u{F3D6}'; // folder outline (entry in collection)
     pub const JOURNAL_TEXT: char = '\u{F4A4}'; // journal-text (entry has notes)
+    pub const TAG: char = '\u{F5B0}'; // tag outline
 
     // Status
     pub const CIRCLE_FILL: char = '\u{F287}'; // filled circle (status indicator)
@@ -1481,6 +1554,8 @@ mod styles {
 // ============================================================================
 static CLIPBOARD_WATCHER: std::sync::OnceLock<Arc<Mutex<Watcher>>> = std::sync::OnceLock::new();
 static POLL_INTERVAL_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(100);
+static GUI_KEYBINDINGS: std::sync::OnceLock<Arc<Mutex<HashMap<String, String>>>> =
+    std::sync::OnceLock::new();
 
 // ============================================================================
 // Application state
@@ -1515,6 +1590,47 @@ pub enum Message {
     CopySelected,
     DeleteEntry(String),
     ToggleFavorite(String),
+    SelectTagFilter(Option<String>),
+    TagInputChanged(String),
+    AddTagToEntry(String),
+    RemoveTagFromEntry {
+        entry_id: String,
+        tag_id: String,
+    },
+    MoveEntryToCollection {
+        entry_id: String,
+        collection_id: Option<String>,
+    },
+    SetEntryGlobalHotkey(String),
+    ClearEntryGlobalHotkey(String),
+    ImageZoomIn,
+    ImageZoomOut,
+    ImageZoomFit,
+    ImageZoomActualSize,
+    OpenImageExternal(String),
+    SettingsMaxEntriesChanged(String),
+    SettingsPollIntervalChanged(String),
+    SettingsThemeSelectedChanged(String),
+    SettingsThemeTextChanged(String),
+    SettingsThemeBorderChanged(String),
+    SettingsThemeMutedChanged(String),
+    ToggleSettingsHideOnBlur,
+    SaveSettings,
+    ToggleMultiSelect,
+    ToggleEntrySelected(String),
+    BulkDeleteSelected,
+    BulkCopyJoined,
+    BulkTagInputChanged(String),
+    BulkTagSelected,
+    BulkMoveSelectedToCollection(String),
+    BulkTransformInputChanged(String),
+    BulkTransformSelected,
+    CollectionNameInputChanged(String),
+    CollectionColorInputChanged(String),
+    SelectCollectionForEdit(String),
+    CreateCollection,
+    SaveCollection,
+    DeleteSelectedCollection,
 
     // Search
     SearchChanged(String),
@@ -1652,6 +1768,34 @@ pub struct DitoxApp {
     /// pin button (`Message::TogglePin`) and persisted to config
     /// only via explicit user edit.
     pinned: bool,
+    /// Phase 4b: all known tags for chips/type-ahead surfaces.
+    all_tags: Vec<Tag>,
+    /// Phase 4b: collections shown as tabs after the built-in filters.
+    all_collections: Vec<Collection>,
+    /// Phase 4b: visible-entry tag cache keyed by entry id.
+    entry_tags: HashMap<String, Vec<Tag>>,
+    /// Phase 4b: active tag filters. Multiple selected tags are ANDed.
+    active_tag_filters: HashSet<String>,
+    /// Phase 4b: side-panel tag editor buffer.
+    tag_input: String,
+    image_zoom: f32,
+    settings_max_entries: String,
+    settings_poll_interval_ms: String,
+    settings_theme_selected: String,
+    settings_theme_text: String,
+    settings_theme_border: String,
+    settings_theme_muted: String,
+    settings_status: Option<String>,
+    multi_select: bool,
+    selected_entry_ids: HashSet<String>,
+    bulk_tag_input: String,
+    bulk_transform_input: String,
+    collection_name_input: String,
+    collection_color_input: String,
+    editing_collection_id: Option<String>,
+    collection_status: Option<String>,
+    config_path: Option<PathBuf>,
+    config_mtime: Option<SystemTime>,
 }
 
 impl DitoxApp {
@@ -1728,6 +1872,7 @@ impl DitoxApp {
         // Initialize static globals for subscriptions (iced 0.14 requirement)
         let _ = CLIPBOARD_WATCHER.set(Arc::new(Mutex::new(watcher)));
         POLL_INTERVAL_MS.store(poll_interval_ms, std::sync::atomic::Ordering::Relaxed);
+        let _ = GUI_KEYBINDINGS.set(Arc::new(Mutex::new(config.keybindings.gui.clone())));
 
         let tabs = vec![
             TabFilter::All,
@@ -1735,12 +1880,24 @@ impl DitoxApp {
             TabFilter::Images,
             TabFilter::Favorites,
             TabFilter::Today,
+            TabFilter::Yesterday,
+            TabFilter::ThisWeek,
+            TabFilter::ThisMonth,
+            TabFilter::Older,
         ];
 
         // Capture before `config` is moved into the struct.
         let initial_pinned = config.gui.pinned;
+        let settings_max_entries = config.general.max_entries.to_string();
+        let settings_poll_interval_ms = config.general.poll_interval_ms.to_string();
+        let settings_theme_selected = config.ui.theme.selected.clone();
+        let settings_theme_text = config.ui.theme.text.clone();
+        let settings_theme_border = config.ui.theme.border.clone();
+        let settings_theme_muted = config.ui.theme.muted.clone();
+        let config_path = Config::get_config_path().ok();
+        let config_mtime = config_path.as_ref().and_then(|p| config_mtime(p));
 
-        let app = DitoxApp {
+        let mut app = DitoxApp {
             db,
             config,
             search_query: String::new(),
@@ -1768,10 +1925,34 @@ impl DitoxApp {
             foreground_tracker,
             synthesizer_chain,
             pinned: initial_pinned,
+            all_tags: Vec::new(),
+            all_collections: Vec::new(),
+            entry_tags: HashMap::new(),
+            active_tag_filters: HashSet::new(),
+            tag_input: String::new(),
+            image_zoom: 1.0,
+            settings_max_entries,
+            settings_poll_interval_ms,
+            settings_theme_selected,
+            settings_theme_text,
+            settings_theme_border,
+            settings_theme_muted,
+            settings_status: None,
+            multi_select: false,
+            selected_entry_ids: HashSet::new(),
+            bulk_tag_input: String::new(),
+            bulk_transform_input: String::new(),
+            collection_name_input: String::new(),
+            collection_color_input: String::new(),
+            editing_collection_id: None,
+            collection_status: None,
+            config_path,
+            config_mtime,
         };
 
         // One-shot mode: don't override the bottom-left position picked by
         // `Position::SpecificWith`. Just focus the search input.
+        app.refresh_tag_cache();
         let initial_task = delayed_focus_search();
 
         (app, initial_task)
@@ -1817,7 +1998,7 @@ impl DitoxApp {
                 Err(_) => break,
             };
 
-            match cmd.command {
+            match cmd.command.clone() {
                 Command::Show => {
                     // Snapshot the previously-focused app BEFORE
                     // showing — once we're visible, the foreground
@@ -1886,6 +2067,45 @@ impl DitoxApp {
                     );
                     cmd.reply_ok_with(&payload);
                 }
+                Command::PasteClip(id) | Command::Emit(id) => match self.entry_by_id(&id) {
+                    Ok(entry) => {
+                        cmd.reply_ok();
+                        tasks.push(self.paste_and_hide(entry));
+                    }
+                    Err(e) => cmd.reply_err(&e),
+                },
+                Command::ReloadConfig => {
+                    self.config_mtime = None;
+                    self.reload_config_if_changed();
+                    cmd.reply_ok();
+                }
+                Command::GetEntry(id) => match self.db.call(move |d| d.get_by_id(&id)) {
+                    Ok(Ok(Some(entry))) => match serde_json::to_string(&entry) {
+                        Ok(json) => cmd.reply_ok_with(&json),
+                        Err(e) => cmd.reply_err(&e.to_string()),
+                    },
+                    Ok(Ok(None)) => cmd.reply_err("not-found"),
+                    Ok(Err(e)) => cmd.reply_err(&e.to_string()),
+                    Err(e) => cmd.reply_err(&e.to_string()),
+                },
+                Command::ListEntries { limit, json } => {
+                    match self.db.call(move |d| d.get_page(0, limit)) {
+                        Ok(Ok(entries)) if json => match serde_json::to_string(&entries) {
+                            Ok(body) => cmd.reply_ok_with(&body),
+                            Err(e) => cmd.reply_err(&e.to_string()),
+                        },
+                        Ok(Ok(entries)) => {
+                            let body = entries
+                                .iter()
+                                .map(|e| format!("{} {}", e.id, e.preview(60)))
+                                .collect::<Vec<_>>()
+                                .join(" | ");
+                            cmd.reply_ok_with(&body);
+                        }
+                        Ok(Err(e)) => cmd.reply_err(&e.to_string()),
+                        Err(e) => cmd.reply_err(&e.to_string()),
+                    }
+                }
             }
         }
 
@@ -1894,6 +2114,17 @@ impl DitoxApp {
         } else {
             Task::batch(tasks)
         }
+    }
+
+    fn entry_by_id(&self, id: &str) -> std::result::Result<Entry, String> {
+        self.db
+            .call({
+                let id = id.to_string();
+                move |d| d.get_by_id(&id)
+            })
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "not-found".to_string())
     }
 
     /// Phase 4 sub-task 4.3: hide the main window via
@@ -2174,6 +2405,349 @@ impl DitoxApp {
                 }
             }
 
+            Message::SelectTagFilter(tag_id) => {
+                if let Some(tag_id) = tag_id {
+                    if self.active_tag_filters.contains(&tag_id) {
+                        self.active_tag_filters.remove(&tag_id);
+                    } else {
+                        self.active_tag_filters.insert(tag_id);
+                    }
+                } else {
+                    self.active_tag_filters.clear();
+                }
+                self.current_page = 0;
+                self.refresh_entries();
+            }
+
+            Message::TagInputChanged(value) => {
+                self.tag_input = value;
+            }
+
+            Message::AddTagToEntry(entry_id) => {
+                let tag_name = self.tag_input.trim().to_string();
+                if !tag_name.is_empty() {
+                    let _ = self.db.call(move |d| {
+                        d.add_tag_to_entry_by_name(&entry_id, &tag_name, None)
+                            .map(|_| ())
+                    });
+                    self.tag_input.clear();
+                    self.refresh_entries();
+                }
+            }
+
+            Message::RemoveTagFromEntry { entry_id, tag_id } => {
+                let _ = self
+                    .db
+                    .call(move |d| d.remove_tag_from_entry(&entry_id, &tag_id));
+                self.refresh_entries();
+            }
+
+            Message::MoveEntryToCollection {
+                entry_id,
+                collection_id,
+            } => {
+                let _ = self
+                    .db
+                    .call(move |d| d.set_entry_collection(&entry_id, collection_id.as_deref()));
+                self.refresh_entries();
+            }
+
+            Message::SetEntryGlobalHotkey(entry_id) => {
+                let idx = self
+                    .entries
+                    .iter()
+                    .position(|e| e.id == entry_id)
+                    .unwrap_or(0)
+                    + 1;
+                let hotkey = format!("ctrl+alt+{}", idx.min(9));
+                let _ = self.db.call({
+                    let entry_id = entry_id.clone();
+                    let hotkey = hotkey.clone();
+                    move |d| d.set_entry_hotkeys(&entry_id, Some(&hotkey), None)
+                });
+                self.regenerate_hyprland_binds();
+                self.refresh_entries();
+            }
+
+            Message::ClearEntryGlobalHotkey(entry_id) => {
+                let _ = self
+                    .db
+                    .call(move |d| d.set_entry_hotkeys(&entry_id, None, None));
+                self.regenerate_hyprland_binds();
+                self.refresh_entries();
+            }
+
+            Message::ImageZoomIn => {
+                self.image_zoom = (self.image_zoom + 0.1).min(4.0);
+            }
+
+            Message::ImageZoomOut => {
+                self.image_zoom = (self.image_zoom - 0.1).max(0.25);
+            }
+
+            Message::ImageZoomFit => {
+                self.image_zoom = 1.0;
+            }
+
+            Message::ImageZoomActualSize => {
+                self.image_zoom = 1.0;
+            }
+
+            Message::OpenImageExternal(path) => {
+                open_path_external(&path);
+            }
+
+            Message::SettingsMaxEntriesChanged(value) => {
+                self.settings_max_entries = value;
+            }
+
+            Message::SettingsPollIntervalChanged(value) => {
+                self.settings_poll_interval_ms = value;
+            }
+
+            Message::SettingsThemeSelectedChanged(value) => {
+                self.settings_theme_selected = value;
+            }
+
+            Message::SettingsThemeTextChanged(value) => {
+                self.settings_theme_text = value;
+            }
+
+            Message::SettingsThemeBorderChanged(value) => {
+                self.settings_theme_border = value;
+            }
+
+            Message::SettingsThemeMutedChanged(value) => {
+                self.settings_theme_muted = value;
+            }
+
+            Message::ToggleSettingsHideOnBlur => {
+                self.config.gui.hide_on_blur = !self.config.gui.hide_on_blur;
+            }
+
+            Message::SaveSettings => {
+                let max_entries = match self.settings_max_entries.trim().parse::<usize>() {
+                    Ok(v) if v > 0 => v,
+                    _ => {
+                        self.settings_status =
+                            Some("max_entries must be a positive integer".into());
+                        return Task::none();
+                    }
+                };
+                let poll_interval = match self.settings_poll_interval_ms.trim().parse::<u64>() {
+                    Ok(v) if v > 0 => v,
+                    _ => {
+                        self.settings_status = Some("poll_interval_ms must be positive".into());
+                        return Task::none();
+                    }
+                };
+
+                self.config.general.max_entries = max_entries;
+                self.config.general.poll_interval_ms = poll_interval;
+                self.config.ui.theme.selected = self.settings_theme_selected.clone();
+                self.config.ui.theme.text = self.settings_theme_text.clone();
+                self.config.ui.theme.border = self.settings_theme_border.clone();
+                self.config.ui.theme.muted = self.settings_theme_muted.clone();
+                self.poll_interval_ms = poll_interval;
+                POLL_INTERVAL_MS.store(poll_interval, std::sync::atomic::Ordering::Relaxed);
+
+                match self.config.save() {
+                    Ok(()) => {
+                        self.config_mtime = self.config_path.as_ref().and_then(|p| config_mtime(p));
+                        self.settings_status = Some("Settings saved".into());
+                        self.refresh_entries();
+                    }
+                    Err(e) => {
+                        self.settings_status = Some(format!("Save failed: {e}"));
+                    }
+                }
+            }
+
+            Message::ToggleMultiSelect => {
+                self.multi_select = !self.multi_select;
+                if !self.multi_select {
+                    self.selected_entry_ids.clear();
+                }
+            }
+
+            Message::ToggleEntrySelected(entry_id) => {
+                if self.selected_entry_ids.contains(&entry_id) {
+                    self.selected_entry_ids.remove(&entry_id);
+                } else {
+                    self.selected_entry_ids.insert(entry_id);
+                }
+            }
+
+            Message::BulkDeleteSelected => {
+                let ids: Vec<String> = self.selected_entry_ids.iter().cloned().collect();
+                let _ = self.db.call(move |d| {
+                    for id in ids {
+                        let _ = d.delete(&id);
+                    }
+                });
+                self.selected_entry_ids.clear();
+                self.refresh_entries();
+            }
+
+            Message::BulkCopyJoined => {
+                let selected = self.selected_entry_ids.clone();
+                let text = self
+                    .entries
+                    .iter()
+                    .filter(|e| selected.contains(&e.id) && e.entry_type == EntryType::Text)
+                    .map(|e| e.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !text.is_empty() {
+                    let _ = Clipboard::set_text(&text);
+                }
+            }
+
+            Message::BulkTagInputChanged(value) => {
+                self.bulk_tag_input = value;
+            }
+
+            Message::BulkTagSelected => {
+                let tag = self.bulk_tag_input.trim().to_string();
+                if !tag.is_empty() {
+                    let ids: Vec<String> = self.selected_entry_ids.iter().cloned().collect();
+                    let _ = self.db.call(move |d| {
+                        for id in ids {
+                            let _ = d.add_tag_to_entry_by_name(&id, &tag, None);
+                        }
+                    });
+                    self.bulk_tag_input.clear();
+                    self.refresh_entries();
+                }
+            }
+
+            Message::BulkMoveSelectedToCollection(collection_id) => {
+                let ids: Vec<String> = self.selected_entry_ids.iter().cloned().collect();
+                let _ = self.db.call(move |d| {
+                    for id in ids {
+                        let _ = d.set_entry_collection(&id, Some(&collection_id));
+                    }
+                });
+                self.refresh_entries();
+            }
+
+            Message::BulkTransformInputChanged(value) => {
+                self.bulk_transform_input = value;
+            }
+
+            Message::BulkTransformSelected => {
+                if let Some(transform) =
+                    ditox_core::transforms::get(self.bulk_transform_input.trim())
+                {
+                    let selected = self.selected_entry_ids.clone();
+                    let text = self
+                        .entries
+                        .iter()
+                        .filter(|e| selected.contains(&e.id) && e.entry_type == EntryType::Text)
+                        .filter_map(|e| transform.apply_text(&e.content).ok())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if !text.is_empty() {
+                        let _ = Clipboard::set_text(&text);
+                    }
+                }
+            }
+
+            Message::CollectionNameInputChanged(value) => {
+                self.collection_name_input = value;
+            }
+
+            Message::CollectionColorInputChanged(value) => {
+                self.collection_color_input = value;
+            }
+
+            Message::SelectCollectionForEdit(collection_id) => {
+                if let Some(collection) =
+                    self.all_collections.iter().find(|c| c.id == collection_id)
+                {
+                    self.collection_name_input = collection.name.clone();
+                    self.collection_color_input = collection.color.clone().unwrap_or_default();
+                    self.editing_collection_id = Some(collection.id.clone());
+                    self.collection_status = None;
+                }
+            }
+
+            Message::CreateCollection => {
+                let name = self.collection_name_input.trim().to_string();
+                if name.is_empty() {
+                    self.collection_status = Some("Collection name is required".into());
+                } else {
+                    let color = non_empty_trimmed(&self.collection_color_input);
+                    let position = self.all_collections.len() as i32;
+                    let collection = Collection::with_options(name, color, None, position);
+                    match self.db.call(move |d| d.create_collection(&collection)) {
+                        Ok(Ok(())) => {
+                            self.collection_name_input.clear();
+                            self.collection_color_input.clear();
+                            self.editing_collection_id = None;
+                            self.collection_status = Some("Collection created".into());
+                            self.refresh_tag_cache();
+                        }
+                        Ok(Err(e)) => self.collection_status = Some(format!("Create failed: {e}")),
+                        Err(e) => self.collection_status = Some(format!("Create failed: {e}")),
+                    }
+                }
+            }
+
+            Message::SaveCollection => {
+                let Some(collection_id) = self.editing_collection_id.clone() else {
+                    self.collection_status = Some("Select a collection first".into());
+                    return Task::none();
+                };
+                let name = self.collection_name_input.trim().to_string();
+                if name.is_empty() {
+                    self.collection_status = Some("Collection name is required".into());
+                } else {
+                    let color = non_empty_trimmed(&self.collection_color_input);
+                    let result = self.db.call(move |d| {
+                        let Some(mut collection) = d.get_collection_by_id(&collection_id)? else {
+                            return Ok(false);
+                        };
+                        collection.name = name;
+                        collection.color = color;
+                        d.update_collection(&collection)
+                    });
+                    match result {
+                        Ok(Ok(true)) => {
+                            self.collection_status = Some("Collection saved".into());
+                            self.refresh_tag_cache();
+                        }
+                        Ok(Ok(false)) => {
+                            self.collection_status = Some("Collection was not found".into());
+                        }
+                        Ok(Err(e)) => self.collection_status = Some(format!("Save failed: {e}")),
+                        Err(e) => self.collection_status = Some(format!("Save failed: {e}")),
+                    }
+                }
+            }
+
+            Message::DeleteSelectedCollection => {
+                let Some(collection_id) = self.editing_collection_id.clone() else {
+                    self.collection_status = Some("Select a collection first".into());
+                    return Task::none();
+                };
+                match self.db.call(move |d| d.delete_collection(&collection_id)) {
+                    Ok(Ok(true)) => {
+                        self.collection_name_input.clear();
+                        self.collection_color_input.clear();
+                        self.editing_collection_id = None;
+                        self.collection_status = Some("Collection deleted".into());
+                        self.refresh_entries();
+                        self.refresh_tag_cache();
+                    }
+                    Ok(Ok(false)) => {
+                        self.collection_status = Some("Collection was not found".into())
+                    }
+                    Ok(Err(e)) => self.collection_status = Some(format!("Delete failed: {e}")),
+                    Err(e) => self.collection_status = Some(format!("Delete failed: {e}")),
+                }
+            }
+
             Message::SearchChanged(query) => {
                 // Ignore input while blocked (prevents capturing "v" from Ctrl+Shift+V)
                 if let Some(blocked_until) = self.input_blocked_until {
@@ -2362,6 +2936,7 @@ impl DitoxApp {
             }
 
             Message::Tick => {
+                self.reload_config_if_changed();
                 if self.visible && self.last_refresh.elapsed() > Duration::from_secs(2) {
                     self.refresh_entries();
                 }
@@ -2589,19 +3164,34 @@ impl DitoxApp {
         let offset = self.current_page * PAGE_SIZE;
         let filter_owned = filter_str.to_string();
         let collection_owned = collection_id.map(|s| s.to_string());
+        let tag_filters = self.active_tag_filters.clone();
         self.entries = self
             .db
             .call(move |d| {
-                d.get_page_filtered(
-                    offset,
-                    PAGE_SIZE,
-                    &filter_owned,
-                    collection_owned.as_deref(),
-                )
+                if tag_filters.len() == 1 {
+                    let tag_id = tag_filters.iter().next().expect("tag exists");
+                    d.get_page_filtered_with_tag(
+                        offset,
+                        PAGE_SIZE,
+                        &filter_owned,
+                        collection_owned.as_deref(),
+                        tag_id,
+                    )
+                } else {
+                    d.get_page_filtered(
+                        offset,
+                        PAGE_SIZE,
+                        &filter_owned,
+                        collection_owned.as_deref(),
+                    )
+                }
                 .unwrap_or_default()
             })
             .unwrap_or_default();
+        let entries = std::mem::take(&mut self.entries);
+        self.entries = self.apply_tag_filter_to_entries(entries);
         self.selected_index = 0;
+        self.refresh_tag_cache();
     }
 
     // ========================================================================
@@ -2664,11 +3254,21 @@ impl DitoxApp {
         let title_bar = self.view_title_bar();
         let search_section = self.view_search();
         let tab_bar = self.view_tabs();
+        let tag_bar = self.view_tag_filter_bar();
         let entry_list = self.view_entries();
+        let bulk_bar = self.view_bulk_bar();
         let status_bar = self.view_status();
 
-        let content =
-            column![title_bar, search_section, tab_bar, entry_list, status_bar,].spacing(0);
+        let content = column![
+            title_bar,
+            search_section,
+            tab_bar,
+            tag_bar,
+            entry_list,
+            bulk_bar,
+            status_bar,
+        ]
+        .spacing(0);
 
         container(content)
             .width(Length::Fill)
@@ -2789,6 +3389,120 @@ impl DitoxApp {
         .into()
     }
 
+    fn view_tag_filter_bar(&self) -> Element<'_, Message> {
+        let interactive = self.view_mode == ViewMode::Main;
+        let mut chips: Vec<Element<'_, Message>> = Vec::new();
+
+        let all_active = self.active_tag_filters.is_empty();
+        chips.push(
+            button(text("All tags").size(10))
+                .style(if all_active {
+                    styles::tab_active
+                } else {
+                    styles::tab_inactive
+                })
+                .on_press_maybe(interactive.then_some(Message::SelectTagFilter(None)))
+                .padding([4, 8])
+                .into(),
+        );
+
+        for tag in self.all_tags.iter().take(8) {
+            let active = self.active_tag_filters.contains(&tag.id);
+            let label = tag
+                .color
+                .as_ref()
+                .map(|color| format!("{} #{}", color, tag.name))
+                .unwrap_or_else(|| format!("#{}", tag.name));
+            chips.push(
+                button(text(label).size(10))
+                    .style(if active {
+                        styles::tab_active
+                    } else {
+                        styles::tab_inactive
+                    })
+                    .on_press_maybe(
+                        interactive.then_some(Message::SelectTagFilter(Some(tag.id.clone()))),
+                    )
+                    .padding([4, 8])
+                    .into(),
+            );
+        }
+
+        container(Row::with_children(chips).spacing(4))
+            .padding([4, 12])
+            .width(Length::Fill)
+            .into()
+    }
+
+    fn view_bulk_bar(&self) -> Element<'_, Message> {
+        if !self.multi_select {
+            return container(
+                row![
+                    button(text("Multi-select").size(10))
+                        .style(styles::tab_inactive)
+                        .on_press(Message::ToggleMultiSelect)
+                        .padding([4, 8]),
+                    Space::new().width(Length::Fill),
+                ]
+                .align_y(iced::Alignment::Center),
+            )
+            .padding([4, 12])
+            .into();
+        }
+
+        let count = self.selected_entry_ids.len();
+        let mut row_items: Row<'_, Message> = row![
+            button(text("Done").size(10))
+                .style(styles::tab_active)
+                .on_press(Message::ToggleMultiSelect)
+                .padding([4, 8]),
+            text(format!("{} selected", count))
+                .size(10)
+                .color(colors::TEXT_MUTED),
+            button(text("Copy joined").size(10))
+                .style(styles::primary_btn)
+                .on_press(Message::BulkCopyJoined)
+                .padding([4, 8]),
+            button(text("Delete").size(10))
+                .style(styles::delete_btn)
+                .on_press(Message::BulkDeleteSelected)
+                .padding([4, 8]),
+            text_input("tag", &self.bulk_tag_input)
+                .on_input(Message::BulkTagInputChanged)
+                .padding(5)
+                .size(10)
+                .width(Length::Fixed(64.0))
+                .style(styles::search_input),
+            button(text("Tag").size(10))
+                .style(styles::tab_inactive)
+                .on_press(Message::BulkTagSelected)
+                .padding([4, 8]),
+            text_input("transform", &self.bulk_transform_input)
+                .on_input(Message::BulkTransformInputChanged)
+                .padding(5)
+                .size(10)
+                .width(Length::Fixed(82.0))
+                .style(styles::search_input),
+            button(text("Apply").size(10))
+                .style(styles::tab_inactive)
+                .on_press(Message::BulkTransformSelected)
+                .padding([4, 8]),
+        ]
+        .spacing(4)
+        .align_y(iced::Alignment::Center);
+
+        for collection in &self.all_collections {
+            row_items = row_items.push(
+                button(text(format!("Move: {}", collection.name)).size(10))
+                    .style(styles::tab_inactive)
+                    .on_press(Message::BulkMoveSelectedToCollection(collection.id.clone()))
+                    .padding([4, 8]),
+            );
+        }
+
+        container(row_items).padding([4, 12]).into()
+    }
+
     fn view_entries(&self) -> Element<'_, Message> {
         if self.entries.is_empty() {
             container(
@@ -2828,7 +3542,9 @@ impl DitoxApp {
         let entry_id = entry.id.clone();
         let entry_id_fav = entry.id.clone();
         let entry_id_preview = entry.id.clone();
+        let entry_id_select = entry.id.clone();
         let interactive = self.view_mode == ViewMode::Main;
+        let is_bulk_selected = self.selected_entry_ids.contains(&entry.id);
 
         // Phase 4 sub-task 4.10: hotkey number prefix for the first
         // 10 entries. `1`..`9` map to indices 0..8; `0` maps to
@@ -2875,6 +3591,11 @@ impl DitoxApp {
             } else {
                 None
             };
+        let tag_glyph: Option<Element<'_, Message>> = self
+            .entry_tags
+            .get(&entry.id)
+            .filter(|tags| !tags.is_empty())
+            .map(|_| icon(icons::TAG).size(11).color(colors::TEXT_MUTED).into());
 
         // Time
         let time = text(entry.relative_time())
@@ -2911,6 +3632,9 @@ impl DitoxApp {
                     img_row = img_row.push(g);
                 }
                 if let Some(g) = notes_glyph {
+                    img_row = img_row.push(g);
+                }
+                if let Some(g) = tag_glyph {
                     img_row = img_row.push(g);
                 }
                 img_row.push(time)
@@ -2972,6 +3696,9 @@ impl DitoxApp {
                 if let Some(g) = notes_glyph {
                     row_items = row_items.push(g);
                 }
+                if let Some(g) = tag_glyph {
+                    row_items = row_items.push(g);
+                }
 
                 row_items.push(time)
             }
@@ -2982,14 +3709,16 @@ impl DitoxApp {
         // without copying. `entry_id_preview` is intentionally unused now
         // but kept to minimise churn; suppressed below.
         let _ = &entry_id_preview;
-        let on_press = if interactive {
+        let on_press = if interactive && self.multi_select {
+            Some(Message::ToggleEntrySelected(entry_id_select))
+        } else if interactive {
             Some(Message::CopyEntry(index))
         } else {
             None
         };
 
         let entry_btn = button(entry_content)
-            .style(if is_selected {
+            .style(if is_selected || is_bulk_selected {
                 styles::entry_row_selected
             } else {
                 styles::entry_row
@@ -3054,7 +3783,24 @@ impl DitoxApp {
 
         let entry_with_tooltip = tooltip(entry_btn, tooltip_content, tooltip::Position::Right);
 
-        row![entry_with_tooltip, fav_btn, del_btn]
+        let selected_mark: Element<'_, Message> = if self.multi_select {
+            button(text(if is_bulk_selected { "x" } else { " " }).size(10))
+                .style(if is_bulk_selected {
+                    styles::tab_active
+                } else {
+                    styles::tab_inactive
+                })
+                .on_press_maybe(
+                    interactive.then_some(Message::ToggleEntrySelected(entry.id.clone())),
+                )
+                .padding([4, 7])
+                .width(Length::Fixed(28.0))
+                .into()
+        } else {
+            Space::new().width(0).into()
+        };
+
+        row![selected_mark, entry_with_tooltip, fav_btn, del_btn]
             .spacing(4)
             .align_y(iced::Alignment::Center)
             .padding([0, 4])
@@ -3142,12 +3888,15 @@ impl DitoxApp {
 
     fn view_settings(&self) -> Element<'_, Message> {
         let startup_enabled = crate::startup::is_startup_enabled();
+        let status: Element<'_, Message> = self
+            .settings_status
+            .as_ref()
+            .map(|s| text(s.clone()).size(11).color(colors::TEXT_MUTED).into())
+            .unwrap_or_else(|| Space::new().height(0).into());
 
         let content = column![
-            // Header
             text("Settings").size(16).color(colors::TEXT_PRIMARY),
-            Space::new().height(16),
-            // Startup toggle
+            Space::new().height(10),
             row![
                 text("Run on startup")
                     .size(12)
@@ -3164,36 +3913,187 @@ impl DitoxApp {
             ]
             .align_y(iced::Alignment::Center),
             Space::new().height(10),
-            // Poll interval
             row![
-                text("Poll interval").size(12).color(colors::TEXT_SECONDARY),
+                text("Hide on blur").size(12).color(colors::TEXT_SECONDARY),
                 Space::new().width(Length::Fill),
-                text(format!("{}ms", self.poll_interval_ms))
-                    .size(12)
-                    .color(colors::TEXT_PRIMARY),
+                button(
+                    text(if self.config.gui.hide_on_blur {
+                        "ON"
+                    } else {
+                        "OFF"
+                    })
+                    .size(11)
+                )
+                .style(if self.config.gui.hide_on_blur {
+                    styles::tab_active
+                } else {
+                    styles::tab_inactive
+                })
+                .on_press(Message::ToggleSettingsHideOnBlur)
+                .padding([4, 12]),
             ]
             .align_y(iced::Alignment::Center),
             Space::new().height(10),
-            // Max entries
+            text("General").size(12).color(colors::TEXT_SECONDARY),
             row![
                 text("Max entries").size(12).color(colors::TEXT_SECONDARY),
                 Space::new().width(Length::Fill),
-                text(format!("{}", self.config.general.max_entries))
-                    .size(12)
-                    .color(colors::TEXT_PRIMARY),
+                text_input("500", &self.settings_max_entries)
+                    .on_input(Message::SettingsMaxEntriesChanged)
+                    .padding(6)
+                    .size(11)
+                    .width(Length::Fixed(96.0))
+                    .style(styles::search_input),
             ]
             .align_y(iced::Alignment::Center),
-            Space::new().height(20),
-            // Close button
-            button(text("Close").size(11))
-                .style(styles::primary_btn)
-                .on_press(Message::HideSettings)
-                .padding([8, 24]),
+            row![
+                text("Poll interval ms")
+                    .size(12)
+                    .color(colors::TEXT_SECONDARY),
+                Space::new().width(Length::Fill),
+                text_input("250", &self.settings_poll_interval_ms)
+                    .on_input(Message::SettingsPollIntervalChanged)
+                    .padding(6)
+                    .size(11)
+                    .width(Length::Fixed(96.0))
+                    .style(styles::search_input),
+            ]
+            .align_y(iced::Alignment::Center),
+            Space::new().height(10),
+            text("Theme").size(12).color(colors::TEXT_SECONDARY),
+            self.view_setting_text(
+                "Selected",
+                &self.settings_theme_selected,
+                Message::SettingsThemeSelectedChanged
+            ),
+            self.view_setting_text(
+                "Text",
+                &self.settings_theme_text,
+                Message::SettingsThemeTextChanged
+            ),
+            self.view_setting_text(
+                "Border",
+                &self.settings_theme_border,
+                Message::SettingsThemeBorderChanged
+            ),
+            self.view_setting_text(
+                "Muted",
+                &self.settings_theme_muted,
+                Message::SettingsThemeMutedChanged
+            ),
+            Space::new().height(10),
+            self.view_collections_settings(),
+            Space::new().height(10),
+            status,
+            row![
+                button(text("Save").size(11))
+                    .style(styles::primary_btn)
+                    .on_press(Message::SaveSettings)
+                    .padding([8, 20]),
+                Space::new().width(Length::Fill),
+                button(text("Close").size(11))
+                    .style(styles::tab_inactive)
+                    .on_press(Message::HideSettings)
+                    .padding([8, 20]),
+            ]
+            .align_y(iced::Alignment::Center),
         ]
+        .spacing(6)
         .padding(20)
-        .width(Length::Fixed(280.0));
+        .width(Length::Fixed(380.0));
 
-        container(content).style(styles::modal).into()
+        container(scrollable(content).height(Length::Fixed(500.0)))
+            .style(styles::modal)
+            .into()
+    }
+
+    fn view_collections_settings(&self) -> Element<'_, Message> {
+        let status: Element<'_, Message> = self
+            .collection_status
+            .as_ref()
+            .map(|s| text(s.clone()).size(11).color(colors::TEXT_MUTED).into())
+            .unwrap_or_else(|| Space::new().height(0).into());
+
+        let mut collection_list = Column::new().spacing(4);
+        for collection in &self.all_collections {
+            let selected = self.editing_collection_id.as_deref() == Some(collection.id.as_str());
+            let label = collection
+                .color
+                .as_ref()
+                .map(|color| format!("{} {}", color, collection.name))
+                .unwrap_or_else(|| collection.name.clone());
+            collection_list = collection_list.push(
+                button(text(label).size(11))
+                    .style(if selected {
+                        styles::tab_active
+                    } else {
+                        styles::tab_inactive
+                    })
+                    .on_press(Message::SelectCollectionForEdit(collection.id.clone()))
+                    .padding([4, 8])
+                    .width(Length::Fill),
+            );
+        }
+
+        column![
+            text("Collections").size(12).color(colors::TEXT_SECONDARY),
+            collection_list,
+            row![
+                text_input("name", &self.collection_name_input)
+                    .on_input(Message::CollectionNameInputChanged)
+                    .padding(6)
+                    .size(11)
+                    .width(Length::Fill)
+                    .style(styles::search_input),
+                text_input("#rrggbb", &self.collection_color_input)
+                    .on_input(Message::CollectionColorInputChanged)
+                    .padding(6)
+                    .size(11)
+                    .width(Length::Fixed(92.0))
+                    .style(styles::search_input),
+            ]
+            .spacing(4)
+            .align_y(iced::Alignment::Center),
+            row![
+                button(text("Create").size(11))
+                    .style(styles::primary_btn)
+                    .on_press(Message::CreateCollection)
+                    .padding([5, 10]),
+                button(text("Save").size(11))
+                    .style(styles::tab_inactive)
+                    .on_press(Message::SaveCollection)
+                    .padding([5, 10]),
+                button(text("Delete").size(11))
+                    .style(styles::delete_btn)
+                    .on_press(Message::DeleteSelectedCollection)
+                    .padding([5, 10]),
+            ]
+            .spacing(4)
+            .align_y(iced::Alignment::Center),
+            status,
+        ]
+        .spacing(6)
+        .into()
+    }
+
+    fn view_setting_text(
+        &self,
+        label: &'static str,
+        value: &str,
+        on_input: fn(String) -> Message,
+    ) -> Element<'_, Message> {
+        row![
+            text(label).size(12).color(colors::TEXT_SECONDARY),
+            Space::new().width(Length::Fill),
+            text_input("#rrggbb", value)
+                .on_input(on_input)
+                .padding(6)
+                .size(11)
+                .width(Length::Fixed(120.0))
+                .style(styles::search_input),
+        ]
+        .align_y(iced::Alignment::Center)
+        .into()
     }
 
     fn view_help(&self) -> Element<'_, Message> {
@@ -3315,16 +4215,48 @@ impl DitoxApp {
                 EntryType::Image => {
                     let path_buf = entry.image_path().unwrap_or_default();
                     let path = path_buf.to_string_lossy().into_owned();
+                    let image_height = (180.0 * self.image_zoom).clamp(45.0, 720.0);
                     if path_buf.exists() {
-                        container(
+                        let image = container(
                             iced_image(iced_image::Handle::from_path(&path))
                                 .content_fit(ContentFit::Contain)
                                 .width(Length::Fill)
-                                .height(Length::Fixed(180.0)),
+                                .height(Length::Fixed(image_height)),
                         )
                         .width(Length::Fill)
                         .style(styles::preview_image_container)
-                        .padding(6)
+                        .padding(6);
+                        column![
+                            row![
+                                button(text("-").size(11))
+                                    .style(styles::tab_inactive)
+                                    .on_press(Message::ImageZoomOut)
+                                    .padding([3, 8]),
+                                text(format!("{}%", (self.image_zoom * 100.0).round() as u32))
+                                    .size(10)
+                                    .color(colors::TEXT_MUTED),
+                                button(text("+").size(11))
+                                    .style(styles::tab_inactive)
+                                    .on_press(Message::ImageZoomIn)
+                                    .padding([3, 8]),
+                                button(text("Fit").size(10))
+                                    .style(styles::tab_inactive)
+                                    .on_press(Message::ImageZoomFit)
+                                    .padding([3, 8]),
+                                button(text("Actual").size(10))
+                                    .style(styles::tab_inactive)
+                                    .on_press(Message::ImageZoomActualSize)
+                                    .padding([3, 8]),
+                                button(text("Open").size(10))
+                                    .style(styles::tab_inactive)
+                                    .on_press(Message::OpenImageExternal(path.clone()))
+                                    .padding([3, 8]),
+                            ]
+                            .spacing(4)
+                            .align_y(iced::Alignment::Center),
+                            image,
+                        ]
+                        .spacing(6)
                         .into()
                     } else {
                         container(
@@ -3371,6 +4303,109 @@ impl DitoxApp {
                 }
             };
 
+            let current_tags = self.entry_tags.get(&entry.id).cloned().unwrap_or_default();
+            let tag_chips: Vec<Element<'_, Message>> = if current_tags.is_empty() {
+                vec![text("No tags").size(10).color(colors::TEXT_MUTED).into()]
+            } else {
+                current_tags
+                    .into_iter()
+                    .map(|tag| {
+                        button(text(format!("#{} x", tag.name)).size(10))
+                            .style(styles::tab_inactive)
+                            .on_press(Message::RemoveTagFromEntry {
+                                entry_id: entry.id.clone(),
+                                tag_id: tag.id,
+                            })
+                            .padding([3, 6])
+                            .into()
+                    })
+                    .collect()
+            };
+
+            let tag_editor = column![
+                text("Tags").size(11).color(colors::TEXT_SECONDARY),
+                Row::with_children(tag_chips).spacing(4),
+                row![
+                    text_input("add tag", &self.tag_input)
+                        .on_input(Message::TagInputChanged)
+                        .padding(6)
+                        .size(11)
+                        .style(styles::search_input),
+                    button(text("Add").size(10))
+                        .style(styles::primary_btn)
+                        .on_press(Message::AddTagToEntry(entry.id.clone()))
+                        .padding([5, 8]),
+                ]
+                .spacing(4)
+                .align_y(iced::Alignment::Center),
+            ]
+            .spacing(6);
+
+            let current_collection = entry.collection_id.as_deref();
+            let mut collection_buttons: Vec<Element<'_, Message>> = Vec::new();
+            collection_buttons.push(
+                button(text("Uncollected").size(10))
+                    .style(if current_collection.is_none() {
+                        styles::tab_active
+                    } else {
+                        styles::tab_inactive
+                    })
+                    .on_press(Message::MoveEntryToCollection {
+                        entry_id: entry.id.clone(),
+                        collection_id: None,
+                    })
+                    .padding([3, 6])
+                    .into(),
+            );
+            for collection in self.all_collections.iter().take(5) {
+                let active = current_collection == Some(collection.id.as_str());
+                collection_buttons.push(
+                    button(text(collection.name.clone()).size(10))
+                        .style(if active {
+                            styles::tab_active
+                        } else {
+                            styles::tab_inactive
+                        })
+                        .on_press(Message::MoveEntryToCollection {
+                            entry_id: entry.id.clone(),
+                            collection_id: Some(collection.id.clone()),
+                        })
+                        .padding([3, 6])
+                        .into(),
+                );
+            }
+            let collection_editor = column![
+                text("Collection").size(11).color(colors::TEXT_SECONDARY),
+                Row::with_children(collection_buttons).spacing(4),
+            ]
+            .spacing(6);
+
+            let hotkey_editor = column![
+                text("Hotkey").size(11).color(colors::TEXT_SECONDARY),
+                row![
+                    text(
+                        entry
+                            .global_hotkey
+                            .clone()
+                            .unwrap_or_else(|| "Not bound".to_string())
+                    )
+                    .size(10)
+                    .color(colors::TEXT_MUTED),
+                    Space::new().width(Length::Fill),
+                    button(text("Bind").size(10))
+                        .style(styles::tab_inactive)
+                        .on_press(Message::SetEntryGlobalHotkey(entry.id.clone()))
+                        .padding([3, 6]),
+                    button(text("Clear").size(10))
+                        .style(styles::delete_btn)
+                        .on_press(Message::ClearEntryGlobalHotkey(entry.id.clone()))
+                        .padding([3, 6]),
+                ]
+                .spacing(4)
+                .align_y(iced::Alignment::Center),
+            ]
+            .spacing(6);
+
             // Action buttons: Copy + Delete (compact for the narrow panel).
             let actions = column![
                 button(
@@ -3403,6 +4438,12 @@ impl DitoxApp {
                 subhead,
                 Space::new().height(10),
                 body,
+                Space::new().height(10),
+                tag_editor,
+                Space::new().height(10),
+                collection_editor,
+                Space::new().height(10),
+                hotkey_editor,
                 Space::new().height(10),
                 actions,
                 Space::new().height(Length::Fill),
@@ -3491,9 +4532,23 @@ impl DitoxApp {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let keyboard_sub = event::listen_with(|event, _status, _window| {
+        let keyboard_sub = event::listen_with(|event, status, _window| {
+            if status == event::Status::Captured {
+                return None;
+            }
             if let iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event
             {
+                if let Some(combo) = gui_key_combo(&key, modifiers) {
+                    if let Some(bindings) = GUI_KEYBINDINGS.get() {
+                        if let Ok(bindings) = bindings.lock() {
+                            if let Some(action) = bindings.get(&combo) {
+                                if let Some(message) = gui_action_message(action) {
+                                    return Some(message);
+                                }
+                            }
+                        }
+                    }
+                }
                 match key.as_ref() {
                     keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::HideWindow),
                     keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some(Message::MoveUp),
@@ -3531,6 +4586,7 @@ impl DitoxApp {
                         let s: &str = c;
                         match s {
                             "?" => Some(Message::ToggleHelp),
+                            "m" | "M" => Some(Message::ToggleMultiSelect),
                             _ => None,
                         }
                     }
@@ -3667,23 +4723,37 @@ impl DitoxApp {
             // Normal pagination. Owned strings so the closure is `'static`.
             let filter_owned = filter.to_string();
             let collection_owned = collection_id.map(|s| s.to_string());
+            let tag_filters = self.active_tag_filters.clone();
             let offset = self.current_page * self.config.general.max_entries;
             let limit = self.config.general.max_entries;
 
             let f = filter_owned.clone();
             let c = collection_owned.clone();
-            if let Ok(Ok(entries)) = self
-                .db
-                .call(move |d| d.get_page_filtered(offset, limit, &f, c.as_deref()))
-            {
-                self.entries = entries;
+            let tag_for_entries = tag_filters.clone();
+            if let Ok(Ok(entries)) = self.db.call(move |d| {
+                if tag_for_entries.len() == 1 {
+                    let tag_id = tag_for_entries.iter().next().expect("tag exists");
+                    d.get_page_filtered_with_tag(offset, limit, &f, c.as_deref(), tag_id)
+                } else {
+                    d.get_page_filtered(offset, limit, &f, c.as_deref())
+                }
+            }) {
+                self.entries = self.apply_tag_filter_to_entries(entries);
             }
             // Update counts
-            if let Ok(Ok(count)) = self
-                .db
-                .call(move |d| d.count_filtered(&filter_owned, collection_owned.as_deref()))
-            {
-                self.total_count = count;
+            if let Ok(Ok(count)) = self.db.call(move |d| {
+                if tag_filters.len() == 1 {
+                    let tag_id = tag_filters.iter().next().expect("tag exists");
+                    d.count_filtered_with_tag(&filter_owned, collection_owned.as_deref(), tag_id)
+                } else {
+                    d.count_filtered(&filter_owned, collection_owned.as_deref())
+                }
+            }) {
+                self.total_count = if self.active_tag_filters.len() > 1 {
+                    self.entries.len()
+                } else {
+                    count
+                };
             }
         } else {
             // Search mode - parse search-prefix scope (Phase 3 sub-task 3.6)
@@ -3706,6 +4776,7 @@ impl DitoxApp {
             });
             match result {
                 Ok(Ok(entries)) => {
+                    let entries = self.apply_tag_filter_to_entries(entries);
                     self.total_count = entries.len();
                     self.entries = entries;
                     // Reset to first page for search results
@@ -3729,6 +4800,124 @@ impl DitoxApp {
         }
 
         self.update_image_cache();
+        self.refresh_tag_cache();
+    }
+
+    fn apply_tag_filter_to_entries(&self, entries: Vec<Entry>) -> Vec<Entry> {
+        if self.active_tag_filters.is_empty() {
+            return entries;
+        }
+
+        entries
+            .into_iter()
+            .filter(|entry| {
+                self.db
+                    .call({
+                        let entry_id = entry.id.clone();
+                        let tag_ids = self.active_tag_filters.clone();
+                        move |d| {
+                            d.get_tags_for_entry(&entry_id).map(|tags| {
+                                let entry_tag_ids: HashSet<String> =
+                                    tags.into_iter().map(|tag| tag.id).collect();
+                                tag_ids.iter().all(|tag_id| entry_tag_ids.contains(tag_id))
+                            })
+                        }
+                    })
+                    .ok()
+                    .and_then(Result::ok)
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
+
+    fn refresh_tag_cache(&mut self) {
+        self.all_tags = self
+            .db
+            .call(|d| d.get_all_tags().unwrap_or_default())
+            .unwrap_or_default();
+        self.all_collections = self
+            .db
+            .call(|d| d.get_all_collections().unwrap_or_default())
+            .unwrap_or_default();
+
+        let mut tabs = vec![
+            TabFilter::All,
+            TabFilter::Text,
+            TabFilter::Images,
+            TabFilter::Favorites,
+            TabFilter::Today,
+            TabFilter::Yesterday,
+            TabFilter::ThisWeek,
+            TabFilter::ThisMonth,
+            TabFilter::Older,
+        ];
+        tabs.extend(self.all_collections.iter().map(|c| TabFilter::Collection {
+            id: c.id.clone(),
+            name: c.name.clone(),
+        }));
+        tabs.push(TabFilter::Uncollected);
+        self.tabs = tabs;
+        if self.active_tab >= self.tabs.len() {
+            self.active_tab = 0;
+        }
+
+        let entry_ids: Vec<String> = self.entries.iter().map(|e| e.id.clone()).collect();
+        let tags = self
+            .db
+            .call(move |d| {
+                let mut out = HashMap::new();
+                for id in entry_ids {
+                    out.insert(id.clone(), d.get_tags_for_entry(&id).unwrap_or_default());
+                }
+                out
+            })
+            .unwrap_or_default();
+        self.entry_tags = tags;
+    }
+
+    fn reload_config_if_changed(&mut self) {
+        let Some(path) = self.config_path.clone() else {
+            return;
+        };
+        let Some(mtime) = config_mtime(&path) else {
+            return;
+        };
+        if self.config_mtime.is_some_and(|old| old >= mtime) {
+            return;
+        }
+        match Config::load() {
+            Ok(config) => {
+                self.config = config;
+                self.config_mtime = Some(mtime);
+                self.poll_interval_ms = self.config.general.poll_interval_ms;
+                POLL_INTERVAL_MS.store(
+                    self.config.general.poll_interval_ms,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                if let Some(bindings) = GUI_KEYBINDINGS.get() {
+                    if let Ok(mut bindings) = bindings.lock() {
+                        *bindings = self.config.keybindings.gui.clone();
+                    }
+                }
+                self.settings_max_entries = self.config.general.max_entries.to_string();
+                self.settings_poll_interval_ms = self.config.general.poll_interval_ms.to_string();
+                self.settings_theme_selected = self.config.ui.theme.selected.clone();
+                self.settings_theme_text = self.config.ui.theme.text.clone();
+                self.settings_theme_border = self.config.ui.theme.border.clone();
+                self.settings_theme_muted = self.config.ui.theme.muted.clone();
+                self.refresh_entries();
+            }
+            Err(e) => tracing::warn!("failed to hot-reload config: {e}"),
+        }
+    }
+
+    fn regenerate_hyprland_binds(&self) {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if let Ok(Ok(entries)) = self.db.call(|d| d.entries_with_global_hotkeys()) {
+            if let Err(e) = crate::hyprland_config::write_clip_binds(&entries) {
+                tracing::warn!(error = %e, "failed to regenerate Hyprland clip binds");
+            }
+        }
     }
 
     /// Update image cache for currently visible entries. The cache is keyed

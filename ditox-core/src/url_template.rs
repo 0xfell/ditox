@@ -28,11 +28,11 @@
 //! are tiny and we'd rather keep workspace deps lean.
 
 use crate::error::{DitoxError, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Configurable URL templates. Surfaces in the
 /// `[actions]` section of `config.toml`.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct ActionsConfig {
     /// Template for the "Translate" action. Default opens Google

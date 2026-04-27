@@ -594,7 +594,19 @@ impl Watcher {
     /// image on the clipboard; we want the image). Phase 1 will
     /// extend this to capture *all* formats per clip rather than
     /// picking one — see `docs/tasks/planned/023-phase-1-multi-format-capture.md`.
-    fn process_clip(&mut self, clip: RawClip) -> Result<bool> {
+    fn process_clip(&mut self, mut clip: RawClip) -> Result<bool> {
+        let script_engine = crate::scripting::ScriptEngine::new();
+        let capture_dir = crate::scripting::scripts_root()?.join("capture");
+        for script in script_engine.load_dir(&capture_dir)? {
+            match script_engine.run_capture_script(&script, &mut clip) {
+                Ok(crate::scripting::Decision::Continue) => {}
+                Ok(crate::scripting::Decision::Drop) => {
+                    info!(script = %script.id, "capture script dropped clip");
+                    return Ok(false);
+                }
+                Err(e) => warn!(script = %script.id, error = %e, "capture script failed"),
+            }
+        }
         let h = clip_hash(&clip);
         if self.last_hash.as_ref() == Some(&h) {
             return Ok(false);
@@ -641,6 +653,7 @@ impl Watcher {
         // clip's text content. Image-only clips skip rule evaluation
         // (rules currently match against text bodies; image-aware
         // rules can land in a Phase 4 follow-up).
+        let mut matched_tag: Option<String> = None;
         if !self.filters.is_empty() {
             // Get the text content if any. Filter rules see the raw
             // text payload as the watcher would otherwise insert it.
@@ -675,11 +688,12 @@ impl Watcher {
                                 "filter rule matched: transform action not yet wired; capturing as-is"
                             );
                         }
-                        FilterAction::Tag(_) => {
+                        FilterAction::Tag(name) => {
+                            matched_tag = Some(name.clone());
                             info!(
                                 rule = %matched.rule.name,
                                 action = %matched.rule.action.to_storage(),
-                                "filter rule matched: tags not yet implemented (Phase 4b); capturing without tag"
+                                "filter rule matched: will tag captured entry"
                             );
                         }
                     }
@@ -716,6 +730,10 @@ impl Watcher {
                     extension.to_string(),
                 );
                 self.db.insert(&entry)?;
+                if let Some(tag_name) = matched_tag.as_deref() {
+                    self.db
+                        .add_tag_to_entry_by_name(&entry.id, tag_name, None)?;
+                }
                 info!(
                     "captured image entry: {} bytes ({}.{})",
                     entry.byte_size,
@@ -746,6 +764,10 @@ impl Watcher {
             if !self.db.exists_by_hash(&inner_hash)? {
                 let entry = Entry::new_text(text);
                 self.db.insert(&entry)?;
+                if let Some(tag_name) = matched_tag.as_deref() {
+                    self.db
+                        .add_tag_to_entry_by_name(&entry.id, tag_name, None)?;
+                }
                 info!("captured text entry: {} bytes", entry.byte_size);
                 self.run_cleanup()?;
                 true

@@ -89,7 +89,7 @@ fn run() -> Result<()> {
     // -----------------------------------------------------------------
 
     // Step 1: forward action to the daemon if one is running.
-    match ipc::try_send_to_daemon(action) {
+    match ipc::try_send_to_daemon(action.clone()) {
         SendOutcome::Sent { reply } => {
             tracing::info!(action = ?action, %reply, "forwarded to running daemon");
             // A non-OK reply is surfaced to the user so they can react.
@@ -139,7 +139,7 @@ fn run() -> Result<()> {
         Some(file) => file,
         None => {
             tracing::debug!("daemon lock contended; retrying IPC send");
-            match ipc::try_send_to_daemon(action) {
+            match ipc::try_send_to_daemon(action.clone()) {
                 SendOutcome::Sent { reply } => {
                     tracing::info!(%reply, "race resolved; forwarded to other daemon");
                     return Ok(());

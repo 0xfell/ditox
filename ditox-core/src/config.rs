@@ -1,6 +1,6 @@
 use crate::error::{DitoxError, Result};
 use directories::ProjectDirs;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -80,7 +80,7 @@ pub fn expand_path(input: impl AsRef<str>) -> PathBuf {
     PathBuf::from(out)
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 #[derive(Default)]
 pub struct Config {
@@ -106,7 +106,7 @@ pub struct Config {
 ///
 /// Phase 5 will add per-clip hotkey config; that lives in its
 /// own block.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct GuiConfig {
     /// Where to anchor the launcher when shown. Defaults to
@@ -155,7 +155,7 @@ impl GuiConfig {
 
 /// Position modes for the launcher panel. Matches
 /// `docs/notes/ui-replication.md::A4`.
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(rename_all = "snake_case", tag = "mode")]
 pub enum GuiPosition {
     /// Bottom-left of the active monitor, 24 px margin. The
@@ -191,7 +191,7 @@ pub enum GuiPosition {
     },
 }
 
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum HorizontalAnchor {
     #[default]
@@ -200,7 +200,7 @@ pub enum HorizontalAnchor {
     Right,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum VerticalAnchor {
     Top,
@@ -209,7 +209,7 @@ pub enum VerticalAnchor {
     Bottom,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct GeneralConfig {
     pub max_entries: usize,
@@ -225,7 +225,7 @@ impl Default for GeneralConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 #[derive(Default)]
 pub struct StorageConfig {
@@ -242,7 +242,7 @@ impl StorageConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct UiConfig {
     pub show_preview: bool,
@@ -254,7 +254,7 @@ pub struct UiConfig {
     pub font_size: Option<(u16, u16)>,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum GraphicsProtocol {
     Kitty,
@@ -275,7 +275,7 @@ impl Default for UiConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum DateFormat {
     #[default]
@@ -283,7 +283,7 @@ pub enum DateFormat {
     Iso,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct ThemeConfig {
     pub selected: String,
@@ -308,9 +308,11 @@ impl Default for ThemeConfig {
 /// Format: "key" = "action"
 /// Keys: "q", "ctrl+d", "alt+x", "shift+g", "enter", "esc", "tab", "space", "f1"-"f12"
 /// Actions: see `Action::config_name()` for all available actions
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 pub struct KeybindingsConfig {
+    /// GUI-specific overrides, serialized as `[keybindings.gui]`.
+    pub gui: HashMap<String, String>,
     /// Custom key bindings that override defaults
     /// Example: { "p" = "toggle_preview", "ctrl+x" = "delete" }
     #[serde(flatten)]
@@ -326,7 +328,7 @@ pub struct KeybindingsConfig {
 /// capture every format the OS publishes, drop a clip if any single
 /// format or the total clip exceeds the cap (Ditto silently truncates;
 /// we drop with a warning so the user notices).
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct CaptureConfig {
     /// Capture mode controlling which formats are persisted.
@@ -366,7 +368,7 @@ impl Default for CaptureConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum CaptureMode {
     /// Capture every format the OS exposes (subject to per-format and
@@ -381,7 +383,7 @@ pub enum CaptureMode {
     Custom,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 pub struct CaptureFormatsConfig {
     /// Allowlist for `mode = "custom"`. Empty list under
@@ -411,7 +413,7 @@ pub struct CaptureFormatsConfig {
 /// [`crate::foreground::build_default_tracker`]; when no tracker is
 /// available (GNOME Wayland, etc.) the exclusion list is silently
 /// inactive and all clips are captured.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct CaptureExcludeConfig {
     /// Glob patterns matched against the foreground app's
@@ -530,7 +532,7 @@ impl CaptureConfig {
 /// (c) a kill-switch to disable paste-back entirely (the launcher
 /// then writes the clip to the clipboard but doesn't try to
 /// restore focus / synthesise keystrokes — user pastes manually).
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 pub struct PasteConfig {
     /// Disable paste-back entirely. Clipboard is still written; the
@@ -636,6 +638,24 @@ impl Config {
         } else {
             Ok(Config::default())
         }
+    }
+
+    /// Persist the current config to the platform config path.
+    ///
+    /// The file is written atomically (`.tmp` then rename). This intentionally
+    /// serializes the known typed config surface rather than preserving unknown
+    /// TOML comments/keys; GUI writes are explicit user actions.
+    pub fn save(&self) -> Result<()> {
+        let config_path = Self::get_config_path()?;
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let body = toml::to_string_pretty(self)
+            .map_err(|e| DitoxError::Config(format!("Failed to serialize config: {e}")))?;
+        let tmp = config_path.with_extension("toml.tmp");
+        std::fs::write(&tmp, body)?;
+        std::fs::rename(tmp, config_path)?;
+        Ok(())
     }
 
     pub fn get_config_path() -> Result<PathBuf> {

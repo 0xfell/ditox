@@ -1,9 +1,10 @@
 # Task: Phase 5 — Hotkeys, IPC, Rhai scripting
 
-> **Status:** planned
+> **Status:** in-progress
 > **Priority:** medium
 > **Phase:** 5 — Hotkeys, IPC, scripting
 > **Created:** 2026-04-26
+> **Started:** 2026-04-27
 > **Estimated:** 4 weeks
 
 ## Description
@@ -209,3 +210,25 @@ Document a small library of "starter scripts" in `docs/notes/scripts/`:
 
 ### 2026-04-26
 - Task file created (epic).
+
+### 2026-04-27 — core implementation slice
+- Added schema v6 (`entries.global_hotkey`, `entries.local_hotkey`, and
+  partial `idx_entries_global_hotkey`) plus `Entry` model fields and DB
+  helpers for setting/listing hotkey-bound clips.
+- Added side-panel GUI controls to bind/clear a generated per-clip hotkey.
+  Linux regeneration writes `~/.config/hypr/conf.d/ditox-binds.conf`
+  atomically and best-effort spawns `hyprctl reload`.
+- Added `ditox-gui paste-clip <id>` and expanded daemon IPC parsing for
+  `PASTE-CLIP`, `EMIT`, `RELOAD-CONFIG`, `GET-ENTRY`, and `LIST-ENTRIES`.
+- Added `ditox save`, which snapshots current text clipboard now and bumps
+  usage/last-used when it duplicates an existing entry.
+- Added `ditox_core::scripting` with a sandboxed Rhai engine, capture script
+  loading from `scripts/capture`, mutable `clip["text"]`, drop decisions,
+  and operation-limit enforcement. Watcher capture now runs these scripts
+  before dedup/hash checks.
+- Added starter scripts under `docs/notes/scripts/`.
+- Verified with `nix develop -c cargo test --workspace` and
+  `nix develop -c cargo clippy --workspace --all-targets --locked -- -D warnings`.
+
+Remaining validation requires live target sessions: Windows `RegisterHotKey`
+behaviour and Hyprland/Sway compositor bind execution/reload semantics.

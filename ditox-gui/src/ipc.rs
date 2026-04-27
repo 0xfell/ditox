@@ -86,14 +86,8 @@ fn runtime_path(ext: &str) -> PathBuf {
 /// and for the local-only Hyprland-config actions
 /// ([`Action::InstallHyprlandConfig`] / [`Action::UninstallHyprlandConfig`])
 /// which are handled in `main.rs::run` before any IPC attempt.
-pub fn action_to_wire(action: Action) -> Option<&'static str> {
-    match action {
-        Action::Launch | Action::Toggle => Some("TOGGLE"),
-        Action::Show => Some("SHOW"),
-        Action::Hide => Some("HIDE"),
-        Action::Quit => Some("QUIT"),
-        Action::InstallHyprlandConfig | Action::UninstallHyprlandConfig => None,
-    }
+pub fn action_to_wire(action: Action) -> Option<String> {
+    action.wire()
 }
 
 /// Result of a [`try_send_to_daemon`] call.
@@ -122,7 +116,7 @@ pub fn try_send_to_daemon(action: Action) -> SendOutcome {
             Some(w) => w,
             None => return SendOutcome::NoDaemon, // Launch + no daemon → caller starts one
         };
-        match send_unix(&path, wire) {
+        match send_unix(&path, &wire) {
             Ok(reply) => {
                 if let Some(rest) = reply.strip_prefix("ERR ") {
                     SendOutcome::Rejected {
@@ -302,22 +296,41 @@ fn handle_client(
 }
 
 /// Parsed command sent to the daemon.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Toggle,
     Show,
     Hide,
     Quit,
     Status,
+    PasteClip(String),
+    Emit(String),
+    ReloadConfig,
+    GetEntry(String),
+    ListEntries { limit: usize, json: bool },
 }
 
 fn parse_command(line: &str) -> Option<Command> {
-    Some(match line.to_ascii_uppercase().as_str() {
+    let mut parts = line.split_whitespace();
+    let verb = parts.next()?.to_ascii_uppercase();
+    Some(match verb.as_str() {
         "TOGGLE" => Command::Toggle,
         "SHOW" => Command::Show,
         "HIDE" => Command::Hide,
         "QUIT" => Command::Quit,
         "STATUS" => Command::Status,
+        "PASTE-CLIP" => Command::PasteClip(parts.next()?.to_string()),
+        "EMIT" => Command::Emit(parts.next()?.to_string()),
+        "RELOAD-CONFIG" => Command::ReloadConfig,
+        "GET-ENTRY" => Command::GetEntry(parts.next()?.to_string()),
+        "LIST-ENTRIES" => {
+            let limit = parts
+                .next()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(10);
+            let json = parts.any(|s| s.eq_ignore_ascii_case("json") || s == "--json");
+            Command::ListEntries { limit, json }
+        }
         _ => return None,
     })
 }
@@ -405,19 +418,19 @@ mod tests {
     fn parse_command_rejects_unknown() {
         assert_eq!(parse_command(""), None);
         assert_eq!(parse_command("FROBNICATE"), None);
-        assert_eq!(parse_command("TOGGLE "), None); // trailing space rejected
+        assert_eq!(parse_command("TOGGLE "), Some(Command::Toggle));
     }
 
     #[test]
     fn action_to_wire_round_trip() {
-        assert_eq!(action_to_wire(Action::Toggle), Some("TOGGLE"));
-        assert_eq!(action_to_wire(Action::Show), Some("SHOW"));
-        assert_eq!(action_to_wire(Action::Hide), Some("HIDE"));
-        assert_eq!(action_to_wire(Action::Quit), Some("QUIT"));
+        assert_eq!(action_to_wire(Action::Toggle), Some("TOGGLE".into()));
+        assert_eq!(action_to_wire(Action::Show), Some("SHOW".into()));
+        assert_eq!(action_to_wire(Action::Hide), Some("HIDE".into()));
+        assert_eq!(action_to_wire(Action::Quit), Some("QUIT".into()));
         // Launch maps to TOGGLE for the "summon a running daemon"
         // case; when no daemon, the caller falls back to becoming
         // one.
-        assert_eq!(action_to_wire(Action::Launch), Some("TOGGLE"));
+        assert_eq!(action_to_wire(Action::Launch), Some("TOGGLE".into()));
     }
 
     #[cfg(unix)]

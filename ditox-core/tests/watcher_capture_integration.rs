@@ -606,6 +606,45 @@ fn watcher_filter_rules_first_match_wins() -> Result<(), Box<dyn StdError>> {
 }
 
 #[test]
+fn watcher_filter_rule_tag_action_tags_inserted_entry() -> Result<(), Box<dyn StdError>> {
+    use ditox_core::filter::{FilterAction, FilterRule, PatternKind};
+
+    let _g = OVERRIDE_LOCK.lock().unwrap();
+    reset_override();
+    let (_tmp, db) = setup_db();
+
+    let rule = FilterRule::new_now(
+        "tag-rust",
+        "cargo",
+        PatternKind::Contains,
+        None,
+        FilterAction::Tag("rust".to_string()),
+        0,
+    );
+    db.add_filter_rule(&rule)?;
+
+    let source = Box::new(QueueSource::new(
+        "tag-rule",
+        vec![RawClip::text("cargo test --workspace".to_string())],
+    ));
+    let tracker: Box<dyn ForegroundTracker> = Box::new(MockForegroundTracker::new(None));
+
+    let mut watcher =
+        Watcher::with_sources_and_tracker(db, Config::default(), vec![source], tracker);
+
+    assert!(watcher.poll_once()?);
+    let db2 = open_with_schema();
+    let entries = db2.get_all(1000)?;
+    assert_eq!(entries.len(), 1);
+    let tags = db2.get_tags_for_entry(&entries[0].id)?;
+    assert_eq!(tags.len(), 1);
+    assert_eq!(tags[0].name, "rust");
+
+    reset_override();
+    Ok(())
+}
+
+#[test]
 fn watcher_filter_rule_process_glob_restricts_match() -> Result<(), Box<dyn StdError>> {
     use ditox_core::filter::{FilterAction, FilterRule, PatternKind};
 

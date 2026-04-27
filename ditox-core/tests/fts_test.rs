@@ -16,6 +16,8 @@ fn create_entry(id: &str, content: &str) -> Entry {
         notes: None,
         collection_id: None,
         image_extension: None,
+        global_hotkey: None,
+        local_hotkey: None,
     }
 }
 

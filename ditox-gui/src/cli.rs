@@ -15,9 +15,9 @@
 //! instance is already running we send a `toggle` and exit (same-binary
 //! "summon" behaviour).
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// No explicit action — launch the GUI (or toggle if already running).
     Launch,
@@ -29,6 +29,7 @@ pub enum Action {
     InstallHyprlandConfig,
     /// Phase 4 sub-task 4.11: remove the previously-written snippet.
     UninstallHyprlandConfig,
+    PasteClip(String),
 }
 
 impl Action {
@@ -36,12 +37,13 @@ impl Action {
     /// shape of `Action` keeps round-tripping if we ever need to
     /// reintroduce a daemon.
     #[allow(dead_code)]
-    pub fn wire(&self) -> Option<&'static str> {
+    pub fn wire(&self) -> Option<String> {
         match self {
-            Action::Launch | Action::Toggle => Some("TOGGLE"),
-            Action::Show => Some("SHOW"),
-            Action::Hide => Some("HIDE"),
-            Action::Quit => Some("QUIT"),
+            Action::Launch | Action::Toggle => Some("TOGGLE".into()),
+            Action::Show => Some("SHOW".into()),
+            Action::Hide => Some("HIDE".into()),
+            Action::Quit => Some("QUIT".into()),
+            Action::PasteClip(id) => Some(format!("PASTE-CLIP {id}")),
             // The Hyprland-config actions are local to this
             // process — they never go over IPC.
             Action::InstallHyprlandConfig | Action::UninstallHyprlandConfig => None,
@@ -49,9 +51,18 @@ impl Action {
     }
 }
 
+#[derive(Subcommand, Debug, Clone)]
+pub enum GuiCommand {
+    /// Paste one entry by UUID through the running daemon.
+    PasteClip { id: String },
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "ditox-gui", about = "Ditox clipboard manager (GUI)", version)]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<GuiCommand>,
+
     /// Toggle the window (show if hidden, hide if shown).
     #[arg(long, conflicts_with_all = ["show", "hide", "quit", "install_hyprland_config", "uninstall_hyprland_config"])]
     pub toggle: bool,
@@ -85,6 +96,8 @@ impl Cli {
     pub fn action(&self) -> Action {
         if self.toggle {
             Action::Toggle
+        } else if let Some(GuiCommand::PasteClip { id }) = &self.command {
+            Action::PasteClip(id.clone())
         } else if self.show {
             Action::Show
         } else if self.hide {

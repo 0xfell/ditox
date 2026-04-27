@@ -92,6 +92,34 @@ impl RawClip {
     pub fn first_with_prefix(&self, prefix: &str) -> Option<&RawFormat> {
         self.formats.iter().find(|f| f.mime.starts_with(prefix))
     }
+
+    pub fn text_content(&self) -> Option<String> {
+        self.first_with_prefix("text/")
+            .map(|f| String::from_utf8_lossy(&f.bytes).into_owned())
+    }
+
+    pub fn set_text(&mut self, text: String) {
+        if let Some(format) = self
+            .formats
+            .iter_mut()
+            .find(|f| f.mime.starts_with("text/plain"))
+        {
+            format.bytes = text.into_bytes();
+        } else {
+            self.formats.push(RawFormat {
+                mime: "text/plain;charset=utf-8".to_string(),
+                bytes: text.into_bytes(),
+            });
+        }
+    }
+
+    pub fn has_format(&self, name: &str) -> bool {
+        self.formats.iter().any(|f| f.mime == name)
+    }
+
+    pub fn remove_format(&mut self, name: &str) {
+        self.formats.retain(|f| f.mime != name);
+    }
 }
 
 /// A source that can produce `RawClip` events.

@@ -77,6 +77,9 @@ pub enum Commands {
         target: String,
     },
 
+    /// Save the current clipboard immediately, bumping usage if duplicate
+    Save,
+
     /// Delete entry by index (1-based) or ID
     Delete {
         /// Entry index (1-based) or UUID
@@ -214,6 +217,38 @@ pub enum Commands {
     /// Manage collections
     #[command(subcommand)]
     Collection(CollectionCommands),
+
+    /// Add a tag to an entry
+    Tag {
+        /// Entry index (1-based) or UUID
+        entry: String,
+
+        /// Tag name to add (created if missing)
+        name: String,
+
+        /// Optional tag color (hex code, e.g., "#ff5500")
+        #[arg(short, long)]
+        color: Option<String>,
+    },
+
+    /// Remove a tag from an entry
+    Untag {
+        /// Entry index (1-based) or UUID
+        entry: String,
+
+        /// Tag name or UUID to remove
+        tag: String,
+    },
+
+    /// List tags, or tags attached to one entry
+    TagList {
+        /// Entry index (1-based) or UUID. Omit to list all tags.
+        entry: Option<String>,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]

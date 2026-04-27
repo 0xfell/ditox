@@ -64,6 +64,50 @@ pub fn install() -> Result<PathBuf> {
     Ok(main)
 }
 
+pub fn write_clip_binds(entries: &[ditox_core::Entry]) -> Result<PathBuf> {
+    let conf_d = conf_d_dir()?;
+    std::fs::create_dir_all(&conf_d)
+        .map_err(|e| DitoxError::Other(format!("could not create {}: {e}", conf_d.display())))?;
+    let path = conf_d.join("ditox-binds.conf");
+    let tmp = path.with_extension("conf.tmp");
+
+    let mut out = String::from("# >>> ditox-managed per-clip hotkeys >>>\n");
+    for entry in entries.iter().take(50) {
+        let Some(hotkey) = entry.global_hotkey.as_deref() else {
+            continue;
+        };
+        if let Some((mods, key)) = hypr_bind_parts(hotkey) {
+            out.push_str(&format!(
+                "bind = {mods}, {key}, exec, ditox-gui paste-clip {}\n",
+                entry.id
+            ));
+        }
+    }
+    out.push_str("# <<< end ditox-managed per-clip hotkeys <<<\n");
+    std::fs::write(&tmp, out)
+        .map_err(|e| DitoxError::Other(format!("could not write {}: {e}", tmp.display())))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| DitoxError::Other(format!("could not install {}: {e}", path.display())))?;
+    let _ = std::process::Command::new("hyprctl").arg("reload").spawn();
+    Ok(path)
+}
+
+fn hypr_bind_parts(hotkey: &str) -> Option<(String, String)> {
+    let mut mods = Vec::new();
+    let mut key = None;
+    for part in hotkey.split('+') {
+        match part.trim().to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => mods.push("CTRL"),
+            "alt" => mods.push("ALT"),
+            "shift" => mods.push("SHIFT"),
+            "super" | "meta" | "win" => mods.push("SUPER"),
+            other if !other.is_empty() => key = Some(other.to_ascii_uppercase()),
+            _ => {}
+        }
+    }
+    Some((mods.join("_"), key?))
+}
+
 /// Remove the managed snippet from `ditox.conf`, deleting the
 /// file entirely if nothing else remains. Leaves
 /// `ditox-binds.conf` alone (the user may have customised it).

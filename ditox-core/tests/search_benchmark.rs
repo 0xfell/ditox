@@ -41,6 +41,8 @@ fn create_random_entry(i: usize) -> Entry {
         },
         collection_id: None,
         image_extension: None,
+        global_hotkey: None,
+        local_hotkey: None,
     }
 }
 
