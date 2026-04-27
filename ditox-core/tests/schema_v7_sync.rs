@@ -1,7 +1,11 @@
+use ditox_core::db::{set_data_dir_override, ExtraFormat};
 use ditox_core::sync::{
-    public_key_fingerprint, AdvertisedPeer, PeerTrustState, SyncDirection, SyncStatus,
+    public_key_fingerprint, AdvertisedPeer, FormatBody, PeerTrustState, SyncDirection, SyncStatus,
 };
 use ditox_core::{Database, Entry};
+use std::sync::Mutex;
+
+static DATA_DIR_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn schema_v7_adds_peer_tables() {
@@ -100,6 +104,63 @@ fn missing_entry_ids_from_digests_skips_existing_hashes() {
         db.missing_entry_ids_from_digests(&remote).unwrap(),
         vec!["remote-missing".to_string()]
     );
+}
+
+#[test]
+fn entry_payload_includes_inline_formats() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open_at(dir.path().join("ditox.db")).unwrap();
+    db.init_schema().unwrap();
+
+    let entry = Entry::new_text("plain".into());
+    let id = entry.id.clone();
+    db.insert_multi(
+        &entry,
+        &[ExtraFormat::new("text/html", b"<b>plain</b>".to_vec())],
+    )
+    .unwrap();
+
+    let payload = db.entry_payload(&id).unwrap().unwrap();
+    assert_eq!(payload.id, id);
+    assert_eq!(payload.entry_hash, entry.hash);
+    assert_eq!(payload.formats.len(), 2);
+    assert_eq!(payload.formats[0].format_name, "text/plain;charset=utf-8");
+    assert_eq!(
+        payload.formats[0].body,
+        FormatBody::Inline(b"plain".to_vec())
+    );
+    assert_eq!(payload.formats[1].format_name, "text/html");
+}
+
+#[test]
+fn entry_payload_includes_image_blob_chunk() {
+    let _guard = DATA_DIR_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    set_data_dir_override(Some(dir.path().to_path_buf())).unwrap();
+
+    let db = Database::open_at(dir.path().join("ditox.db")).unwrap();
+    db.init_schema().unwrap();
+    let bytes = b"not actually png, but content-addressed";
+    let hash = Entry::compute_hash(bytes);
+    Database::store_image_blob(&hash, "png", bytes).unwrap();
+    let entry = Entry::new_image(hash.clone(), bytes.len(), "png".to_string());
+    let id = entry.id.clone();
+    db.insert(&entry).unwrap();
+
+    let payload = db.entry_payload(&id).unwrap().unwrap();
+    set_data_dir_override(None).unwrap();
+
+    assert_eq!(payload.formats.len(), 1);
+    match &payload.formats[0].body {
+        FormatBody::BlobChunk(chunk) => {
+            assert_eq!(chunk.blob_hash, hash);
+            assert_eq!(chunk.total_bytes, bytes.len() as u64);
+            assert_eq!(chunk.offset, 0);
+            assert_eq!(chunk.data, bytes);
+            assert!(chunk.last);
+        }
+        other => panic!("expected blob chunk, got {other:?}"),
+    }
 }
 
 #[test]

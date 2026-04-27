@@ -24,6 +24,36 @@ pub struct EntryDigest {
     pub pinned: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EntryPayload {
+    pub id: String,
+    pub entry_hash: String,
+    pub formats: Vec<FormatPayload>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FormatPayload {
+    pub format_name: String,
+    pub format_hash: String,
+    pub body: FormatBody,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FormatBody {
+    Inline(Vec<u8>),
+    BlobChunk(BlobChunk),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BlobChunk {
+    pub blob_hash: String,
+    pub total_bytes: u64,
+    pub offset: u64,
+    pub data: Vec<u8>,
+    pub last: bool,
+}
+
 pub fn encode_frame(payload: &[u8]) -> Result<Vec<u8>> {
     if payload.len() > MAX_FRAME_BYTES {
         return Err(DitoxError::Other(format!(

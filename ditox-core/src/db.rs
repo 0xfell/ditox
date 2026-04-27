@@ -3,7 +3,8 @@ use crate::entry::{Entry, EntryType};
 use crate::error::{DitoxError, Result};
 use crate::stats::{Stats, TopEntry};
 use crate::sync::{
-    AdvertisedPeer, EntryDigest, Peer, PeerTrustState, SyncDirection, SyncLogEntry, SyncStatus,
+    AdvertisedPeer, BlobChunk, EntryDigest, EntryPayload, FormatBody, FormatPayload, Peer,
+    PeerTrustState, SyncDirection, SyncLogEntry, SyncStatus,
 };
 use crate::tag::Tag;
 use chrono::{DateTime, Duration, Utc};
@@ -2154,6 +2155,72 @@ impl Database {
             }
         }
         Ok(missing)
+    }
+
+    pub fn entry_payload(&self, entry_id: &str) -> Result<Option<EntryPayload>> {
+        let entry = match self.get_by_id(entry_id)? {
+            Some(entry) => entry,
+            None => return Ok(None),
+        };
+        let mut stmt = self.conn.prepare(
+            "SELECT format_name, storage, content, blob_hash, blob_ext, byte_size, format_hash
+             FROM entry_formats
+             WHERE entry_id = ?1
+             ORDER BY canonical DESC, id ASC",
+        )?;
+        let rows = stmt
+            .query_map([entry_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let mut formats = Vec::with_capacity(rows.len());
+        for (format_name, storage, content, blob_hash, blob_ext, byte_size, format_hash) in rows {
+            let body = match storage.as_str() {
+                "inline" => FormatBody::Inline(content.unwrap_or_default().into_bytes()),
+                "blob_file" => {
+                    let hash = blob_hash.ok_or_else(|| {
+                        DitoxError::Other(format!("entry format {format_name} missing blob_hash"))
+                    })?;
+                    let ext = blob_ext.ok_or_else(|| {
+                        DitoxError::Other(format!("entry format {format_name} missing blob_ext"))
+                    })?;
+                    let path = Self::image_path(&hash, &ext)?;
+                    let data = std::fs::read(path)?;
+                    FormatBody::BlobChunk(BlobChunk {
+                        blob_hash: hash,
+                        total_bytes: byte_size as u64,
+                        offset: 0,
+                        data,
+                        last: true,
+                    })
+                }
+                other => {
+                    return Err(DitoxError::Other(format!(
+                        "unknown entry format storage: {other}"
+                    )))
+                }
+            };
+            formats.push(FormatPayload {
+                format_name,
+                format_hash,
+                body,
+            });
+        }
+
+        Ok(Some(EntryPayload {
+            id: entry.id,
+            entry_hash: entry.hash,
+            formats,
+        }))
     }
 
     pub fn upsert_discovered_peer(

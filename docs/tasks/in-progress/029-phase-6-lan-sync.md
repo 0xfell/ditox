@@ -301,3 +301,6 @@ support it.
   peers can be stored before trust. Added `snow` Noise pattern parsing
   scaffolding; the ed25519 identity pin and Noise static-key mapping
   still need the transport implementation pass before sync is enabled.
+- Added sync `EntryPayload` / `FormatPayload` / `BlobChunk` structs and
+  `Database::entry_payload()` to assemble text and image clips from
+  `entries` + `entry_formats` for future `EntryRequest` responses.
