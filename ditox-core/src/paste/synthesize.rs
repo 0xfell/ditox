@@ -764,6 +764,7 @@ mod tests {
     fn snap_wlr() -> ForegroundSnapshot {
         ForegroundSnapshot {
             identifier: ForegroundId::Wlr {
+                handle_id: "1".to_string(),
                 app_id: "firefox".to_string(),
                 title: "Firefox".to_string(),
             },

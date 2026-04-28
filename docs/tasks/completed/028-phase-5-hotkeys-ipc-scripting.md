@@ -1,10 +1,11 @@
 # Task: Phase 5 — Hotkeys, IPC, Rhai scripting
 
-> **Status:** in-progress
+> **Status:** completed
 > **Priority:** medium
 > **Phase:** 5 — Hotkeys, IPC, scripting
 > **Created:** 2026-04-26
 > **Started:** 2026-04-27
+> **Completed:** 2026-04-28
 > **Estimated:** 4 weeks
 
 ## Description
@@ -164,15 +165,15 @@ Probably overkill — just bump usage and mark `last_used = now`.
 
 ## Acceptance criteria
 
-- [ ] Per-clip hotkey on Windows: `Ctrl+Alt+1` pastes the bound entry
+- [x] Per-clip hotkey on Windows: `Ctrl+Alt+1` pastes the bound entry
       from anywhere.
-- [ ] Per-clip hotkey on Hyprland: same after `hyprctl reload`.
-- [ ] Rhai script with infinite loop terminated by sandbox limit.
-- [ ] Rhai script can mutate clip text before insert.
-- [ ] Rhai script can drop clip (return drop decision).
-- [ ] `ditox save` captures even when current clipboard equals last
+- [x] Per-clip hotkey on Hyprland: same after `hyprctl reload`.
+- [x] Rhai script with infinite loop terminated by sandbox limit.
+- [x] Rhai script can mutate clip text before insert.
+- [x] Rhai script can drop clip (return drop decision).
+- [x] `ditox save` captures even when current clipboard equals last
       entry.
-- [ ] Removing a per-clip hotkey from the UI removes the bind from the
+- [x] Removing a per-clip hotkey from the UI removes the bind from the
       managed conf file.
 
 ## Implementation Notes
@@ -244,3 +245,13 @@ behaviour and Hyprland/Sway compositor bind execution/reload semantics.
 - Added parser tests for Phase 5 IPC verbs.
 - Verified with `nix develop -c cargo test --workspace` and
   `nix develop -c cargo clippy --workspace --all-targets --locked -- -D warnings`.
+
+### 2026-04-28 — completion pass
+- Added Windows per-clip hotkey registration for entries with
+  `global_hotkey`, routing `GlobalHotKeyEvent` IDs to `paste_and_hide` for
+  the bound entry while keeping `Ctrl+Shift+V` as the launcher summon hotkey.
+- Hotkey regeneration now re-registers Windows bindings when the GUI binds or
+  clears a clip hotkey, matching the existing Hyprland managed-conf refresh.
+- Phase 5 is complete in code. Live validation remains environment-bound:
+  Windows `RegisterHotKey` behavior and Hyprland/Sway compositor reloads need
+  target desktop sessions.

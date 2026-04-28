@@ -49,6 +49,8 @@ ctrlc.workspace = true
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 wl-clipboard-rs.workspace = true
+wayland-client.workspace = true
+wayland-protocols-wlr.workspace = true
 zbus.workspace = true
 
 [target.'cfg(windows)'.dependencies]

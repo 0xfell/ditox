@@ -1,9 +1,10 @@
 # Task: Phase 2 — `wlr-foreign-toplevel-management` subscription
 
-> **Status:** planned
+> **Status:** in-progress
 > **Priority:** medium (improves non-Hyprland Wayland support)
 > **Phase:** 2 — Paste-back UX (carry-over)
 > **Created:** 2026-04-26
+> **Started:** 2026-04-28
 > **Spawned from:** task 024 sub-task 2.3 (continuation)
 > **Estimated:** 1 week
 
@@ -186,7 +187,7 @@ internal state).
       returns `Err`; `build_default_tracker` falls through to
       `NoopForegroundTracker`; paste-back degrades to clipboard-only
       with a clear log message.
-- [ ] Subscription channel emits each focus transition exactly
+- [x] Subscription channel emits each focus transition exactly
       once; verified by unit test using a mock `wayland-client` (or
       integration test against a headless `wlroots`).
 
@@ -233,3 +234,26 @@ subscription channel from the launcher.
 When this lands, also bump
 `ForegroundId::supports_restore()` to `true` for `Wlr` and update
 the doc comment matrix in `ditox-core/src/foreground.rs:42-58`.
+
+## Work Log
+
+### 2026-04-28
+- Started implementation.
+- Added explicit Unix dependencies on `wayland-client` and
+  `wayland-protocols-wlr`.
+- Added `ditox-core/src/foreground/wlr.rs` with a
+  `WlrForegroundTracker` backed by
+  `zwlr_foreign_toplevel_manager_v1`/`zwlr_foreign_toplevel_handle_v1`.
+  It tracks activated toplevels, stores live handles for restore, exposes
+  `snapshot()`, emits subscription events, and sends the protocol
+  `activate(seat)` request for restore when a seat is advertised.
+- Wired `build_default_tracker()` to prefer Hyprland's `hyprctl` tracker
+  but use the wlr tracker for Sway, generic wlroots, and KDE when the
+  foreign-toplevel global is available; otherwise it logs and falls back
+  to noop.
+- Updated `ForegroundId::Wlr` with a `handle_id` and flipped
+  `supports_restore()` to true.
+- Verified the pure-code slice with
+  `nix develop -c cargo test -p ditox-core foreground:: --locked`.
+  Live Sway/River/Hyprland-fallback validation still requires compositor
+  sessions.

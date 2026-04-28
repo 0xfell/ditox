@@ -37,7 +37,7 @@
 //! |-------------------------|-------------|-------|
 //! | Windows                 | Yes         | `SetForegroundWindow` (with foreground-lock workaround already in `ditox-gui`) |
 //! | Hyprland                | Yes         | `hyprctl dispatch focuswindow address:0x…` |
-//! | Sway / wlroots          | No          | wlr-foreign-toplevel-management has no `activate` request; document the limitation |
+//! | Sway / wlroots          | Yes         | `wlr-foreign-toplevel-management` activate request, compositor may ignore |
 //! | KDE Wayland             | No          | KWin has no client-driven focus; tracked separately |
 //! | GNOME Wayland           | N/A         | No foreground-tracking protocol either; uses [`NoopForegroundTracker`] |
 //! | X11                     | Yes         | `XSetInputFocus` with input model checks |
@@ -53,6 +53,8 @@ use crate::error::Result;
 /// `hyprctl dispatch focuswindow address:0x…` for restore.
 #[cfg(unix)]
 pub mod hyprctl;
+#[cfg(unix)]
+pub mod wlr;
 
 /// Build the platform-default [`ForegroundTracker`] wrapped in a
 /// [`ForegroundFilter`] that drops self-focus events.
@@ -60,9 +62,8 @@ pub mod hyprctl;
 /// Selection matrix (Phase 2 sub-task 2.8):
 ///
 /// - **Hyprland** → [`hyprctl::HyprctlForegroundTracker`].
-/// - **Sway / generic wlroots / KDE Wayland** → [`NoopForegroundTracker`]
-///   for v0.4 (the wlr-foreign-toplevel-management implementation
-///   is the deferred half of sub-task 2.3).
+/// - **Sway / generic wlroots / KDE Wayland** → [`wlr::WlrForegroundTracker`]
+///   when the compositor advertises the foreign-toplevel protocol.
 /// - **GNOME Wayland** → [`NoopForegroundTracker`] (no protocol
 ///   support).
 /// - **X11** → [`NoopForegroundTracker`] for v0.4 (X11 tracker
@@ -85,6 +86,21 @@ pub fn build_default_tracker() -> Box<dyn ForegroundTracker> {
             return Box::new(ForegroundFilter::new(
                 hyprctl::HyprctlForegroundTracker::new(),
             ));
+        }
+        if matches!(
+            p,
+            Platform::Linux(
+                LinuxCompositor::Sway { .. }
+                    | LinuxCompositor::Wlroots { .. }
+                    | LinuxCompositor::Kde { .. }
+            )
+        ) {
+            match wlr::WlrForegroundTracker::new() {
+                Ok(tracker) => return Box::new(ForegroundFilter::new(tracker)),
+                Err(error) => {
+                    tracing::warn!(%error, "wlr foreground tracker unavailable; using noop tracker")
+                }
+            }
         }
     }
     let _ = p; // suppress unused on non-unix
@@ -133,12 +149,14 @@ pub enum ForegroundId {
     /// for the window's lifetime.
     Hypr { address: String },
 
-    /// wlr-foreign-toplevel-management (Sway / wlroots). The
-    /// `(app_id, title)` pair is the closest-to-stable identifier
-    /// the protocol exposes; not unique within an app, so only
-    /// useful for **read** (snapshot), not **write** (restore —
-    /// the protocol has no client-driven activate request).
-    Wlr { app_id: String, title: String },
+    /// wlr-foreign-toplevel-management (Sway / wlroots). `handle_id`
+    /// is the live Wayland proxy id captured by the tracker; restore
+    /// asks the compositor to activate that handle if it still exists.
+    Wlr {
+        handle_id: String,
+        app_id: String,
+        title: String,
+    },
 
     /// X11 window ID (xlib / xcb `Window` is a `u32`).
     X11 { window: u32 },
@@ -166,7 +184,7 @@ impl ForegroundId {
         match self {
             ForegroundId::Win32 { .. } => true,
             ForegroundId::Hypr { .. } => true,
-            ForegroundId::Wlr { .. } => false,
+            ForegroundId::Wlr { .. } => true,
             ForegroundId::X11 { .. } => true,
             ForegroundId::Macos { .. } => true,
             ForegroundId::Unknown => false,
@@ -525,12 +543,14 @@ mod tests {
         assert!(ForegroundId::X11 { window: 0 }.supports_restore());
         assert!(ForegroundId::Macos { pid: 0 }.supports_restore());
 
-        // Platforms without.
-        assert!(!ForegroundId::Wlr {
+        assert!(ForegroundId::Wlr {
+            handle_id: String::new(),
             app_id: String::new(),
             title: String::new()
         }
         .supports_restore());
+
+        // Platforms without client-driven restore.
         assert!(!ForegroundId::Unknown.supports_restore());
     }
 
@@ -546,6 +566,7 @@ mod tests {
         );
         assert_eq!(
             ForegroundId::Wlr {
+                handle_id: String::new(),
                 app_id: String::new(),
                 title: String::new()
             }

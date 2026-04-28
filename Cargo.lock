@@ -1626,6 +1626,8 @@ dependencies = [
  "tracing-subscriber",
  "unicode-normalization",
  "uuid",
+ "wayland-client",
+ "wayland-protocols-wlr",
  "wl-clipboard-rs",
  "x25519-dalek",
  "zbus",

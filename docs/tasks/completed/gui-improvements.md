@@ -1,7 +1,8 @@
 # GUI Improvements Plan
 
-**Status:** in-progress
+**Status:** completed
 **Created:** 2025-12-08
+**Completed:** 2026-04-28
 **Priority:** High
 
 ## Overview
@@ -217,3 +218,7 @@ pub enum Message {
   - Added pagination support with page navigation (PgUp/PgDn)
   - Added keyboard shortcuts: [ ] for tab navigation, ? for help toggle
   - Improved status bar with ON indicator badge, page count
+- 2026-04-28: Closed as completed/superseded by later Phase 4 and Phase 4b
+  GUI work. Tab filtering, favorites, settings, help, preview/side-panel,
+  image display, pagination, keyboard shortcuts, tags, collections, and
+  multi-select are now tracked in completed roadmap tasks 026 and 027.

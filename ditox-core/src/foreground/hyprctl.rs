@@ -427,6 +427,7 @@ mod tests {
         let t = HyprctlForegroundTracker::new();
         let snap = ForegroundSnapshot {
             identifier: ForegroundId::Wlr {
+                handle_id: "1".into(),
                 app_id: "x".into(),
                 title: "y".into(),
             },

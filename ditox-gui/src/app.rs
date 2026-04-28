@@ -1678,7 +1678,7 @@ pub enum Message {
 
     // Global hotkey (Windows only)
     #[cfg(windows)]
-    GlobalHotkeyPressed,
+    GlobalHotkeyPressed(u32),
 
     // Clipboard watcher
     ClipboardChanged,
@@ -1747,7 +1747,11 @@ pub struct DitoxApp {
     total_count: usize,
     window_state: WindowState,
     #[cfg(windows)]
-    _hotkey_manager: Option<GlobalHotKeyManager>,
+    hotkey_manager: Option<GlobalHotKeyManager>,
+    #[cfg(windows)]
+    registered_hotkeys: HashMap<u32, HotKey>,
+    #[cfg(windows)]
+    hotkey_entries: HashMap<u32, String>,
     _tray_icon: Option<TrayIcon>,
     last_refresh: Instant,
     poll_interval_ms: u64,
@@ -1860,16 +1864,7 @@ impl DitoxApp {
         );
 
         #[cfg(windows)]
-        let hotkey_manager = {
-            let hotkey_manager = GlobalHotKeyManager::new().ok();
-            if let Some(ref manager) = hotkey_manager {
-                let hotkey = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyV);
-                if manager.register(hotkey).is_ok() {
-                    tracing::info!("Registered global hotkey: Ctrl+Shift+V");
-                }
-            }
-            hotkey_manager
-        };
+        let hotkey_manager = GlobalHotKeyManager::new().ok();
 
         #[cfg(windows)]
         let tray_icon = setup_tray_icon();
@@ -1940,7 +1935,11 @@ impl DitoxApp {
             total_count,
             window_state: window_state.clone(),
             #[cfg(windows)]
-            _hotkey_manager: hotkey_manager,
+            hotkey_manager,
+            #[cfg(windows)]
+            registered_hotkeys: HashMap::new(),
+            #[cfg(windows)]
+            hotkey_entries: HashMap::new(),
             _tray_icon: tray_icon,
             last_refresh: Instant::now(),
             poll_interval_ms,
@@ -1987,6 +1986,8 @@ impl DitoxApp {
         // One-shot mode: don't override the bottom-left position picked by
         // `Position::SpecificWith`. Just focus the search input.
         app.refresh_tag_cache();
+        #[cfg(windows)]
+        app.register_windows_hotkeys();
         let initial_task = delayed_focus_search();
 
         (app, initial_task)
@@ -2578,6 +2579,8 @@ impl DitoxApp {
                     move |d| d.set_entry_hotkeys(&entry_id, Some(&hotkey), None)
                 });
                 self.regenerate_hyprland_binds();
+                #[cfg(windows)]
+                self.register_windows_hotkeys();
                 self.refresh_entries();
             }
 
@@ -2586,6 +2589,8 @@ impl DitoxApp {
                     .db
                     .call(move |d| d.set_entry_hotkeys(&entry_id, None, None));
                 self.regenerate_hyprland_binds();
+                #[cfg(windows)]
+                self.register_windows_hotkeys();
                 self.refresh_entries();
             }
 
@@ -3143,14 +3148,25 @@ impl DitoxApp {
             }
 
             #[cfg(windows)]
-            Message::GlobalHotkeyPressed => {
-                // Windows: the GUI is one-shot like Linux now, but the hotkey
-                // is still registered while we're alive. Gain focus on press.
+            Message::GlobalHotkeyPressed(hotkey_id) => {
                 let elapsed = self.last_hotkey_time.elapsed();
                 if elapsed < Duration::from_millis(300) {
                     return Task::none();
                 }
                 self.last_hotkey_time = Instant::now();
+
+                if let Some(entry_id) = self.hotkey_entries.get(&hotkey_id).cloned() {
+                    self.refresh_foreground_snapshot();
+                    return match self.entry_by_id(&entry_id) {
+                        Ok(entry) => self.paste_and_hide(entry),
+                        Err(error) => {
+                            tracing::warn!(%error, %entry_id, "global hotkey entry lookup failed");
+                            Task::none()
+                        }
+                    };
+                }
+
+                // Windows summon hotkey: gain focus on press.
                 return window::oldest().and_then(window::gain_focus);
             }
 
@@ -4837,7 +4853,7 @@ impl DitoxApp {
                     loop {
                         if let Ok(event) = receiver.try_recv() {
                             if event.state == HotKeyState::Pressed {
-                                let _ = sender.try_send(Message::GlobalHotkeyPressed);
+                                let _ = sender.try_send(Message::GlobalHotkeyPressed(event.id));
                             }
                         }
                         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -5143,6 +5159,69 @@ impl DitoxApp {
         if let Ok(Ok(entries)) = self.db.call(|d| d.entries_with_global_hotkeys()) {
             if let Err(e) = crate::hyprland_config::write_clip_binds(&entries) {
                 tracing::warn!(error = %e, "failed to regenerate Hyprland clip binds");
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    fn register_windows_hotkeys(&mut self) {
+        let Some(manager) = self.hotkey_manager.as_ref() else {
+            return;
+        };
+
+        for hotkey in self.registered_hotkeys.values().copied() {
+            if let Err(error) = manager.unregister(hotkey) {
+                tracing::debug!(%error, hotkey = %hotkey, "failed to unregister stale hotkey");
+            }
+        }
+        self.registered_hotkeys.clear();
+        self.hotkey_entries.clear();
+
+        let summon = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyV);
+        match manager.register(summon) {
+            Ok(()) => {
+                tracing::info!("Registered global hotkey: Ctrl+Shift+V");
+                self.registered_hotkeys.insert(summon.id(), summon);
+            }
+            Err(error) => tracing::warn!(%error, "failed to register summon hotkey"),
+        }
+
+        let entries = match self.db.call(|d| d.entries_with_global_hotkeys()) {
+            Ok(Ok(entries)) => entries,
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "failed to load per-clip hotkeys");
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to query per-clip hotkeys");
+                return;
+            }
+        };
+
+        for entry in entries.into_iter().take(50) {
+            let Some(binding) = entry.global_hotkey.as_deref() else {
+                continue;
+            };
+            let hotkey = match binding.parse::<HotKey>() {
+                Ok(hotkey) => hotkey,
+                Err(error) => {
+                    tracing::warn!(%error, %binding, entry_id = %entry.id, "invalid per-clip hotkey");
+                    continue;
+                }
+            };
+            if self.registered_hotkeys.contains_key(&hotkey.id()) {
+                tracing::warn!(%binding, entry_id = %entry.id, "duplicate per-clip hotkey skipped");
+                continue;
+            }
+            match manager.register(hotkey) {
+                Ok(()) => {
+                    tracing::info!(%binding, entry_id = %entry.id, "registered per-clip hotkey");
+                    self.hotkey_entries.insert(hotkey.id(), entry.id);
+                    self.registered_hotkeys.insert(hotkey.id(), hotkey);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, %binding, entry_id = %entry.id, "failed to register per-clip hotkey");
+                }
             }
         }
     }

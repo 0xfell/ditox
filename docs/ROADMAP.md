@@ -8,10 +8,10 @@
 
 | Category | Count |
 |----------|-------|
-| Completed | 28 |
-| In Progress | 4 |
+| Completed | 30 |
+| In Progress | 3 |
 | Planned (Phase 0 — Foundation) | 0 |
-| Planned (Phase 1-8 epics + carry-overs) | 6 |
+| Planned (Phase 1-8 epics + carry-overs) | 5 |
 
 ---
 
@@ -43,8 +43,7 @@ Internal UI design in [`notes/ui-replication.md`](notes/ui-replication.md).
 |------|-------------|
 | [Windows installer & distribution](tasks/in-progress/004-windows-installer-distribution.md) | Inno Setup installer + code-signing (signing pending cert) |
 | [Windows 11 support](tasks/in-progress/010-windows-11-support.md) | Largely complete; CLI-test gaps remain |
-| [028 Hotkeys, IPC, Rhai scripting](tasks/in-progress/028-phase-5-hotkeys-ipc-scripting.md) | Schema v6 hotkeys, expanded IPC, `ditox save`, Rhai capture hooks |
-| [GUI improvements](tasks/in-progress/gui-improvements.md) | Pre-Phase-4 punch list; some items folded into Phase 4 |
+| [034 wlr-foreign-toplevel subscription](tasks/in-progress/034-phase-2-wlr-foreign-toplevel.md) | Generic Wayland foreground tracker for non-Hyprland wlroots compositors |
 
 ---
 
@@ -62,7 +61,6 @@ _All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; rea
 | [031 macOS port](tasks/planned/031-phase-8-macos.md) | NSPasteboard, Accessibility flow, .app bundle, Cask, notarisation | none |
 | [032 Windows multi-format capture](tasks/planned/032-phase-1-windows-multi-format.md) | Spun out from 023 sub-task 1.4: `AddClipboardFormatListener` event-driven capture; needs Windows-side validation | none |
 | [033 Windows paste-back](tasks/planned/033-phase-2-windows-paste-back.md) | Spun out from 024 sub-tasks 2.2 + 2.5: `Win32ForegroundTracker` + `Win32Synthesizer` (`SendInput` + stuck-modifier guard); needs Windows-side validation | none |
-| [034 wlr-foreign-toplevel subscription](tasks/planned/034-phase-2-wlr-foreign-toplevel.md) | Spun out from 024 sub-task 2.3: generic Wayland foreground tracker for non-Hyprland wlroots compositors (Sway, river); dedicated `wayland-client` event-loop thread | none |
 | [035 wlr-layer-shell drag handle](tasks/planned/035-phase-4-layershell-drag.md) | Spun out from 026 sub-task 4.5: drag the launcher's title bar to reposition the layer-shell window via runtime `MarginChange` events. Window-local cursor tracking + anchor-aware delta math. | none |
 
 ---
@@ -71,6 +69,8 @@ _All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; rea
 
 | Task | Date | Description |
 |------|------|-------------|
+| [GUI improvements](tasks/completed/gui-improvements.md) | 2026-04-28 | Closed stale pre-Phase-4 GUI punch list as completed/superseded. Its core items are now covered by completed Phase 4 and Phase 4b work: tab filtering, favorites, settings, help, side-panel preview, image display, pagination, keyboard shortcuts, tags, collections, and multi-select. |
+| [028 Hotkeys, IPC, Rhai scripting](tasks/completed/028-phase-5-hotkeys-ipc-scripting.md) | 2026-04-28 | Phase 5: schema v6 per-clip hotkeys; GUI bind/clear controls; Hyprland managed per-clip bind generation; Windows per-clip `RegisterHotKey` routing; expanded IPC commands (`PASTE-CLIP`/`EMIT`, collection/tag/script/config/list/get verbs); `ditox save`; sandboxed Rhai capture scripts with starter examples and operation limits. Verified with GUI check plus workspace tests/clippy; live Windows and compositor reload validation remains target-environment work. |
 | [029 LAN peer-to-peer sync](tasks/completed/029-phase-6-lan-sync.md) | 2026-04-27 | Phase 6: opt-in LAN sync landed. Schema v7 peers/sync log; ed25519 local identity; mDNS discovery; explicit TOFU trust controls; Noise_XX transport with signed identity proof binding ed25519 to X25519 static keys; trusted TCP pull sessions; gated `ditox watch` sync runtime; manual `ditox sync discover/pull/peers/log/trust/reject/untrust/auto-send`; metadata sync for notes/collections/tags/pinned/last-used; 64 KiB image blob chunking with hash verification; GUI sync settings; optional Windows firewall installer task. Verified with workspace tests and strict clippy. |
 | [027 GUI feature parity](tasks/completed/027-phase-4b-gui-parity.md) | 2026-04-27 | Phase 4b: GUI parity slice landed. Schema v4→v5 tags with CLI commands; GUI tag chips, side-panel tag editor, multi-tag AND filtering, time-window chips, collection tabs and uncollected tab, settings persistence, collection CRUD, multi-select bulk actions, image zoom/open controls, config hot reload, and `[keybindings.gui]` overrides. Verified with workspace tests and strict clippy. |
 | [026 Ditto UX replication](tasks/completed/026-phase-4-ditto-ux.md) | 2026-04-26 | Phase 4: 11/12 sub-tasks landed. Single-instance lock + Unix-socket IPC; `iced_layershell` window dispatch on Hyprland/Sway/wlroots; configurable `[gui.position]` (default/at_previous/at_cursor/at_active_window_centre/fixed); always-on-top pin button (Top↔Overlay); modifier-held cycling activated on each summon; hide-on-blur with grace + paste-and-hide; foreground refresh on every Show/Toggle; tooltip-as-preview on hover; inline list extras (hotkey numbers + collection/notes glyphs); `--install-hyprland-config` helper. The daemon model is the most user-visible change in v0.4 — `ditox-gui` is now a long-running process across summons. Sub-task 4.5 (layer-shell drag handle) spun out as task 035. +26 tests, 513 total. |
