@@ -374,7 +374,7 @@ mod tests {
     /// environments) so the test suite can run anywhere.
     ///
     /// To exercise: copy something to the clipboard with `wl-copy
-    /// 'hello'` (or any GUI app), then run:
+    /// 'hello'` (or any graphical app), then run:
     ///
     /// ```text
     /// cargo test -p ditox-core --lib --features=__live_wayland \

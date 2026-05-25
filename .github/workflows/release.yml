@@ -2,10 +2,10 @@
 # when a `v*.*.*` tag is pushed, then attaches them to a GitHub Release.
 #
 # Targets (all from v1):
-#   - x86_64-unknown-linux-gnu   → TUI tarball + GUI AppImage
+#   - x86_64-unknown-linux-gnu   → TUI tarball
 #   - x86_64-unknown-linux-musl  → static TUI tarball (no runtime deps)
-#   - aarch64-unknown-linux-gnu  → TUI tarball + GUI AppImage (via cross)
-#   - x86_64-pc-windows-msvc     → zip with ditox.exe + ditox-gui.exe
+#   - aarch64-unknown-linux-gnu  → TUI tarball (via cross)
+#   - x86_64-pc-windows-msvc     → zip with ditox.exe
 #
 # macOS is out of scope: clipboard.rs has no macOS backend.
 #
@@ -140,96 +140,8 @@ jobs:
           retention-days: 7
 
   # ---------------------------------------------------------------------
-  # x86_64 Linux GUI AppImage. ubuntu-24.04 runner; linuxdeploy bundles
-  # GTK3 + libayatana-appindicator + libdbusmenu + Vulkan loader + all
-  # fontconfig/freetype dependencies. Result is a single ~60MB .AppImage
-  # that runs on most distros with glibc ≥ 2.39.
-  # ---------------------------------------------------------------------
-  linux-gnu-gui-appimage:
-    name: linux gnu gui appimage (x86_64)
-    needs: meta
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-linux-gui
-
-      - name: Install GUI build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config \
-            libssl-dev \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libgtk-3-dev \
-            libglib2.0-dev \
-            libayatana-appindicator3-dev \
-            libdbusmenu-gtk3-dev \
-            libxdo-dev \
-            libfontconfig1-dev \
-            libfreetype-dev \
-            libvulkan-dev \
-            libx11-dev \
-            libxcursor-dev \
-            libxrandr-dev \
-            libxi-dev \
-            libxcb1-dev \
-            fuse libfuse2t64 \
-            imagemagick
-
-      - name: Build ditox-gui (release)
-        run: cargo build --release --locked -p ditox-gui
-
-      - name: Download linuxdeploy + plugin-gtk
-        run: |
-          mkdir -p tools
-          cd tools
-          curl -L -o linuxdeploy \
-            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          curl -L -o linuxdeploy-plugin-gtk \
-            https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
-          chmod +x linuxdeploy linuxdeploy-plugin-gtk
-
-      - name: Assemble AppDir and build AppImage
-        run: |
-          V=${{ needs.meta.outputs.version }}
-          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
-          cp target/release/ditox-gui AppDir/usr/bin/
-          strip AppDir/usr/bin/ditox-gui
-          cp packaging/linux/ditox-gui.desktop AppDir/usr/share/applications/
-          cp packaging/linux/ditox-gui.png AppDir/usr/share/icons/hicolor/256x256/apps/
-          # linuxdeploy needs the icon also in the AppDir root.
-          cp packaging/linux/ditox-gui.png AppDir/ditox-gui.png
-          cp packaging/linux/ditox-gui.desktop AppDir/ditox-gui.desktop
-
-          export APPIMAGE_EXTRACT_AND_RUN=1
-          export OUTPUT="ditox-gui-${V}-x86_64-linux.AppImage"
-          export PATH="$PWD/tools:$PATH"
-          export LINUXDEPLOY_OUTPUT_APP_NAME=ditox-gui
-          export LINUXDEPLOY_OUTPUT_VERSION="${V}"
-
-          tools/linuxdeploy \
-            --appdir AppDir \
-            --plugin gtk \
-            --output appimage
-
-          mkdir -p dist
-          mv ditox-gui-*.AppImage "dist/${OUTPUT}"
-          ls -la dist/
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux-gnu-gui-appimage
-          path: dist/*.AppImage
-          retention-days: 7
-
-  # ---------------------------------------------------------------------
   # aarch64 Linux via `cross` (Docker-based cross-compile from x86_64).
-  # Ships TUI tarball + GUI AppImage. Slower than native but needs no
-  # special runner.
+  # Ships a TUI tarball. Slower than native but needs no special runner.
   # ---------------------------------------------------------------------
   linux-arm64:
     name: linux gnu (aarch64 via cross)
@@ -252,9 +164,6 @@ jobs:
       - name: Build ditox-tui (aarch64)
         run: cross build --release --locked --target aarch64-unknown-linux-gnu -p ditox-tui
 
-      - name: Build ditox-gui (aarch64)
-        run: cross build --release --locked --target aarch64-unknown-linux-gnu -p ditox-gui
-
       - name: Package TUI tarball
         run: |
           mkdir -p dist
@@ -267,43 +176,6 @@ jobs:
           cp README.md LICENSE "${STAGE}/"
           tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
           rm -rf "${STAGE}"
-
-      - name: Install AppImage tooling (aarch64)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends fuse libfuse2t64 imagemagick
-          mkdir -p tools
-          curl -L -o tools/linuxdeploy-aarch64 \
-            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
-          chmod +x tools/linuxdeploy-aarch64
-
-      - name: Assemble aarch64 AppImage
-        run: |
-          V=${{ needs.meta.outputs.version }}
-          rm -rf AppDir
-          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
-          cp target/aarch64-unknown-linux-gnu/release/ditox-gui AppDir/usr/bin/
-          cp packaging/linux/ditox-gui.desktop AppDir/usr/share/applications/
-          cp packaging/linux/ditox-gui.png AppDir/usr/share/icons/hicolor/256x256/apps/
-          cp packaging/linux/ditox-gui.png AppDir/ditox-gui.png
-          cp packaging/linux/ditox-gui.desktop AppDir/ditox-gui.desktop
-
-          export APPIMAGE_EXTRACT_AND_RUN=1
-          export ARCH=aarch64
-          export OUTPUT="ditox-gui-${V}-aarch64-linux.AppImage"
-          export LINUXDEPLOY_OUTPUT_APP_NAME=ditox-gui
-          export LINUXDEPLOY_OUTPUT_VERSION="${V}"
-
-          # NOTE: linuxdeploy-plugin-gtk runs ldd against host libs; for a
-          # cross-built aarch64 binary we rely on `linuxdeploy-aarch64`'s
-          # built-in library copying without the gtk plugin. Users need
-          # GTK installed on their arm64 system — document in release notes.
-          tools/linuxdeploy-aarch64 \
-            --appdir AppDir \
-            --output appimage
-
-          mkdir -p dist
-          mv ditox-gui-*.AppImage "dist/${OUTPUT}"
           ls -la dist/
 
       - uses: actions/upload-artifact@v4
@@ -313,8 +185,7 @@ jobs:
           retention-days: 7
 
   # ---------------------------------------------------------------------
-  # Windows x86_64 — native MSVC. Icon and version info are embedded by
-  # ditox-gui/build.rs via winres.
+  # Windows x86_64 — native MSVC.
   # ---------------------------------------------------------------------
   windows:
     name: windows (x86_64 msvc)
@@ -337,7 +208,6 @@ jobs:
           $name = "ditox-$v-x86_64-windows"
           New-Item -ItemType Directory -Force -Path "dist/$name" | Out-Null
           Copy-Item target/release/ditox.exe "dist/$name/"
-          Copy-Item target/release/ditox-gui.exe "dist/$name/"
           Copy-Item README.md "dist/$name/"
           Copy-Item LICENSE "dist/$name/"
           Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
@@ -378,7 +248,6 @@ jobs:
       - meta
       - linux-gnu-tui
       - linux-musl-tui
-      - linux-gnu-gui-appimage
       - linux-arm64
       - windows
     if: needs.meta.outputs.is_tag == 'true'
@@ -391,7 +260,7 @@ jobs:
       - name: Flatten + checksum
         run: |
           mkdir -p release
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.AppImage' -o -name '*.zip' \) \
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) \
             -exec cp -v {} release/ \;
           cd release
           sha256sum * > SHA256SUMS

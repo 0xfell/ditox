@@ -1,7 +1,7 @@
 //! Ditox Core Library
 //!
 //! This crate contains the shared business logic for Ditox clipboard manager,
-//! used by both the TUI and GUI frontends.
+//! used by the TUI, CLI, and watcher.
 
 pub mod actions;
 pub mod aggregator;
@@ -13,7 +13,6 @@ pub mod color;
 pub mod config;
 pub mod content_type;
 pub mod db;
-pub mod db_actor;
 pub mod entry;
 pub mod error;
 pub mod filter;
@@ -40,7 +39,6 @@ pub use clipboard::Clipboard;
 pub use collection::Collection;
 pub use config::Config;
 pub use db::Database;
-pub use db_actor::{DbActorJoin, DbHandle};
 pub use entry::{Entry, EntryType};
 pub use error::{DitoxError, Result};
 pub use stats::Stats;

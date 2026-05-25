@@ -24,19 +24,11 @@
       in {
         packages.default = pkgs.callPackage ./nix/package.nix { };
         packages.ditox = self.packages.${system}.default;
-        # Same derivation (it builds both binaries), aliased so users can
-        # `nix profile install github:0xfell/ditox#ditox-gui` and have the
-        # intent be explicit in their flake history.
-        packages.ditox-gui = self.packages.${system}.default;
 
         apps.default = flake-utils.lib.mkApp {
           drv = self.packages.${system}.default;
         };
         apps.ditox = self.apps.${system}.default;
-        apps.ditox-gui = flake-utils.lib.mkApp {
-          drv = self.packages.${system}.default;
-          name = "ditox-gui";
-        };
 
         # `nix fmt`
         formatter = pkgs.nixpkgs-fmt;
@@ -53,60 +45,15 @@
           ];
 
           buildInputs = with pkgs; [
-            openssl
             # Clipboard
             wl-clipboard
             wayland
             libxkbcommon
-            # Tray (StatusNotifierItem via libappindicator/GTK)
-            glib
-            gdk-pixbuf
-            cairo
-            pango
-            atk
-            gtk3
-            libappindicator-gtk3
-            libayatana-appindicator   # tray-icon prefers this at runtime
-            libdbusmenu-gtk3
-            xdotool        # libxdo for muda/tray-icon
-            # Iced / winit runtime (wgpu backend + tiny-skia fallback)
-            vulkan-loader
-            libGL
-            fontconfig
-            freetype
-            expat
-            chafa          # optional runtime tool; not a build dep
-            # X11 fallback (winit)
-            xorg.libX11
-            xorg.libXcursor
-            xorg.libXrandr
-            xorg.libXi
-            xorg.libxcb
           ];
 
-          # Iced/winit/tray-icon dlopen these at runtime; rpath them in
           LD_LIBRARY_PATH = lib.makeLibraryPath (with pkgs; [
-            vulkan-loader
-            libGL
             wayland
             libxkbcommon
-            fontconfig
-            freetype
-            # tray-icon uses libappindicator via dlopen on Linux
-            libappindicator-gtk3
-            libayatana-appindicator
-            libdbusmenu-gtk3
-            gtk3
-            gdk-pixbuf
-            glib
-            atk
-            cairo
-            pango
-            xorg.libX11
-            xorg.libXcursor
-            xorg.libXrandr
-            xorg.libXi
-            xorg.libxcb
           ]);
 
           RUST_BACKTRACE = 1;

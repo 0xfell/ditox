@@ -66,7 +66,7 @@ impl ActionsConfig {
 }
 
 /// Built-in actions that can be applied to a clip via the
-/// [`ActionsConfig`] templates. Used by the CLI / future GUI
+/// [`ActionsConfig`] templates. Used by the CLI / TUI
 /// context-menu integration to pick a template by name without
 /// hardcoding the template strings at the call site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -55,7 +55,7 @@ use crate::foreground::{ForegroundId, ForegroundSnapshot, ForegroundTracker};
 
 /// Foreground tracker for Hyprland.
 ///
-/// One instance per launcher is fine — each call to `snapshot()` /
+/// One instance per TUI process is fine — each call to `snapshot()` /
 /// `restore()` spawns its own `hyprctl` invocation; no Wayland
 /// connection is held.
 pub struct HyprctlForegroundTracker {
@@ -427,7 +427,7 @@ mod tests {
     #[test]
     fn parse_malformed_json_returns_none() {
         // Garbage in → None out (logged at warn). Don't propagate
-        // to the launcher; it'd spuriously fail every paste.
+        // to the TUI; it'd spuriously fail every paste.
         assert!(parse_activewindow("not json at all").is_none());
         assert!(parse_activewindow("{").is_none());
     }

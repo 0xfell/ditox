@@ -1,6 +1,6 @@
 //! Cross-entry aggregation for the multi-select "merge" workflow.
 //!
-//! When a user selects N entries in the GUI/TUI and chooses "paste as
+//! When a user selects N entries in the TUI and chooses "paste as
 //! one", we synthesise a single new clip by combining each entry's
 //! bytes for one chosen format. Different formats need different join
 //! strategies — HTML wants a single Windows clipboard envelope around

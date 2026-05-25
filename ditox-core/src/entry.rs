@@ -66,10 +66,10 @@ pub struct Entry {
     /// `(hash, image_extension)` — see `Database::image_path`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_extension: Option<String>,
-    /// Optional global hotkey for direct paste from outside the launcher.
+    /// Optional global hotkey for direct paste from outside the TUI.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub global_hotkey: Option<String>,
-    /// Optional local launcher-only hotkey.
+    /// Optional local TUI-only hotkey.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_hotkey: Option<String>,
 }

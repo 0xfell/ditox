@@ -439,10 +439,7 @@ impl Watcher {
         self.config.general.poll_interval_ms
     }
 
-    /// One-shot poll. Used by the GUI's in-process watcher (which
-    /// doesn't acquire the daemon lock — only one daemon at a time,
-    /// but the GUI's watcher and the daemon are designed to coexist
-    /// because dedup catches duplicates).
+    /// One-shot poll for tests and future embedded service modes.
     pub fn poll_once(&mut self) -> Result<bool> {
         self.poll_internal()
     }
@@ -749,7 +746,7 @@ impl Watcher {
             }
         }
 
-        // Paste-back sentinel: the launcher writes a hash + timestamp
+        // Paste-back sentinel: the TUI writes a hash + timestamp
         // file after each paste so the watcher can drop the inevitable
         // re-capture. Best-effort across platforms — if the file
         // doesn't exist or is corrupt, we just don't skip. See

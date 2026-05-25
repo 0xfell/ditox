@@ -3,7 +3,7 @@
 //! Three modes:
 //!
 //! - [`Mode::Stderr`] — pretty `tracing-subscriber::fmt` to stderr.
-//!   Default for interactive CLI / GUI use.
+//!   Default for interactive CLI / TUI use.
 //! - [`Mode::Journald`] — gated behind the `journald` cargo feature
 //!   (currently a stub; full integration arrives in task 016 along
 //!   with the systemd unit).
@@ -40,11 +40,10 @@ pub enum Mode {
 /// is set-once.
 ///
 /// `RUST_LOG` is honoured; the default filter is
-/// `ditox=info,ditox_core=info,ditox_tui=info,ditox_gui=info,warn`.
+/// `ditox=info,ditox_core=info,ditox_tui=info,warn`.
 pub fn init(mode: Mode) {
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("ditox=info,ditox_core=info,ditox_tui=info,ditox_gui=info,warn")
-    });
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("ditox=info,ditox_core=info,ditox_tui=info,warn"));
 
     match mode {
         Mode::Stderr => {

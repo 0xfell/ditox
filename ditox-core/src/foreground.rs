@@ -1,10 +1,10 @@
 //! Foreground-window tracking for paste-back targeting.
 //!
 //! Phase 2 sub-task 2.1. The Ditto-style paste-back UX needs to know
-//! *which window had focus before the launcher appeared*, so that
+//! *which window had focus before the TUI appeared*, so that
 //! after the user picks a clip we can:
 //!
-//! 1. Hide the launcher.
+//! 1. Dismiss the TUI.
 //! 2. Restore focus to the previously-tracked window.
 //! 3. Synthesise Ctrl+V (or a per-app override) into it.
 //!
@@ -30,12 +30,12 @@
 //!
 //! Not every platform lets a non-privileged client re-focus a
 //! specific window. [`ForegroundId::supports_restore`] encodes the
-//! matrix; the launcher consults it before deciding whether to
+//! matrix; the TUI consults it before deciding whether to
 //! attempt a `restore()` call.
 //!
 //! | Platform                | `restore()` | Notes |
 //! |-------------------------|-------------|-------|
-//! | Windows                 | Yes         | `SetForegroundWindow` (with foreground-lock workaround already in `ditox-gui`) |
+//! | Windows                 | Yes         | `SetForegroundWindow` |
 //! | Hyprland                | Yes         | `hyprctl dispatch focuswindow address:0x…` |
 //! | Sway / wlroots          | Yes         | `wlr-foreign-toplevel-management` activate request, compositor may ignore |
 //! | KDE Wayland             | No          | KWin has no client-driven focus; tracked separately |
@@ -72,10 +72,10 @@ pub mod wlr;
 ///   adds the `Win32ForegroundTracker`).
 /// - **macOS / Other** → [`NoopForegroundTracker`].
 ///
-/// The launcher consults
+/// The TUI consults
 /// [`ForegroundSnapshot::identifier`]'s
 /// [`ForegroundId::supports_restore`] before attempting a restore,
-/// so even with the noop tracker the GUI degrades gracefully (write
+/// so even with the noop tracker the TUI degrades gracefully (write
 /// the clipboard, show "paste manually" status, exit).
 pub fn build_default_tracker() -> Box<dyn ForegroundTracker> {
     use crate::platform::{detect, LinuxCompositor, Platform};
@@ -109,7 +109,7 @@ pub fn build_default_tracker() -> Box<dyn ForegroundTracker> {
 
 /// A point-in-time snapshot of the currently-focused window.
 ///
-/// Held by the launcher between summon and paste so the user's
+/// Held by the TUI between open and paste so the user's
 /// previous app can be re-focused at paste-back time.
 #[derive(Debug, Clone)]
 pub struct ForegroundSnapshot {
@@ -123,7 +123,7 @@ pub struct ForegroundSnapshot {
     /// it doesn't (no extension on the executable).
     pub process_basename: String,
     /// Window title at snapshot time. Display-only — used in
-    /// debug logs and the launcher's "Pasting into …" status line.
+    /// debug logs and the TUI's "Pasting into ..." status line.
     pub title: String,
     /// Wall-clock instant the snapshot was captured.
     pub captured_at: SystemTime,
@@ -136,7 +136,7 @@ pub struct ForegroundSnapshot {
 /// Concrete backends translate from this portable form back to their
 /// native handle when [`ForegroundTracker::restore`] is called.
 ///
-/// Equality and hashing are derived so the launcher can dedup
+/// Equality and hashing are derived so the TUI can dedup
 /// snapshots across rapid focus oscillations (alt-tab spam, etc.).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ForegroundId {
@@ -175,7 +175,7 @@ impl ForegroundId {
     /// True when [`ForegroundTracker::restore`] can re-focus a window
     /// of this kind.
     ///
-    /// Drives launcher behaviour: when `false`, the launcher skips
+    /// Drives TUI behaviour: when `false`, the TUI skips
     /// the explicit restore call and relies on the compositor's
     /// "previous-focus" semantics that fire when our window is
     /// hidden. See the table in the module docs for the per-platform
@@ -208,7 +208,7 @@ impl ForegroundId {
 /// Foreground-window tracker.
 ///
 /// Concrete backends (one per platform) implement this trait. The
-/// launcher selects a backend at startup based on the detected
+/// TUI selects a backend at startup based on the detected
 /// [`crate::platform::Platform`].
 ///
 /// ## Lifecycle
@@ -221,7 +221,7 @@ impl ForegroundId {
 ///    previous subscription — match the [`crate::capture::CaptureSource`]
 ///    contract).
 /// 3. `snapshot()` at any time: synchronous read; no subscription
-///    required. The launcher uses this on summon to capture the
+///    required. The TUI uses this on open to capture the
 ///    "current foreground" before it itself becomes the foreground.
 /// 4. `restore()` at any time: also no-subscription-required.
 /// 5. `shutdown()`: idempotent; tears down whatever `subscribe()`
@@ -237,10 +237,10 @@ pub trait ForegroundTracker: Send {
     ///   identified.
     /// - `Ok(None)` — the platform doesn't expose the focused
     ///   window, no window currently has focus, or the focused
-    ///   window is the launcher itself (when wrapped in
+    ///   window is the TUI itself (when wrapped in
     ///   [`ForegroundFilter`]).
     /// - `Err(_)` — the tracker is in a broken state (e.g. the
-    ///   compositor died); the launcher logs and degrades to no
+    ///   compositor died); the TUI logs and degrades to no
     ///   restore.
     fn snapshot(&self) -> Result<Option<ForegroundSnapshot>>;
 
@@ -251,7 +251,7 @@ pub trait ForegroundTracker: Send {
     /// `Ok(())` — relying on the compositor's hide-our-window =>
     /// restore-previous-focus semantics.
     ///
-    /// Errors are returned but the launcher should treat them as
+    /// Errors are returned but the TUI should treat them as
     /// non-fatal: even if focus restore fails, the user can paste
     /// manually.
     fn restore(&self, snapshot: &ForegroundSnapshot) -> Result<()>;
@@ -259,8 +259,8 @@ pub trait ForegroundTracker: Send {
     /// Subscribe to foreground-change events. The receiver yields a
     /// snapshot whenever focus moves to a different window.
     ///
-    /// Most launchers don't need the subscription — they call
-    /// `snapshot()` on summon. The subscription exists for the
+    /// Most TUI flows don't need the subscription — they call
+    /// `snapshot()` on open. The subscription exists for the
     /// Phase 4 "what app is the user currently in?" status line and
     /// for the watcher's per-app exclusion rules (Phase 3).
     fn subscribe(&mut self) -> Result<mpsc::Receiver<ForegroundSnapshot>>;
@@ -274,21 +274,19 @@ pub trait ForegroundTracker: Send {
 // ---------------------------------------------------------------------------
 
 /// Tracker decorator that drops snapshots whose `process_basename`
-/// matches the launcher's own executable name.
+/// matches ditox's own executable name.
 ///
-/// Why: the launcher's window is itself a foreground window. Without
-/// filtering, calling `snapshot()` *after* the launcher gains focus
-/// would return the launcher itself, defeating the entire paste-back
-/// flow ("paste into ditox-gui" is meaningless).
+/// Why: the TUI is itself a foreground window. Without filtering,
+/// calling `snapshot()` after ditox gains focus would return ditox
+/// itself, defeating the paste-back flow.
 ///
-/// Defaults to filtering both `"ditox-gui"` and `"ditox"` (the TUI
-/// also renders text, so per-clip global hotkeys triggering from the
-/// TUI shouldn't see TUI as a paste target). Users can override the
+/// Defaults to filtering `"ditox"` (and `"ditox.exe"` on Windows).
+/// Users can override the
 /// list via [`ForegroundFilter::with_self_basenames`] for downstream
 /// repackagings (`my-clipboard-app`, etc.).
 ///
 /// Comparison is ASCII-case-insensitive — Windows reports basenames
-/// with mixed case (`Ditox-Gui.exe`).
+/// with mixed case (`Ditox.exe`).
 pub struct ForegroundFilter<T: ForegroundTracker> {
     inner: T,
     self_basenames: Vec<String>,
@@ -299,17 +297,12 @@ pub struct ForegroundFilter<T: ForegroundTracker> {
 }
 
 impl<T: ForegroundTracker> ForegroundFilter<T> {
-    /// Default constructor with `["ditox-gui", "ditox", "ditox-gui.exe", "ditox.exe"]`
+    /// Default constructor with `["ditox", "ditox.exe"]`
     /// as self-names. Covers Linux + Windows binary names.
     pub fn new(inner: T) -> Self {
         Self {
             inner,
-            self_basenames: vec![
-                "ditox-gui".into(),
-                "ditox".into(),
-                "ditox-gui.exe".into(),
-                "ditox.exe".into(),
-            ],
+            self_basenames: vec!["ditox".into(), "ditox.exe".into()],
             filter_thread: None,
         }
     }
@@ -395,7 +388,7 @@ impl<T: ForegroundTracker> ForegroundTracker for ForegroundFilter<T> {
 /// Used on platforms where foreground tracking isn't possible
 /// (current main case: GNOME Wayland — no foreign-toplevel
 /// protocol, no client API for "what window has focus"). The
-/// launcher emits a one-time warning at startup so the user
+/// TUI emits a one-time warning at startup so the user
 /// understands why paste-back doesn't re-target their previous app.
 pub struct NoopForegroundTracker;
 
@@ -580,7 +573,7 @@ mod tests {
 
     #[test]
     fn id_is_hash_and_eq() {
-        // Required for the launcher's "dedup rapid focus oscillations"
+        // Required for the TUI's "dedup rapid focus oscillations"
         // use case.
         let a = ForegroundId::Hypr {
             address: "0x123".into(),
@@ -685,9 +678,9 @@ mod tests {
 
     #[test]
     fn filter_drops_self_snapshot() {
-        // ditox-gui's own focus must never become the "previous
-        // foreground" the launcher remembers.
-        let inner = MockForegroundTracker::new(Some(make_snap("ditox-gui")));
+        // ditox's own focus must never become the "previous
+        // foreground" the TUI remembers.
+        let inner = MockForegroundTracker::new(Some(make_snap("ditox")));
         let f = ForegroundFilter::new(inner);
         assert!(matches!(f.snapshot(), Ok(None)));
     }
@@ -702,8 +695,8 @@ mod tests {
 
     #[test]
     fn filter_self_match_is_case_insensitive() {
-        // Windows reports `Ditox-Gui.exe` with mixed case.
-        let inner = MockForegroundTracker::new(Some(make_snap("Ditox-Gui.exe")));
+        // Windows reports `Ditox.exe` with mixed case.
+        let inner = MockForegroundTracker::new(Some(make_snap("Ditox.exe")));
         let f = ForegroundFilter::new(inner);
         assert!(matches!(f.snapshot(), Ok(None)));
     }
@@ -736,7 +729,7 @@ mod tests {
         // Manually create the filter with a thread that reads from
         // rx_inner. This is what ForegroundFilter::subscribe does
         // internally; we can't re-wrap without consuming inner.
-        let basenames = ["ditox-gui".to_string()];
+        let basenames = ["ditox".to_string()];
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             while let Ok(snap) = rx_inner.recv() {
@@ -749,7 +742,7 @@ mod tests {
             }
         });
         // Inject one self + one non-self.
-        inner.inject(make_snap("ditox-gui")).unwrap();
+        inner.inject(make_snap("ditox")).unwrap();
         inner.inject(make_snap("firefox")).unwrap();
         let received = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(
@@ -766,7 +759,7 @@ mod tests {
 
     #[test]
     fn trackers_are_object_safe() {
-        // The launcher will hold a `Box<dyn ForegroundTracker>`
+        // The TUI will hold a `Box<dyn ForegroundTracker>`
         // chosen at startup based on platform detection — this
         // compile check guarantees that's possible.
         let trackers: Vec<Box<dyn ForegroundTracker>> = vec![

@@ -3,13 +3,12 @@
 //! Ditto's modifier-held cycling UX — hold `Ctrl+Shift`, hit `V`
 //! repeatedly to advance through the most-recent clips, release the
 //! modifier to paste — requires a long-running daemon that owns the
-//! launcher window across keystrokes. ditox-gui is currently a
-//! one-shot launcher (Phase 4 of the master plan reverts that), so we
-//! can't deliver the full UX yet.
+//! picker state across keystrokes. ditox currently stores the cursor
+//! on disk so separate TUI invocations can share it.
 //!
 //! What we *can* deliver as Phase-2 groundwork is a **selection
 //! cursor**: a tiny bit of state (current index + last fire time)
-//! that survives across launcher invocations. Each launch fires the
+//! that survives across TUI invocations. Each open fires the
 //! cursor:
 //!
 //! - if the previous fire was within the configured "re-fire window"
@@ -17,14 +16,12 @@
 //!   the cursor index is `+1`;
 //! - otherwise the cursor resets to `0`.
 //!
-//! The launcher then pre-selects the entry at that index. Effect:
+//! The TUI then pre-selects the entry at that index. Effect:
 //! pressing `Ctrl+Shift+V` rapidly cycles through the most-recent
 //! clips one entry at a time; idling for >800 ms resets to the top.
 //!
-//! When Phase 4's daemon mode arrives, the same primitive will live
-//! in memory (no filesystem round-trip) and an additional
-//! "modifier-released" event will commit the paste. The struct
-//! itself doesn't care — the storage layer is decoupled.
+//! A future long-running terminal service can keep the same primitive
+//! in memory and skip the filesystem round-trip.
 //!
 //! ## File location
 //!
@@ -36,16 +33,15 @@
 //! Both [`SelectionCursor::read_from`] and
 //! [`SelectionCursor::write_to`] are best-effort: a missing /
 //! unreadable / corrupt file is treated as "fresh cursor" rather
-//! than propagated as an error. The launcher must always boot, even
+//! than propagated as an error. The TUI must always boot, even
 //! if cursor persistence fails.
 //!
 //! ## Concurrency
 //!
-//! Two launchers firing within the same millisecond is the only
+//! Two TUI processes firing within the same millisecond is the only
 //! interesting race. Writes are atomic via tmp-write + rename, so
 //! readers always see a consistent snapshot. Last-writer-wins on
-//! the cursor index is acceptable — both launchers are racing to
-//! the same UX outcome anyway.
+//! the cursor index is acceptable.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -69,7 +65,7 @@ struct CursorRecord {
     #[serde(default = "default_version")]
     version: u32,
     /// Current cursor index, clamped at the call site by the
-    /// launcher to fit the visible list.
+    /// TUI to fit the visible list.
     index: usize,
     /// Wall-clock instant the cursor was last fired, milliseconds
     /// since UNIX epoch. `0` = never fired.
@@ -261,7 +257,7 @@ impl PersistentSelectionCursor {
     }
 
     /// Convenience: read, fire, write, return the new cursor.
-    /// Mirrors the typical launcher boot path.
+    /// Mirrors the typical TUI open path.
     pub fn fire_and_persist(&self, now: SystemTime, window: Duration) -> SelectionCursor {
         let mut cursor = self.read();
         cursor.fire(now, window);

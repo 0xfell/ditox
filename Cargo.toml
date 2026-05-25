@@ -1,5 +1,5 @@
 [workspace]
-members = ["ditox-core", "ditox-tui", "ditox-gui"]
+members = ["ditox-core", "ditox-tui"]
 resolver = "2"
 
 [workspace.package]
@@ -68,15 +68,6 @@ crossterm = "0.29.0"
 ratatui-image = { version = "10.0.6", default-features = false, features = ["crossterm"] }
 clap = { version = "4.6.1", features = ["derive"] }
 
-# GUI-specific
-iced = { version = "0.14.0", features = ["image", "tokio"] }
-# Phase 4 sub-task 4.3: wlr-layer-shell window for Linux compositors
-# that support the protocol (Hyprland / Sway / wlroots / Kde Plasma 5.27+).
-# Pinned to 0.17.1 through Phase 4 to avoid the in-flight 0.18 beta
-# churn; unpin in v0.5. ADR: docs/notes/adr/0001-layer-shell-strategy.md.
-iced_layershell = "=0.17.1"
-tray-icon = "0.22.1"
-global-hotkey = "0.7.0"
 tokio = { version = "1.52.1", features = ["rt-multi-thread", "macros", "sync"] }
 
 # Testing

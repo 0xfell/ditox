@@ -1,8 +1,7 @@
 //! Cross-process paste-back sentinel (Phase 2 sub-task 2.7, Linux).
 //!
-//! When the launcher pastes a clip back into the previously-focused
-//! window, the watcher (whether the long-running daemon or the GUI's
-//! in-process watcher) inevitably observes the resulting clipboard
+//! When the TUI pastes a clip back into the previously-focused
+//! window, the watcher inevitably observes the resulting clipboard
 //! change and would record it as a *new* entry — duplicating the
 //! original. Ditto's solution on Windows is to set a registered
 //! format named `Clipboard Viewer Ignore`; downstream watchers check
@@ -10,12 +9,11 @@
 //!
 //! On Wayland, registering an extra MIME on every paste is ergonomic
 //! only if we also use a multi-format clipboard write. Until that
-//! lands (see Phase 1 sub-task 1.x and the GUI's paste-back
-//! sequence), we use a **content + timestamp file** as the
+//! lands, we use a **content + timestamp file** as the
 //! cross-process signal:
 //!
 //! 1. After [`crate::clipboard::Clipboard::set_text`] /
-//!    `set_image` succeeds, the launcher calls [`PasteSentinel::record`]
+//!    `set_image` succeeds, the TUI calls [`PasteSentinel::record`]
 //!    with the SHA-256 of the just-written content.
 //! 2. The watcher calls [`PasteSentinel::matches`] before recording
 //!    each captured clip. If the captured content's hash matches and
@@ -31,12 +29,12 @@
 //! unreadable / corrupt file is treated as "no recent paste", not
 //! propagated as an error. This trades occasional duplicate captures
 //! (during a paste-back when the file write fails) for never blocking
-//! the launcher or the watcher on a transient I/O hiccup.
+//! the TUI or the watcher on a transient I/O hiccup.
 //!
 //! ## Concurrency
 //!
 //! The file is written atomically via tmp-write + rename. Multiple
-//! concurrent paste-backs from racing launchers (rare) result in a
+//! concurrent paste-backs from racing TUI processes (rare) result in a
 //! last-writer-wins outcome — acceptable since the worst case is one
 //! of the two paste-backs gets re-captured.
 
@@ -50,7 +48,7 @@ use crate::error::{DitoxError, Result};
 /// Filename inside the data dir.
 const SENTINEL_FILENAME: &str = "last-paste.json";
 
-/// Sentinel file payload. Written by the launcher, read by the
+/// Sentinel file payload. Written by the TUI, read by the
 /// watcher.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SentinelRecord {

@@ -3,12 +3,12 @@
 //! Detects the OS and (on Linux) the active compositor / desktop
 //! environment. Cached process-wide via `OnceLock`.
 //!
-//! Used to gate compositor-specific code paths in Phases 2, 4, 5, 6 of
+//! Used to gate compositor-specific code paths in Phases 2, 5, 6 of
 //! the v1.0 master plan:
 //! - Hyprland uses `hyprctl` for foreground/cursor/sendshortcut.
 //! - Sway uses `swaymsg` for foreground.
-//! - Wlroots compositors get layer-shell + `wlr-foreign-toplevel`.
-//! - GNOME Wayland is degraded (no wlr-* protocols, no in-app hotkey).
+//! - Wlroots compositors get `wlr-foreign-toplevel`.
+//! - GNOME Wayland is degraded (no wlr-* protocols, no in-process hotkey).
 //! - Windows / macOS get their native APIs.
 //!
 //! Detection is **cheap and never panics**. Each probe is wrapped in
@@ -196,20 +196,6 @@ fn detect_macos_version() -> Option<MacosVersion> {
 }
 
 impl Platform {
-    /// Does this platform support `wlr-layer-shell`? Used by the GUI
-    /// to decide whether to use a layer-shell window or fall back to
-    /// `xdg_toplevel`.
-    pub fn supports_layer_shell(&self) -> bool {
-        matches!(
-            self,
-            Platform::Linux(
-                LinuxCompositor::Hyprland { .. }
-                    | LinuxCompositor::Sway { .. }
-                    | LinuxCompositor::Wlroots { .. }
-            )
-        )
-    }
-
     /// Does this platform expose `wlr-foreign-toplevel-management-v1`?
     /// Used for the Wayland foreground tracker (Phase 2).
     pub fn supports_wlr_foreign_toplevel(&self) -> bool {
@@ -321,7 +307,6 @@ mod tests {
             || {
                 let p = force_detect_for_test();
                 assert_eq!(p.slug(), "hyprland");
-                assert!(p.supports_layer_shell());
                 assert!(p.supports_hyprctl());
                 assert!(!p.supports_global_hotkey_in_app());
                 assert!(p.supports_wlr_foreign_toplevel());
@@ -365,7 +350,6 @@ mod tests {
             || {
                 let p = force_detect_for_test();
                 assert_eq!(p.slug(), "sway");
-                assert!(p.supports_layer_shell());
                 assert!(!p.supports_hyprctl());
                 assert_eq!(p.paste_synthesizer_chain(), vec!["wtype", "ydotool"]);
             },
@@ -386,7 +370,6 @@ mod tests {
             || {
                 let p = force_detect_for_test();
                 assert_eq!(p.slug(), "kde-wayland");
-                assert!(!p.supports_layer_shell());
                 assert!(p.supports_wlr_foreign_toplevel());
             },
         );
@@ -407,7 +390,6 @@ mod tests {
                 let p = force_detect_for_test();
                 assert_eq!(p.slug(), "gnome-wayland");
                 assert!(!p.supports_wlr_foreign_toplevel());
-                assert!(!p.supports_layer_shell());
                 assert_eq!(p.paste_synthesizer_chain(), vec!["ydotool"]);
             },
         );

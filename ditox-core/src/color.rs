@@ -1,7 +1,7 @@
 //! CSS-style color detection (Phase 3 sub-task 3.3).
 //!
 //! Detects the first color literal in a text snippet so the TUI and
-//! GUI list views can render a filled swatch alongside the entry
+//! TUI list views can render a filled swatch alongside the entry
 //! preview. Five formats are recognised in priority order:
 //!
 //! 1. `#RRGGBBAA` — 8-digit RGBA hex (alpha last, per CSS Color 4).

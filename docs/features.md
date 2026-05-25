@@ -222,12 +222,12 @@ Track your clipboard usage:
 
 ## Linux Desktop Support
 
-- **Hyprland:** first-class target for layer-shell launcher, foreground
-  tracking, paste-back synthesis, generated per-clip binds, and run-at-login.
+- **Hyprland:** first-class target for foreground tracking, paste-back
+  synthesis, compositor keybinds, and run-at-login.
 - **Sway:** first-class target where wlroots protocols and `wtype` are
   available.
 - **Generic wlroots/KDE Wayland:** supported where compositor protocols are
   exposed; unavailable features must degrade gracefully.
 - **GNOME Wayland:** degraded mode because Mutter does not expose the wlroots
-  protocols used for layer-shell and foreground tracking. Capture and manual
-  paste workflows remain supported.
+  protocols used for foreground tracking. Capture and manual paste workflows
+  remain supported.

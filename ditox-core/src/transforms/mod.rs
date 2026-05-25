@@ -1,7 +1,7 @@
 //! Special-paste transforms (Phase 3 sub-task 3.1).
 //!
 //! A library of text-level transforms applied between "select a clip"
-//! and "write to clipboard". The user picks a transform from a TUI/GUI
+//! and "write to clipboard". The user picks a transform from the TUI
 //! menu (or invokes `ditox transform` from the CLI); the transform
 //! consumes the entry's text content and produces the bytes that
 //! actually land on the OS clipboard. Original entries are
@@ -49,7 +49,7 @@ pub trait Transform: Send + Sync {
     /// and menu IDs. Must be unique within the registry.
     fn id(&self) -> &'static str;
 
-    /// Short user-visible label shown in TUI/GUI menus.
+    /// Short user-visible label shown in TUI menus.
     fn name(&self) -> &'static str;
 
     /// One-line description for help text and tooltips.
@@ -63,7 +63,7 @@ pub trait Transform: Send + Sync {
 }
 
 /// All built-in transforms in one slice. Order is the order they
-/// appear in TUI/GUI menus.
+/// appear in TUI menus.
 pub fn registry() -> &'static [&'static dyn Transform] {
     &[
         &string::PlainTextOnly,

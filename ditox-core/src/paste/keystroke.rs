@@ -11,7 +11,7 @@
 //! "foot"       = "ctrl+shift+v"
 //! ```
 //!
-//! Default keystroke is `ctrl+v`. The launcher resolves a per-app
+//! Default keystroke is `ctrl+v`. The TUI resolves a per-app
 //! override by basename lookup (lowercased) and falls back to the
 //! default otherwise.
 //!

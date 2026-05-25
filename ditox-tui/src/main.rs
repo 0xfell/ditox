@@ -859,14 +859,6 @@ fn cmd_status(db: &Database) -> Result<()> {
     println!("Images dir:  {}", images_dir.display());
     println!("Platform:    {}", platform.slug());
     println!(
-        "  layer-shell:    {}",
-        if platform.supports_layer_shell() {
-            "yes"
-        } else {
-            "no"
-        }
-    );
-    println!(
         "  wlr-toplevel:   {}",
         if platform.supports_wlr_foreign_toplevel() {
             "yes"

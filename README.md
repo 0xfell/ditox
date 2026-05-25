@@ -1,53 +1,49 @@
 # Ditox
 
-A Linux clipboard manager for Wayland desktops.
+A terminal-first clipboard manager for Wayland desktops.
 
-- **TUI** (`ditox`) — keyboard-driven terminal UI + full CLI.
-- **GUI** (`ditox-gui`) — iced + system tray, summoned on Linux with compositor keybinds through `ditox-gui --toggle`.
-- **Daemon** — lightweight clipboard watcher with SHA-256 dedup.
+- **TUI** (`ditox`) - keyboard-driven terminal UI and full CLI.
+- **Watcher** - lightweight clipboard daemon with SHA-256 deduplication.
+- **Native core** - Rust storage, clipboard capture, paste-back, image handling, and sync.
+
+Ditox is now a TUI-only project. The next frontend generation is planned around
+Bun, TypeScript, SolidJS, and OpenTUI, with Rust kept for native OS services.
 
 ## Features
 
-- Text and image capture, including browser "Copy image" with URL/image ambiguity resolved.
-- Content-addressed image store (atomic writes, refcount-based pruning) — no orphan files.
-- Full-text search (FTS5), fuzzy and regex modes.
-- Named collections, pinned favorites, quick-snippet slots (1–9).
-- Pagination-aware lists; 10k+ entries load in milliseconds.
-- Wayland clipboard integration via `wl-clipboard`.
-- System tray via libappindicator/Ayatana AppIndicator.
-- Home Manager module + systemd user service.
+- Text and image capture, including browser "Copy image" cases where the clipboard also contains a URL.
+- Content-addressed image store with atomic writes and refcount-based pruning.
+- Full-text search, fuzzy search, and regex search modes.
+- Named collections, favorites, notes, quick-snippet slots, tags, and multi-select.
+- Pagination-aware lists; large histories stay fast.
+- Inline terminal image previews through kitty, sixel, iTerm2, or half-block rendering.
+- Wayland clipboard integration via `wl-clipboard-rs`.
+- Systemd user service and Home Manager module.
 - `ditox repair` for image-store reconciliation.
 
 ## Install
 
-### Linux — NixOS / Nix
+### Nix
 
-**Ad-hoc run:**
 ```sh
-nix run github:0xfell/ditox              # launch the TUI
-nix run github:0xfell/ditox#ditox-gui    # launch the GUI
-```
-
-**Install into a profile:**
-```sh
+nix run github:0xfell/ditox
 nix profile install github:0xfell/ditox
 ```
 
-**Declarative (flake + Home Manager):**
+With Home Manager:
+
 ```nix
 {
-  inputs.ditox.url = "github:0xfell/ditox";      # track master
-  # inputs.ditox.url = "github:0xfell/ditox/v0.3.0";   # pin to a release
+  inputs.ditox.url = "github:0xfell/ditox";
 
   outputs = { self, nixpkgs, ditox, home-manager, ... }: {
     homeConfigurations.you = home-manager.lib.homeManagerConfiguration {
-      # ...
       modules = [
         ditox.homeManagerModules.default
         {
           programs.ditox = {
             enable = true;
-            systemd.enable = true;        # auto-start the watcher
+            systemd.enable = true;
             settings = {
               general.max_entries = 1000;
               general.poll_interval_ms = 250;
@@ -61,127 +57,82 @@ nix profile install github:0xfell/ditox
 }
 ```
 
-**Binary cache:** release builds are pushed to
-[cachix.org/ditox](https://app.cachix.org/cache/ditox). To skip local
-compilation:
+Release builds are pushed to [cachix.org/ditox](https://app.cachix.org/cache/ditox):
+
 ```sh
-# One-off:
 nix run --option extra-substituters https://ditox.cachix.org \
         --option extra-trusted-public-keys ditox.cachix.org-1:kVMmDqje/wWu/ChZfMzWdqduZlBptE7LoHZ3lTFdxg8= \
         github:0xfell/ditox
-
-# Or, once, as root on NixOS:
-cachix use ditox
 ```
 
-### Linux — prebuilt binaries (non-Nix)
+### Prebuilt Binaries
 
-All artifacts live at
-<https://github.com/0xfell/ditox/releases/latest>.
+Artifacts live at <https://github.com/0xfell/ditox/releases/latest>.
 
-**TUI only — static, no deps:**
 ```sh
 curl -L https://github.com/0xfell/ditox/releases/latest/download/ditox-x86_64-linux-musl.tar.gz | tar xz
 sudo install ditox /usr/local/bin/
 ```
 
-**GUI — AppImage (x86_64 and aarch64):**
+Install `wl-clipboard` from your distro for shell interoperability:
+
 ```sh
-curl -LO https://github.com/0xfell/ditox/releases/latest/download/ditox-gui-x86_64-linux.AppImage
-chmod +x ditox-gui-x86_64-linux.AppImage
-./ditox-gui-x86_64-linux.AppImage
+sudo apt install wl-clipboard
+sudo pacman -S wl-clipboard
+sudo dnf install wl-clipboard
 ```
 
-You still need `wl-clipboard` on the TUI side for clipboard operations:
-```sh
-sudo apt install wl-clipboard         # Debian/Ubuntu
-sudo pacman -S wl-clipboard           # Arch
-sudo dnf install wl-clipboard         # Fedora
-```
-
-### Build from source
+### Build From Source
 
 ```sh
 git clone https://github.com/0xfell/ditox
 cd ditox
 nix develop
 cargo build --release --workspace
-# binaries: target/release/ditox  target/release/ditox-gui
 ```
 
-`nix develop` is the recommended development environment because it supplies
-the native libraries needed by the GUI and tray stack. Non-Nix Linux builds
-must provide the equivalent system packages: `pkg-config`, GLib, GTK3,
-Wayland, libxkbcommon, libappindicator or Ayatana AppIndicator, X11 fallback
-libraries, Vulkan/OpenGL loader support, and fontconfig/freetype.
-
-Windows and macOS are future ports. Code may exist in the repository, but the
-final release target documented here is Linux.
+The release binary is `target/release/ditox`.
 
 ## Usage
-
-### TUI
 
 ```sh
 ditox                 # browse history
 ditox watch           # start the clipboard watcher
 ```
 
-Key bindings (TUI):
+Common TUI keys:
 
 | Key | Action |
 |---|---|
-| `j`/`k`, `↑`/`↓` | Move selection |
+| `j`/`k`, `up`/`down` | Move selection |
 | `g` / `G` | Top / bottom |
 | `Enter` | Copy and quit |
-| `y` | Copy, stay open |
+| `y` | Copy and stay open |
 | `Tab` | Toggle preview pane |
-| `/` | Fuzzy search (Ctrl+R toggles regex) |
-| `f` | Toggle favorite |
-| `d` | Delete (with confirmation) |
-| `D` | Clear all (with confirmation) |
+| `/` | Fuzzy search |
+| `Ctrl+R` | Regex search |
+| `d` / `D` | Delete / clear with confirmation |
 | `n` | Edit note |
-| `1`…`9` | Switch tab (All/Text/Images/Favorites/Today/…) |
-| `v` | Multi-select mode |
+| `m`, `Space`, `v` | Multi-select mode |
 | `?` | Help overlay |
 | `q` | Quit |
 
-### CLI
+CLI examples:
 
 ```sh
 ditox list [--limit N] [--json] [--favorites]
-ditox get <n|id> [--json]          # print raw content
+ditox get <n|id> [--json]
 ditox search <query> [--limit N] [--json]
-ditox copy <n|id>                  # push entry onto the clipboard
+ditox copy <n|id>
 ditox delete <n|id>
 ditox favorite <n|id>
 ditox clear [--confirm]
-ditox count
 ditox status
 ditox stats [--json]
 ditox repair [--dry-run] [--fix-hashes]
 ditox collection list|create|delete|rename|add|remove|show
+ditox sync discover|pull|peers|log|trust|reject|untrust|auto-send
 ```
-
-Entry targets are either 1-based indices (from `list`) or UUIDs.
-
-`ditox repair` reconciles the image store with the database — removes
-orphan files, prunes dangling rows, and (with `--fix-hashes`) quarantines
-any file whose SHA-256 disagrees with the row it's supposed to back.
-See [`docs/notes/image-storage.md`](docs/notes/image-storage.md) for the
-full storage protocol.
-
-### GUI
-
-- **Linux:** run `ditox-gui`. The tray icon offers show/hide/quit/"Run at
-  login". Summon from a compositor keybind with `ditox-gui --toggle`:
-  ```conf
-  # Hyprland
-  bind = SUPER, V, exec, ditox-gui --toggle
-  ```
-  Single-instance coordination uses `flock` + a Unix socket under
-  `$XDG_RUNTIME_DIR`; a second launch just toggles the running instance.
-- **Windows:** Ctrl+Shift+V is registered globally. Tray icon → Quit.
 
 ## Configuration
 
@@ -195,43 +146,40 @@ poll_interval_ms = 250
 [ui]
 show_preview = true
 date_format = "relative"
-# graphics_protocol = "kitty"     # override auto-detection: kitty | sixel | iterm2 | halfblocks
+# graphics_protocol = "kitty" # kitty | sixel | iterm2 | halfblocks
 
 [ui.theme]
 selected = "#7aa2f7"
-border   = "#565f89"
-text     = "#c0caf5"
+border = "#565f89"
+text = "#c0caf5"
+muted = "#565f89"
 ```
 
-The Home Manager module (`programs.ditox.settings`) renders this file
-declaratively — see the install example above.
-
-## Data locations
+## Data Locations
 
 | Item | Linux path |
 |---|---|
 | Database | `~/.local/share/ditox/ditox.db` |
 | Images | `~/.local/share/ditox/images/` |
 | Config | `~/.config/ditox/config.toml` |
+| Watcher PID | `~/.local/share/ditox/watcher.pid` |
 
-## Project docs
+## Project Docs
 
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — status, version, what's next.
-- [`docs/notes/`](docs/notes/) — architecture notes (image storage, Linux GUI).
-- [`docs/tasks/`](docs/tasks/) — per-feature work logs.
-- [`docs/RELEASING.md`](docs/RELEASING.md) — release process.
+- [docs/ROADMAP.md](docs/ROADMAP.md) - current roadmap and OpenTUI pivot.
+- [docs/features.md](docs/features.md) - current feature surface.
+- [docs/notes/image-storage.md](docs/notes/image-storage.md) - image storage protocol.
+- [docs/RELEASING.md](docs/RELEASING.md) - release process.
 
 ## Contributing
 
-1. `nix develop` (or install Rust + system deps manually).
-2. `scripts/check-no-root-tests.sh && nix develop --command cargo test --workspace --locked`.
-3. In live compositor sessions, run the matching GUI smoke script:
-   `scripts/smoke-gui-hyprland.sh`, `scripts/smoke-gui-sway.sh`, or
-   `scripts/smoke-gui-gnome-degraded.sh`.
-4. Follow Conventional Commits (`fix:`, `feat:`, `chore:`, etc.).
-5. Larger features: add a task file under `docs/tasks/in-progress/` and
-   update `docs/ROADMAP.md` when done.
+1. `nix develop` or install Rust and Wayland development packages manually.
+2. Run `scripts/check-no-root-tests.sh`.
+3. Run `cargo fmt --all -- --check`.
+4. Run `cargo clippy --workspace --all-targets --locked -- -D warnings`.
+5. Run `cargo test --workspace --locked`.
+6. Larger features should add or update a task file under `docs/tasks/`.
 
 ## License
 
-MIT — see [LICENSE](LICENSE) (or this file header for now).
+MIT - see [LICENSE](LICENSE).

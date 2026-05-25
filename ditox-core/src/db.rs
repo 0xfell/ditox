@@ -1961,8 +1961,7 @@ impl Database {
     }
 
     /// Search restricted to a specific format. Used by the `/h`,
-    /// `/r`, `/p` search-mode prefixes (sub-task 1.7 follow-up:
-    /// front-end UX in TUI/GUI). Pass the canonical format name
+    /// `/r`, `/p` search-mode prefixes. Pass the canonical format name
     /// (e.g. `"text/html"`).
     pub fn search_entries_in_format(
         &self,

@@ -1,8 +1,8 @@
 //! Paste-back primitives.
 //!
 //! Phase 2 of the v0.4 → v1.0 master plan: when the user picks a
-//! clip in the launcher, we want to (a) write it to the clipboard,
-//! (b) hide the launcher, (c) restore focus to the previously-active
+//! clip in the TUI, we want to (a) write it to the clipboard,
+//! (b) restore focus to the previously-active
 //! window, and (d) synthesise the appropriate paste keystroke.
 //!
 //! Sub-modules:
@@ -18,8 +18,7 @@
 //!   `<data_dir>/last-paste.json`; Windows future: `Clipboard
 //!   Viewer Ignore` registered format).
 //! - [`cursor`] — sub-task 2.9 groundwork. Persistent selection
-//!   cursor that advances on rapid re-fires; foundation for the
-//!   modifier-held cycling UX in Phase 4.
+//!   cursor that advances on rapid re-fires.
 
 pub mod cursor;
 pub mod keystroke;

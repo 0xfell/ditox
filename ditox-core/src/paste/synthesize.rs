@@ -1,10 +1,10 @@
 //! Keystroke synthesis backends (Phase 2 sub-task 2.4 — Linux).
 //!
-//! Once the launcher has restored focus to the previous app
+//! Once the TUI has restored focus to the previous app
 //! (`ForegroundTracker::restore`), it asks one of these synthesizers
 //! to type Ctrl+V (or whatever per-app override is configured) into
 //! that window. This is what makes paste-back feel native — the user
-//! doesn't see the launcher's window steal focus then have to press
+//! doesn't have to press
 //! Ctrl+V themselves.
 //!
 //! ## Backends
@@ -18,7 +18,7 @@
 //!   on KDE Plasma 5/6 Wayland.
 //! - [`YdotoolSynthesizer`] — `ydotool key` (requires the
 //!   `ydotoold` daemon running). Last-resort wlroots/GNOME path.
-//! - [`OffSynthesizer`] — no-op; the launcher shows a "paste
+//! - [`OffSynthesizer`] — no-op; the TUI shows a "paste
 //!   manually with Ctrl+V" status when this one is selected.
 //!
 //! ## Chain
@@ -35,7 +35,7 @@
 //! exact command-line vector it would shell out. Tests assert on
 //! `argv()` directly — no subprocess is ever spawned in the unit
 //! suite. Real shell-outs only happen when `paste()` is called from
-//! a live launcher; that path is exercised in manual / integration
+//! a live TUI flow; that path is exercised in manual / integration
 //! tests on Hyprland (and eventually Sway / KDE / GNOME).
 //!
 //! ## v0.4 limitations
@@ -46,7 +46,7 @@
 //!   acceptable (≈10 ms per spawn on a warm cache); future work can
 //!   coalesce.
 //! - `OffSynthesizer` returns success without doing anything, so a
-//!   launcher with `OffSynthesizer` first in its chain effectively
+//!   TUI flow with `OffSynthesizer` first in its chain effectively
 //!   disables paste-back. The chain order is platform-default; users
 //!   override via the (future) `[paste]` config section.
 //! - Literal characters above U+007F (non-ASCII) work on `wtype`
@@ -95,7 +95,7 @@ pub trait Synthesizer: Send + Sync {
 /// Hyprland-specific synthesizer using `hyprctl dispatch sendshortcut`.
 ///
 /// `sendshortcut` targets a specific window by address, so the
-/// launcher's "restore focus + send keys" race becomes irrelevant —
+/// the "restore focus + send keys" race becomes irrelevant —
 /// the keys land in the right window even if focus has drifted.
 ///
 /// Argv shape per chord (`ctrl+v` example):
@@ -571,10 +571,10 @@ impl Synthesizer for YdotoolSynthesizer {
 /// Disabled synthesizer — never tries to send keys.
 ///
 /// `paste()` returns `Ok(())` immediately so the chain stops at this
-/// rung; the launcher should detect that "off" succeeded and show a
+/// rung; the TUI should detect that "off" succeeded and show a
 /// "paste manually with Ctrl+V" status line in its UI.
 ///
-/// Used as the last entry of every chain so the launcher always has
+/// Used as the last entry of every chain so the TUI always has
 /// a non-failing fallback.
 pub struct OffSynthesizer;
 
@@ -616,7 +616,7 @@ impl Synthesizer for OffSynthesizer {
 ///
 /// Order matches [`Platform::paste_synthesizer_chain`]; an
 /// [`OffSynthesizer`] is always appended so the chain never returns
-/// "nothing to try" — the launcher gets a structured "off" outcome
+/// "nothing to try" — the TUI gets a structured "off" outcome
 /// it can surface in the UI.
 pub fn pick_chain(platform: &Platform) -> Vec<Box<dyn Synthesizer>> {
     let mut chain: Vec<Box<dyn Synthesizer>> = Vec::new();
