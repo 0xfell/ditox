@@ -65,11 +65,11 @@ describe("state", () => {
   });
 
   test("previews text content", () => {
-    expect(previewLines(entry)).toEqual(["hello", "world"]);
+    expect(previewLines(entry)).toEqual(["  1: hello", "  2: world"]);
   });
 
   test("previews image metadata", () => {
-    expect(previewLines({ ...entry, kind: "image", image_width: 2, image_height: 3 })[4]).toBe("Dimensions: 2x3");
+    expect(previewLines({ ...entry, kind: "image", image_width: 2, image_height: 3 })[3]).toBe("dims: 2x3");
   });
 
   test("truncates long row text", () => {

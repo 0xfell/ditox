@@ -21,13 +21,21 @@ Highest priority: complete the core workflow.
 
 ## 2. Polish The OpenTUI Interface
 
-- Improve layout sizing, scrolling, and preview behavior.
-- Handle long text without breaking rows.
-- Add better empty states.
-- Add clear error messages for missing `ditoxd`, missing `wl-copy`, missing `hyprctl`, and paste failures.
-- Replace ad hoc keyboard handling with `@opentui/keymap`.
-- Add configurable keybindings later, but first stabilize the default keymap.
-- Make help, search, and delete confirmation overlays feel consistent.
+Initial visual polish is implemented:
+
+- Centralized semantic theme tokens with dark and light variants.
+- Pager-style UI configuration for compact mode, panel sizing, metadata, preview length, and scrollbar visibility.
+- Structured OpenTUI components for shell, header, history list, preview pane, status line, and overlays.
+- Improved layout sizing, list scrolling, row truncation, preview behavior, and empty states.
+- Semantic status colors and clearer runtime error messages for `ditoxd`, `wl-copy`, `hyprctl`, and paste failures.
+- `@opentui/keymap` is the default key handling layer.
+- Search, help, delete, and clear confirmations now share overlay styling.
+- Presentation helpers have direct Bun test coverage.
+
+Remaining polish:
+
+- Add user-configurable keybindings after the default keymap stabilizes.
+- Add terminal snapshot or PTY-level visual regression coverage when the TUI test harness exists.
 
 ## 3. Backend Correctness
 
@@ -114,4 +122,3 @@ First implementation should remain metadata-first.
 Implement the Hyprland launch + paste-back loop first.
 
 That turns the scaffold into the real workflow: press keybind, open TUI, pick history item, paste into the previous app.
-

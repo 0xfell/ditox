@@ -1,23 +1,26 @@
-import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
+import { createSignal, onCleanup, onMount } from "solid-js";
 import { render, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { KeymapProvider, useBindings, useKeymap } from "@opentui/keymap/solid";
 import {
   clampSelection,
-  formatAge,
   initialState,
   moveSelection,
   nextFilter,
-  previewLines,
   selectedIdsOrCurrent,
   selectedEntry,
-  truncateText,
   toggleSelectedId,
-  visibleEntries,
   type UiState,
 } from "./state";
 import { bulkCopyEntries, clearEntries, copyEntry, deleteEntry, favoriteEntry, listEntries, outputEntries, pasteEntry } from "./rpc";
-import type { Entry } from "./types";
+import { currentTheme } from "./theme";
+import { currentUiConfig } from "./ui-config";
+import { Shell } from "./components/Shell";
+import { HeaderBar } from "./components/HeaderBar";
+import { EntryList } from "./components/EntryList";
+import { PreviewPane } from "./components/PreviewPane";
+import { StatusLine } from "./components/StatusLine";
+import { ModeOverlay } from "./components/Overlay";
 
 function AppRoot() {
   const renderer = useRenderer();
@@ -31,9 +34,13 @@ function AppRoot() {
 
 export function App() {
   const [state, setState] = createSignal<UiState>(initialState());
+  const theme = currentTheme();
+  const config = currentUiConfig();
   const dimensions = useTerminalDimensions();
-  const listRows = () => Math.max(1, dimensions().height - 7);
-  const rowWidth = () => Math.max(24, Math.floor(dimensions().width * 0.45) - 2);
+  const overlayHeight = () => activeOverlayHeight(state().mode);
+  const listRows = () => Math.max(1, dimensions().height - 4 - overlayHeight());
+  const rowWidth = () => Math.max(24, Math.floor((dimensions().width * config.listWidthPercent) / 100) - 6);
+  const previewWidth = () => Math.max(24, Math.floor((dimensions().width * config.previewWidthPercent) / 100) - 6);
 
   async function refresh(next?: Partial<UiState>) {
     const current = { ...state(), ...next };
@@ -129,66 +136,24 @@ export function App() {
   onMount(() => refresh());
 
   return (
-    <box flexDirection="column" width="100%" height="100%">
-      <box height={3} border>
-        <text>
-          Ditox  filter:{state().filter}  query:{state().query || "-"}  {state().status}
-        </text>
+    <Shell theme={theme}>
+      <HeaderBar theme={theme} state={state()} selectedCount={state().selectedIds.size} />
+      <box flexDirection="row" flexGrow={1} backgroundColor={theme.bgBase}>
+        <EntryList
+          theme={theme}
+          config={config}
+          entries={state().entries}
+          selectedIndex={state().selectedIndex}
+          selectedIds={state().selectedIds}
+          rows={listRows()}
+          width={rowWidth()}
+          query={state().query}
+        />
+        <PreviewPane theme={theme} config={config} entry={selectedEntry(state())} rows={listRows()} width={previewWidth()} />
       </box>
-      <box flexDirection="row" flexGrow={1}>
-        <box width="45%" border>
-          <For each={visibleEntries(state().entries, state().selectedIndex, listRows())}>
-            {(row) => (
-              <EntryRow
-                entry={row.entry}
-                index={row.index}
-                selected={row.index === state().selectedIndex}
-                marked={state().selectedIds.has(row.entry.id)}
-                width={rowWidth()}
-              />
-            )}
-          </For>
-          <Show when={state().entries.length === 0}>
-            <text>{state().query ? "No matches" : "No clipboard history"}</text>
-          </Show>
-        </box>
-        <box width="55%" border>
-          <For each={previewLines(selectedEntry(state()))}>{(line) => <text>{line}</text>}</For>
-        </box>
-      </box>
-      <Show when={state().mode === "search"}>
-        <box height={3} border>
-          <text>/{state().query}</text>
-        </box>
-      </Show>
-      <Show when={state().mode === "confirm-delete"}>
-        <box height={3} border>
-          <text>Delete selected entry? y/n</text>
-        </box>
-      </Show>
-      <Show when={state().mode === "confirm-clear"}>
-        <box height={3} border>
-          <text>Clear {state().clearKind}? y/n</text>
-        </box>
-      </Show>
-      <Show when={state().mode === "help"}>
-        <box height={7} border>
-          <text>j/k move  / search  tab filter  enter paste  ctrl+y copy  y bulk copy</text>
-          <text>space select  p favorite  d delete  ca clear all  ct clear text  ci clear images</text>
-        </box>
-      </Show>
-    </box>
-  );
-}
-
-function EntryRow(props: { entry: Entry; index: number; selected: boolean; marked: boolean; width: number }) {
-  const entry = () => props.entry;
-  const row = () =>
-    `${props.selected ? ">" : " "} ${props.marked ? "*" : " "} ${entry().favorite ? "p" : " "} ${entry().kind} #${entry().id} ${formatAge(entry().created_at_ms)} ${entry().preview}`;
-  return (
-    <text>
-      {truncateText(row(), props.width)}
-    </text>
+      <StatusLine theme={theme} status={state().status} />
+      <ModeOverlay theme={theme} state={state()} />
+    </Shell>
   );
 }
 
@@ -290,6 +255,12 @@ function useDitoxKeymap(actions: DitoxKeymapActions) {
 
 function keyName(event: any): string {
   return String(event.name ?? event.key ?? event.baseCode ?? event.sequence ?? "").toLowerCase();
+}
+
+function activeOverlayHeight(mode: UiState["mode"]): number {
+  if (mode === "help") return 7;
+  if (mode === "search" || mode === "confirm-delete" || mode === "confirm-clear") return 3;
+  return 0;
 }
 
 export async function run() {
