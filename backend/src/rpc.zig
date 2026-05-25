@@ -24,8 +24,14 @@ pub fn handle(allocator: std.mem.Allocator, init: std.process.Init, input: []con
     const params = parsed.value.params;
     const method = parsed.value.method;
 
+    return dispatch(allocator, init, parsed.value.id, method, params, &opened) catch |err| {
+        return errorResponseOwned(allocator, parsed.value.id, -32000, @errorName(err));
+    };
+}
+
+fn dispatch(allocator: std.mem.Allocator, init: std.process.Init, id_value: std.json.Value, method: []const u8, params: ?std.json.Value, opened: anytype) ![]u8 {
     if (std.mem.eql(u8, method, "health.check")) {
-        return successResponseOwned(allocator, parsed.value.id, app.Health{
+        return successResponseOwned(allocator, id_value, app.Health{
             .ok = true,
             .name = "ditoxd",
             .version = "0.1.0",
@@ -33,10 +39,10 @@ pub fn handle(allocator: std.mem.Allocator, init: std.process.Init, input: []con
         });
     }
     if (std.mem.eql(u8, method, "config.get")) {
-        return successResponseOwned(allocator, parsed.value.id, app.configView(opened.cfg));
+        return successResponseOwned(allocator, id_value, app.configView(opened.cfg));
     }
     if (std.mem.eql(u8, method, "watcher.status")) {
-        return successResponseOwned(allocator, parsed.value.id, app.watcherStatus(opened.cfg));
+        return successResponseOwned(allocator, id_value, try app.watcherStatus(&opened.store, opened.cfg));
     }
     if (std.mem.eql(u8, method, "entries.list") or std.mem.eql(u8, method, "entries.search")) {
         const query = getString(params, "query") orelse "";
@@ -47,52 +53,70 @@ pub fn handle(allocator: std.mem.Allocator, init: std.process.Init, input: []con
             for (entries) |entry| entry.deinit(allocator);
             allocator.free(entries);
         }
-        return successResponseOwned(allocator, parsed.value.id, .{ .entries = entries });
+        return successResponseOwned(allocator, id_value, .{ .entries = entries });
     }
     if (std.mem.eql(u8, method, "entries.get")) {
-        const id = getI64(params, "id") orelse return errorResponseOwned(allocator, parsed.value.id, -32602, "missing id");
-        const entry = (try opened.store.get(id)) orelse return errorResponseOwned(allocator, parsed.value.id, -32004, "entry not found");
+        const id = getI64(params, "id") orelse return errorResponseOwned(allocator, id_value, -32602, "missing id");
+        const entry = (try opened.store.get(id)) orelse return errorResponseOwned(allocator, id_value, -32004, "entry not found");
         defer entry.deinit(allocator);
-        return successResponseOwned(allocator, parsed.value.id, .{ .entry = entry });
+        return successResponseOwned(allocator, id_value, .{ .entry = entry });
     }
     if (std.mem.eql(u8, method, "entries.add")) {
-        const content = getString(params, "content") orelse return errorResponseOwned(allocator, parsed.value.id, -32602, "missing content");
+        const content = getString(params, "content") orelse return errorResponseOwned(allocator, id_value, -32602, "missing content");
         const id = try opened.store.addText(opened.cfg, content);
-        return successResponseOwned(allocator, parsed.value.id, .{ .id = id });
+        return successResponseOwned(allocator, id_value, .{ .id = id });
     }
     if (std.mem.eql(u8, method, "entries.copy")) {
-        const id = getI64(params, "id") orelse return errorResponseOwned(allocator, parsed.value.id, -32602, "missing id");
-        return successResponseOwned(allocator, parsed.value.id, .{ .copied = try app.copyEntry(allocator, init, &opened.store, id) });
+        const id = getI64(params, "id") orelse return errorResponseOwned(allocator, id_value, -32602, "missing id");
+        return successResponseOwned(allocator, id_value, .{ .copied = try app.copyEntry(allocator, init, &opened.store, id) });
+    }
+    if (std.mem.eql(u8, method, "entries.bulk_copy")) {
+        const ids = (try getI64Array(allocator, params, "ids")) orelse return errorResponseOwned(allocator, id_value, -32602, "missing ids");
+        defer allocator.free(ids);
+        return successResponseOwned(allocator, id_value, .{ .copied = try app.copyEntries(allocator, init, &opened.store, ids) });
+    }
+    if (std.mem.eql(u8, method, "entries.output")) {
+        const ids = (try getI64Array(allocator, params, "ids")) orelse return errorResponseOwned(allocator, id_value, -32602, "missing ids");
+        defer allocator.free(ids);
+        const content = try opened.store.selectedContents(ids);
+        defer allocator.free(content);
+        return successResponseOwned(allocator, id_value, .{ .content = content });
     }
     if (std.mem.eql(u8, method, "entries.paste")) {
-        const id = getI64(params, "id") orelse return errorResponseOwned(allocator, parsed.value.id, -32602, "missing id");
+        const id = getI64(params, "id") orelse return errorResponseOwned(allocator, id_value, -32602, "missing id");
         const target_window = getString(params, "target_window");
-        return successResponseOwned(allocator, parsed.value.id, .{ .pasted = try app.pasteEntry(allocator, init, opened.cfg, &opened.store, id, target_window) });
+        return successResponseOwned(allocator, id_value, .{ .pasted = try app.pasteEntry(allocator, init, opened.cfg, &opened.store, id, target_window) });
     }
     if (std.mem.eql(u8, method, "entries.delete")) {
-        const id = getI64(params, "id") orelse return errorResponseOwned(allocator, parsed.value.id, -32602, "missing id");
-        return successResponseOwned(allocator, parsed.value.id, .{ .deleted = try opened.store.delete(id) });
+        const id = getI64(params, "id") orelse return errorResponseOwned(allocator, id_value, -32602, "missing id");
+        return successResponseOwned(allocator, id_value, .{ .deleted = try opened.store.delete(id) });
     }
     if (std.mem.eql(u8, method, "entries.favorite")) {
-        const id = getI64(params, "id") orelse return errorResponseOwned(allocator, parsed.value.id, -32602, "missing id");
+        const id = getI64(params, "id") orelse return errorResponseOwned(allocator, id_value, -32602, "missing id");
         const favorite = getBool(params, "favorite") orelse true;
-        return successResponseOwned(allocator, parsed.value.id, .{ .updated = try opened.store.favorite(id, favorite) });
+        return successResponseOwned(allocator, id_value, .{ .updated = try opened.store.favorite(id, favorite) });
     }
     if (std.mem.eql(u8, method, "entries.clear")) {
         const kind = getString(params, "kind") orelse "all";
-        return successResponseOwned(allocator, parsed.value.id, .{ .deleted = try opened.store.clear(kind) });
+        return successResponseOwned(allocator, id_value, .{ .deleted = try opened.store.clear(kind) });
     }
     if (std.mem.eql(u8, method, "history.pause")) {
-        return successResponseOwned(allocator, parsed.value.id, .{ .paused_for_ms = getU32(params, "duration_ms") orelse 0 });
+        const duration_ms = getU32(params, "duration_ms") orelse 0;
+        try opened.store.pauseWatcher(duration_ms);
+        return successResponseOwned(allocator, id_value, .{ .paused_for_ms = duration_ms });
+    }
+    if (std.mem.eql(u8, method, "history.resume")) {
+        try opened.store.resumeWatcher();
+        return successResponseOwned(allocator, id_value, .{ .resumed = true });
     }
     if (std.mem.eql(u8, method, "repair.run")) {
-        return successResponseOwned(allocator, parsed.value.id, try opened.store.repair());
+        return successResponseOwned(allocator, id_value, try opened.store.repair());
     }
     if (std.mem.eql(u8, method, "stats.get")) {
-        return successResponseOwned(allocator, parsed.value.id, try opened.store.stats());
+        return successResponseOwned(allocator, id_value, try opened.store.stats());
     }
 
-    return errorResponseOwned(allocator, parsed.value.id, -32601, "method not found");
+    return errorResponseOwned(allocator, id_value, -32601, "method not found");
 }
 
 pub fn frame(allocator: std.mem.Allocator, json_body: []const u8) ![]u8 {
@@ -156,6 +180,19 @@ fn getBool(params: ?std.json.Value, key: []const u8) ?bool {
     return if (value == .bool) value.bool else null;
 }
 
+fn getI64Array(allocator: std.mem.Allocator, params: ?std.json.Value, key: []const u8) !?[]i64 {
+    const object = getObject(params) orelse return null;
+    const value = object.get(key) orelse return null;
+    if (value != .array) return null;
+    var ids: std.ArrayList(i64) = .empty;
+    errdefer ids.deinit(allocator);
+    for (value.array.items) |item| {
+        if (item != .integer) return null;
+        try ids.append(allocator, item.integer);
+    }
+    return try ids.toOwnedSlice(allocator);
+}
+
 fn getObject(params: ?std.json.Value) ?std.json.ObjectMap {
     const value = params orelse return null;
     return if (value == .object) value.object else null;
@@ -164,4 +201,3 @@ fn getObject(params: ?std.json.Value) ?std.json.ObjectMap {
 test "requestBody accepts content-length frames" {
     try std.testing.expectEqualStrings("{\"ok\":true}", requestBody("Content-Length: 11\r\n\r\n{\"ok\":true}"));
 }
-

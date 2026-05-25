@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ditox.local/contracts/rpc.schema.json",
-  "title": "Ditox JSON-RPC Envelope",
+  "title": "Ditox JSON-RPC Contract",
   "type": "object",
   "oneOf": [
     { "$ref": "#/$defs/request" },
@@ -9,15 +9,265 @@
     { "$ref": "#/$defs/failure" }
   ],
   "$defs": {
+    "id": { "type": ["string", "integer", "null"] },
+    "method": {
+      "enum": [
+        "health.check",
+        "config.get",
+        "watcher.status",
+        "entries.list",
+        "entries.search",
+        "entries.get",
+        "entries.add",
+        "entries.copy",
+        "entries.bulk_copy",
+        "entries.output",
+        "entries.paste",
+        "entries.delete",
+        "entries.favorite",
+        "entries.clear",
+        "history.pause",
+        "history.resume",
+        "repair.run",
+        "stats.get"
+      ]
+    },
     "request": {
+      "oneOf": [
+        { "$ref": "#/$defs/healthCheckRequest" },
+        { "$ref": "#/$defs/configGetRequest" },
+        { "$ref": "#/$defs/watcherStatusRequest" },
+        { "$ref": "#/$defs/entriesListRequest" },
+        { "$ref": "#/$defs/entriesSearchRequest" },
+        { "$ref": "#/$defs/entriesGetRequest" },
+        { "$ref": "#/$defs/entriesAddRequest" },
+        { "$ref": "#/$defs/entriesCopyRequest" },
+        { "$ref": "#/$defs/entriesBulkCopyRequest" },
+        { "$ref": "#/$defs/entriesOutputRequest" },
+        { "$ref": "#/$defs/entriesPasteRequest" },
+        { "$ref": "#/$defs/entriesDeleteRequest" },
+        { "$ref": "#/$defs/entriesFavoriteRequest" },
+        { "$ref": "#/$defs/entriesClearRequest" },
+        { "$ref": "#/$defs/historyPauseRequest" },
+        { "$ref": "#/$defs/historyResumeRequest" },
+        { "$ref": "#/$defs/repairRunRequest" },
+        { "$ref": "#/$defs/statsGetRequest" }
+      ]
+    },
+    "baseRequest": {
       "type": "object",
       "required": ["jsonrpc", "id", "method"],
       "additionalProperties": false,
       "properties": {
         "jsonrpc": { "const": "2.0" },
-        "id": { "type": ["string", "integer"] },
-        "method": { "type": "string" },
+        "id": { "$ref": "#/$defs/id" },
+        "method": { "$ref": "#/$defs/method" },
         "params": { "type": "object" }
+      }
+    },
+    "healthCheckRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "health.check" }, "params": { "type": "object", "additionalProperties": false } } }
+      ]
+    },
+    "configGetRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "config.get" }, "params": { "type": "object", "additionalProperties": false } } }
+      ]
+    },
+    "watcherStatusRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "watcher.status" }, "params": { "type": "object", "additionalProperties": false } } }
+      ]
+    },
+    "entriesListRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "entries.list" }, "params": { "$ref": "#/$defs/listParams" } } }
+      ]
+    },
+    "entriesSearchRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "entries.search" }, "params": { "$ref": "#/$defs/listParams" } } }
+      ]
+    },
+    "entriesGetRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "entries.get" }, "params": { "$ref": "#/$defs/idParams" } } }
+      ]
+    },
+    "entriesAddRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "entries.add" }, "params": { "$ref": "#/$defs/addParams" } } }
+      ]
+    },
+    "entriesCopyRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "entries.copy" }, "params": { "$ref": "#/$defs/idParams" } } }
+      ]
+    },
+    "entriesBulkCopyRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "entries.bulk_copy" }, "params": { "$ref": "#/$defs/idsParams" } } }
+      ]
+    },
+    "entriesOutputRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "entries.output" }, "params": { "$ref": "#/$defs/idsParams" } } }
+      ]
+    },
+    "entriesPasteRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "entries.paste" }, "params": { "$ref": "#/$defs/pasteParams" } } }
+      ]
+    },
+    "entriesDeleteRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "entries.delete" }, "params": { "$ref": "#/$defs/idParams" } } }
+      ]
+    },
+    "entriesFavoriteRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "entries.favorite" }, "params": { "$ref": "#/$defs/favoriteParams" } } }
+      ]
+    },
+    "entriesClearRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "entries.clear" }, "params": { "$ref": "#/$defs/clearParams" } } }
+      ]
+    },
+    "historyPauseRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "history.pause" }, "params": { "$ref": "#/$defs/pauseParams" } } }
+      ]
+    },
+    "historyResumeRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "history.resume" }, "params": { "type": "object", "additionalProperties": false } } }
+      ]
+    },
+    "repairRunRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "repair.run" }, "params": { "type": "object", "additionalProperties": false } } }
+      ]
+    },
+    "statsGetRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRequest" },
+        { "properties": { "method": { "const": "stats.get" }, "params": { "type": "object", "additionalProperties": false } } }
+      ]
+    },
+    "listParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": { "type": "string" },
+        "filter": { "$ref": "#/$defs/filter" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 500 }
+      }
+    },
+    "idParams": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": { "id": { "type": "integer" } }
+    },
+    "idsParams": {
+      "type": "object",
+      "required": ["ids"],
+      "additionalProperties": false,
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": { "type": "integer" },
+          "minItems": 1
+        }
+      }
+    },
+    "addParams": {
+      "type": "object",
+      "required": ["content"],
+      "additionalProperties": false,
+      "properties": { "content": { "type": "string" } }
+    },
+    "pasteParams": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "integer" },
+        "target_window": { "type": "string" }
+      }
+    },
+    "favoriteParams": {
+      "type": "object",
+      "required": ["id", "favorite"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "integer" },
+        "favorite": { "type": "boolean" }
+      }
+    },
+    "clearParams": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": { "kind": { "enum": ["all", "text", "image", "images"] } }
+    },
+    "pauseParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "duration_ms": { "type": "integer", "minimum": 0 } }
+    },
+    "filter": { "enum": ["all", "text", "images", "favorites", "today"] },
+    "entry": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "mime",
+        "content",
+        "preview",
+        "hash",
+        "favorite",
+        "created_at_ms",
+        "byte_len",
+        "source_app",
+        "blob_path",
+        "image_width",
+        "image_height"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "integer" },
+        "kind": { "enum": ["text", "image"] },
+        "mime": { "type": "string" },
+        "content": { "type": "string" },
+        "preview": { "type": "string" },
+        "hash": { "type": "string" },
+        "favorite": { "type": "boolean" },
+        "created_at_ms": { "type": "integer" },
+        "byte_len": { "type": "integer" },
+        "source_app": { "type": ["string", "null"] },
+        "blob_path": { "type": ["string", "null"] },
+        "image_width": { "type": ["integer", "null"] },
+        "image_height": { "type": ["integer", "null"] }
       }
     },
     "success": {
@@ -26,8 +276,158 @@
       "additionalProperties": false,
       "properties": {
         "jsonrpc": { "const": "2.0" },
-        "id": { "type": ["string", "integer"] },
-        "result": {}
+        "id": { "$ref": "#/$defs/id" },
+        "result": {
+          "oneOf": [
+            { "$ref": "#/$defs/healthResult" },
+            { "$ref": "#/$defs/configResult" },
+            { "$ref": "#/$defs/watcherResult" },
+            { "$ref": "#/$defs/listResult" },
+            { "$ref": "#/$defs/getResult" },
+            { "$ref": "#/$defs/addResult" },
+            { "$ref": "#/$defs/copyResult" },
+            { "$ref": "#/$defs/outputResult" },
+            { "$ref": "#/$defs/pasteResult" },
+            { "$ref": "#/$defs/deleteResult" },
+            { "$ref": "#/$defs/favoriteResult" },
+            { "$ref": "#/$defs/clearResult" },
+            { "$ref": "#/$defs/pauseResult" },
+            { "$ref": "#/$defs/resumeResult" },
+            { "$ref": "#/$defs/repairResult" },
+            { "$ref": "#/$defs/statsResult" }
+          ]
+        }
+      }
+    },
+    "healthResult": {
+      "type": "object",
+      "required": ["ok", "name", "version", "storage"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "type": "boolean" },
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "storage": { "type": "string" }
+      }
+    },
+    "configResult": {
+      "type": "object",
+      "required": ["config_path", "data_dir", "db_path", "max_entries", "allow_duplicates", "poll_interval_ms", "paste_enabled", "paste_buffer_ms", "max_preview_chars", "terminal_command", "excluded_apps", "excluded_windows"],
+      "additionalProperties": false,
+      "properties": {
+        "config_path": { "type": "string" },
+        "data_dir": { "type": "string" },
+        "db_path": { "type": "string" },
+        "max_entries": { "type": "integer" },
+        "allow_duplicates": { "type": "boolean" },
+        "poll_interval_ms": { "type": "integer" },
+        "paste_enabled": { "type": "boolean" },
+        "paste_buffer_ms": { "type": "integer" },
+        "max_preview_chars": { "type": "integer" },
+        "terminal_command": { "type": "string" },
+        "excluded_apps": { "type": "array", "items": { "type": "string" } },
+        "excluded_windows": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "watcherResult": {
+      "type": "object",
+      "required": ["running", "paused", "backend", "poll_interval_ms", "last_seen_ms", "last_error"],
+      "additionalProperties": false,
+      "properties": {
+        "running": { "type": "boolean" },
+        "paused": { "type": "boolean" },
+        "backend": { "type": "string" },
+        "poll_interval_ms": { "type": "integer" },
+        "last_seen_ms": { "type": ["integer", "null"] },
+        "last_error": { "type": ["string", "null"] }
+      }
+    },
+    "listResult": {
+      "type": "object",
+      "required": ["entries"],
+      "additionalProperties": false,
+      "properties": {
+        "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } }
+      }
+    },
+    "getResult": {
+      "type": "object",
+      "required": ["entry"],
+      "additionalProperties": false,
+      "properties": { "entry": { "$ref": "#/$defs/entry" } }
+    },
+    "addResult": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": { "id": { "type": "integer" } }
+    },
+    "copyResult": {
+      "type": "object",
+      "required": ["copied"],
+      "additionalProperties": false,
+      "properties": { "copied": { "type": "boolean" } }
+    },
+    "outputResult": {
+      "type": "object",
+      "required": ["content"],
+      "additionalProperties": false,
+      "properties": { "content": { "type": "string" } }
+    },
+    "pasteResult": {
+      "type": "object",
+      "required": ["pasted"],
+      "additionalProperties": false,
+      "properties": { "pasted": { "type": "boolean" } }
+    },
+    "deleteResult": {
+      "type": "object",
+      "required": ["deleted"],
+      "additionalProperties": false,
+      "properties": { "deleted": { "type": "boolean" } }
+    },
+    "favoriteResult": {
+      "type": "object",
+      "required": ["updated"],
+      "additionalProperties": false,
+      "properties": { "updated": { "type": "boolean" } }
+    },
+    "clearResult": {
+      "type": "object",
+      "required": ["deleted"],
+      "additionalProperties": false,
+      "properties": { "deleted": { "type": "integer" } }
+    },
+    "pauseResult": {
+      "type": "object",
+      "required": ["paused_for_ms"],
+      "additionalProperties": false,
+      "properties": { "paused_for_ms": { "type": "integer" } }
+    },
+    "resumeResult": {
+      "type": "object",
+      "required": ["resumed"],
+      "additionalProperties": false,
+      "properties": { "resumed": { "type": "boolean" } }
+    },
+    "repairResult": {
+      "type": "object",
+      "required": ["ok", "pruned_blobs"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "type": "boolean" },
+        "pruned_blobs": { "type": "integer" }
+      }
+    },
+    "statsResult": {
+      "type": "object",
+      "required": ["entries", "text", "images", "favorites"],
+      "additionalProperties": false,
+      "properties": {
+        "entries": { "type": "integer" },
+        "text": { "type": "integer" },
+        "images": { "type": "integer" },
+        "favorites": { "type": "integer" }
       }
     },
     "failure": {
@@ -36,7 +436,7 @@
       "additionalProperties": false,
       "properties": {
         "jsonrpc": { "const": "2.0" },
-        "id": { "type": ["string", "integer", "null"] },
+        "id": { "$ref": "#/$defs/id" },
         "error": {
           "type": "object",
           "required": ["code", "message"],
@@ -51,4 +451,3 @@
     }
   }
 }
-

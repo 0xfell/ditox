@@ -22,6 +22,8 @@ pub const ConfigView = struct {
     paste_buffer_ms: u32,
     max_preview_chars: u32,
     terminal_command: []const u8,
+    excluded_apps: []const []const u8,
+    excluded_windows: []const []const u8,
 };
 
 pub fn configView(cfg: config.Config) ConfigView {
@@ -36,15 +38,20 @@ pub fn configView(cfg: config.Config) ConfigView {
         .paste_buffer_ms = cfg.paste_buffer_ms,
         .max_preview_chars = cfg.max_preview_chars,
         .terminal_command = cfg.terminal_command,
+        .excluded_apps = cfg.excluded_apps,
+        .excluded_windows = cfg.excluded_windows,
     };
 }
 
-pub fn watcherStatus(cfg: config.Config) models.WatcherStatus {
+pub fn watcherStatus(store: *storage.Storage, cfg: config.Config) !models.WatcherStatus {
+    const last_seen_ms = try store.watcherLastSeen();
+    const running = if (last_seen_ms) |seen| seen + (@as(i64, cfg.poll_interval_ms) * 8) + 2000 >= try store.nowMs() else false;
     return .{
-        .running = false,
-        .paused = false,
+        .running = running,
+        .paused = try store.isWatcherPaused(),
         .backend = "wl-clipboard",
         .poll_interval_ms = cfg.poll_interval_ms,
+        .last_seen_ms = last_seen_ms,
     };
 }
 
@@ -52,6 +59,17 @@ pub fn copyEntry(allocator: std.mem.Allocator, init: std.process.Init, store: *s
     const entry = (try store.get(id)) orelse return false;
     defer entry.deinit(allocator);
     try clipboard.writeText(allocator, init, entry.content);
+    try store.markSelfWrite(entry.hash);
+    return true;
+}
+
+pub fn copyEntries(allocator: std.mem.Allocator, init: std.process.Init, store: *storage.Storage, ids: []const i64) !bool {
+    const content = try store.selectedContents(ids);
+    defer allocator.free(content);
+    if (content.len == 0) return false;
+    try clipboard.writeText(allocator, init, content);
+    const hash = @import("util.zig").sha256Hex(content);
+    try store.markSelfWrite(&hash);
     return true;
 }
 
@@ -67,9 +85,11 @@ pub fn pasteEntry(
     defer entry.deinit(allocator);
     if (!cfg.paste_enabled) {
         try clipboard.writeText(allocator, init, entry.content);
+        try store.markSelfWrite(entry.hash);
         return true;
     }
     try clipboard.pasteText(allocator, init, entry.content, target_window, cfg.paste_buffer_ms);
+    try store.markSelfWrite(entry.hash);
     return true;
 }
 
@@ -79,7 +99,6 @@ pub fn openStore(allocator: std.mem.Allocator, init: std.process.Init) !struct {
 } {
     const cfg = try config.Config.load(allocator, init);
     errdefer cfg.deinit();
-    const store = try storage.Storage.open(allocator, cfg);
+    const store = try storage.Storage.open(allocator, cfg, init.io);
     return .{ .cfg = cfg, .store = store };
 }
-

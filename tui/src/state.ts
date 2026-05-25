@@ -6,7 +6,8 @@ export type UiState = {
   selectedIds: Set<number>;
   query: string;
   filter: EntryFilter;
-  mode: "browse" | "search" | "help" | "confirm-delete";
+  mode: "browse" | "search" | "help" | "confirm-delete" | "confirm-clear";
+  clearKind: "all" | "text" | "images";
   status: string;
 };
 
@@ -18,6 +19,7 @@ export function initialState(): UiState {
     query: "",
     filter: "all",
     mode: "browse",
+    clearKind: "all",
     status: "",
   };
 }
@@ -44,6 +46,20 @@ export function toggleSelectedId(state: UiState): UiState {
   return { ...state, selectedIds };
 }
 
+export function selectedIdsOrCurrent(state: UiState): number[] {
+  if (state.selectedIds.size > 0) return [...state.selectedIds];
+  const entry = selectedEntry(state);
+  return entry ? [entry.id] : [];
+}
+
+export function visibleEntries(entries: Entry[], selectedIndex: number, maxRows: number): Array<{ entry: Entry; index: number }> {
+  if (maxRows <= 0) return [];
+  const clamped = Math.min(Math.max(0, selectedIndex), Math.max(0, entries.length - 1));
+  const half = Math.floor(maxRows / 2);
+  const start = Math.min(Math.max(0, clamped - half), Math.max(0, entries.length - maxRows));
+  return entries.slice(start, start + maxRows).map((entry, offset) => ({ entry, index: start + offset }));
+}
+
 export function nextFilter(filter: EntryFilter): EntryFilter {
   const filters: EntryFilter[] = ["all", "text", "images", "favorites", "today"];
   return filters[(filters.indexOf(filter) + 1) % filters.length] ?? "all";
@@ -62,11 +78,14 @@ export function formatAge(timestampMs: number, now = Date.now()): string {
 export function previewLines(entry: Entry | undefined): string[] {
   if (!entry) return ["No entry selected"];
   if (entry.kind === "image") {
+    const dimensions =
+      entry.image_width !== null && entry.image_height !== null ? `${entry.image_width}x${entry.image_height}` : "unknown";
     return [
       "Image entry",
       `MIME: ${entry.mime}`,
       `Bytes: ${entry.byte_len}`,
       `Hash: ${entry.hash}`,
+      `Dimensions: ${dimensions}`,
       entry.blob_path ? `Path: ${entry.blob_path}` : "Path: not stored",
     ];
   }
@@ -74,3 +93,10 @@ export function previewLines(entry: Entry | undefined): string[] {
   return lines.length === 0 ? [""] : lines.slice(0, 24);
 }
 
+export function truncateText(value: string, width: number): string {
+  if (width <= 0) return "";
+  const clean = value.replace(/\s+/g, " ");
+  if (clean.length <= width) return clean;
+  if (width <= 3) return ".".repeat(width);
+  return `${clean.slice(0, width - 3)}...`;
+}

@@ -64,7 +64,7 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "status")) {
         try std.json.Stringify.value(.{
             .config = core.app.configView(opened.cfg),
-            .watcher = core.app.watcherStatus(opened.cfg),
+            .watcher = try core.app.watcherStatus(&opened.store, opened.cfg),
             .stats = try opened.store.stats(),
         }, .{}, stdout);
         try stdout.writeByte('\n');
@@ -72,12 +72,25 @@ pub fn main(init: std.process.Init) !void {
         try std.json.Stringify.value(try opened.store.repair(), .{}, stdout);
         try stdout.writeByte('\n');
     } else if (std.mem.eql(u8, command, "pause")) {
-        const duration = if (args.len > 2) args[2] else "0";
-        try stdout.print("paused_for_ms={s}\n", .{duration});
+        const duration = if (args.len > 2) try std.fmt.parseUnsigned(u32, args[2], 10) else 0;
+        try opened.store.pauseWatcher(duration);
+        try stdout.print("paused_for_ms={}\n", .{duration});
+    } else if (std.mem.eql(u8, command, "resume")) {
+        try opened.store.resumeWatcher();
+        try stdout.writeAll("resumed\n");
+    } else if (std.mem.eql(u8, command, "output")) {
+        const ids = try parseIds(allocator, args[2..]);
+        defer allocator.free(ids);
+        const contents = try opened.store.selectedContents(ids);
+        defer allocator.free(contents);
+        try stdout.writeAll(contents);
+        if (contents.len > 0 and contents[contents.len - 1] != '\n') try stdout.writeByte('\n');
     } else if (std.mem.eql(u8, command, "launch")) {
         try launchTui(allocator, init, opened.cfg.terminal_command);
     } else if (std.mem.eql(u8, command, "tui")) {
-        try launchTui(allocator, init, "bun run --cwd tui start");
+        const tui_command = try defaultTuiCommand(allocator, init);
+        defer allocator.free(tui_command);
+        try launchTui(allocator, init, tui_command);
     } else {
         try stdout.print("unknown command: {s}\n", .{command});
         try printHelp(stdout);
@@ -100,6 +113,9 @@ fn printHelp(stdout: *Io.Writer) !void {
         \\  clear [all|text|image]     clear history
         \\  status                     print config, watcher, and stats
         \\  repair                     run storage repair
+        \\  pause [ms]                 pause capture, 0 pauses until resume
+        \\  resume                     resume capture
+        \\  output <id>...             print multiple text entries
         \\  launch                     open configured TUI terminal command
         \\  tui                        run local TUI command
         \\
@@ -129,10 +145,26 @@ fn optionValue(args: []const []const u8, name: []const u8) ?[]const u8 {
     return null;
 }
 
+fn parseIds(allocator: std.mem.Allocator, args: []const []const u8) ![]i64 {
+    var ids: std.ArrayList(i64) = .empty;
+    errdefer ids.deinit(allocator);
+    for (args) |arg| {
+        try ids.append(allocator, try std.fmt.parseInt(i64, arg, 10));
+    }
+    return ids.toOwnedSlice(allocator);
+}
+
 fn launchTui(allocator: std.mem.Allocator, init: std.process.Init, command: []const u8) !void {
-    _ = core.clipboard.activeHyprlandAddress(allocator, init) catch null;
+    const target = core.clipboard.activeHyprlandAddress(allocator, init) catch null;
+    defer if (target) |value| allocator.free(value);
+    const command_with_env = if (target) |address|
+        try std.fmt.allocPrint(allocator, "DITOX_TARGET_WINDOW={s} {s}", .{ address, command })
+    else
+        try allocator.dupe(u8, command);
+    defer allocator.free(command_with_env);
+
     var child = try std.process.spawn(init.io, .{
-        .argv = &.{ "sh", "-c", command },
+        .argv = &.{ "sh", "-c", command_with_env },
         .stdin = .inherit,
         .stdout = .inherit,
         .stderr = .inherit,
@@ -140,3 +172,20 @@ fn launchTui(allocator: std.mem.Allocator, init: std.process.Init, command: []co
     _ = try child.wait(init.io);
 }
 
+fn defaultTuiCommand(allocator: std.mem.Allocator, init: std.process.Init) ![]const u8 {
+    const env = init.environ_map.*;
+    if (env.get("DITOX_TUI_COMMAND")) |command| return allocator.dupe(u8, command);
+    if (env.get("DITOX_TUI_DIR")) |dir| return std.fmt.allocPrint(allocator, "bun run --cwd {s} start", .{dir});
+
+    const source_dir = std.fs.path.dirname(@src().file) orelse ".";
+    const backend_dir = std.fs.path.dirname(source_dir) orelse source_dir;
+    const repo_dir = std.fs.path.dirname(backend_dir) orelse backend_dir;
+    const tui_dir = try std.fs.path.join(allocator, &.{ repo_dir, "tui" });
+    defer allocator.free(tui_dir);
+    const bundled_entry = try std.fs.path.join(allocator, &.{ tui_dir, "dist", "index.js" });
+    defer allocator.free(bundled_entry);
+    if (std.Io.Dir.cwd().access(init.io, bundled_entry, .{})) {
+        return std.fmt.allocPrint(allocator, "bun {s}", .{bundled_entry});
+    } else |_| {}
+    return std.fmt.allocPrint(allocator, "bun run --cwd {s} start", .{tui_dir});
+}

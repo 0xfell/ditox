@@ -1,4 +1,5 @@
 const std = @import("std");
+const models = @import("models.zig");
 
 pub fn sha256Hex(input: []const u8) [64]u8 {
     var digest: [32]u8 = undefined;
@@ -62,6 +63,56 @@ pub fn readAllStdin(allocator: std.mem.Allocator) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
+pub fn imageMetadata(bytes: []const u8, mime: []const u8) models.ImageMetadata {
+    if (std.mem.eql(u8, mime, "image/png")) return pngMetadata(bytes);
+    if (std.mem.eql(u8, mime, "image/jpeg")) return jpegMetadata(bytes);
+    return .{};
+}
+
+fn pngMetadata(bytes: []const u8) models.ImageMetadata {
+    const signature = "\x89PNG\r\n\x1a\n";
+    if (bytes.len < 24 or !std.mem.eql(u8, bytes[0..8], signature)) return .{};
+    if (!std.mem.eql(u8, bytes[12..16], "IHDR")) return .{};
+    return .{
+        .width = @intCast(std.mem.readInt(u32, bytes[16..][0..4], .big)),
+        .height = @intCast(std.mem.readInt(u32, bytes[20..][0..4], .big)),
+    };
+}
+
+fn jpegMetadata(bytes: []const u8) models.ImageMetadata {
+    if (bytes.len < 4 or bytes[0] != 0xff or bytes[1] != 0xd8) return .{};
+    var index: usize = 2;
+    while (index + 9 < bytes.len) {
+        if (bytes[index] != 0xff) {
+            index += 1;
+            continue;
+        }
+        while (index < bytes.len and bytes[index] == 0xff) index += 1;
+        if (index >= bytes.len) return .{};
+        const marker = bytes[index];
+        index += 1;
+        if (marker == 0xd9 or marker == 0xda) return .{};
+        if (index + 2 > bytes.len) return .{};
+        const segment_len = std.mem.readInt(u16, bytes[index..][0..2], .big);
+        if (segment_len < 2 or index + segment_len > bytes.len) return .{};
+        if (isJpegSof(marker) and segment_len >= 7) {
+            return .{
+                .height = @intCast(std.mem.readInt(u16, bytes[index + 3 ..][0..2], .big)),
+                .width = @intCast(std.mem.readInt(u16, bytes[index + 5 ..][0..2], .big)),
+            };
+        }
+        index += segment_len;
+    }
+    return .{};
+}
+
+fn isJpegSof(marker: u8) bool {
+    return switch (marker) {
+        0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf => true,
+        else => false,
+    };
+}
+
 test "sanitizeText strips ANSI and controls" {
     const allocator = std.testing.allocator;
     const cleaned = try sanitizeText(allocator, "\x1b[31mred\x1b[0m\x00\nok");
@@ -72,4 +123,16 @@ test "sanitizeText strips ANSI and controls" {
 test "sha256Hex" {
     const hash = sha256Hex("abc");
     try std.testing.expectEqualStrings("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", &hash);
+}
+
+test "imageMetadata reads png dimensions" {
+    const png =
+        "\x89PNG\r\n\x1a\n" ++
+        "\x00\x00\x00\x0dIHDR" ++
+        "\x00\x00\x00\x02" ++
+        "\x00\x00\x00\x03" ++
+        "\x08\x06\x00\x00\x00";
+    const meta = imageMetadata(png, "image/png");
+    try std.testing.expectEqual(@as(?i64, 2), meta.width);
+    try std.testing.expectEqual(@as(?i64, 3), meta.height);
 }

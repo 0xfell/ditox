@@ -10,6 +10,8 @@ export type Entry = {
   byte_len: number;
   source_app: string | null;
   blob_path: string | null;
+  image_width: number | null;
+  image_height: number | null;
 };
 
 export type EntryFilter = "all" | "text" | "images" | "favorites" | "today";
@@ -35,4 +37,3 @@ export type RpcFailure = {
 };
 
 export type RpcResponse<T> = RpcSuccess<T> | RpcFailure;
-

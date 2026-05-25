@@ -46,17 +46,91 @@ fn watchClipboard(allocator: std.mem.Allocator, init: std.process.Init) !void {
 
     var last_hash: ?[64]u8 = null;
     while (true) {
-        if (core.clipboard.readText(allocator, init)) |text| {
-            defer allocator.free(text);
-            if (text.len > 0) {
-                const hash = core.util.sha256Hex(text);
-                if (last_hash == null or !std.mem.eql(u8, &last_hash.?, &hash)) {
-                    _ = opened.store.addText(opened.cfg, text) catch {};
-                    last_hash = hash;
-                }
-            }
-        } else |_| {}
+        opened.store.markWatcherSeen() catch {};
+
+        if (opened.store.isWatcherPaused() catch false) {
+            try std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(opened.cfg.poll_interval_ms), .awake);
+            continue;
+        }
+
+        if (isActiveWindowExcluded(allocator, init, opened.cfg) catch false) {
+            try std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(opened.cfg.poll_interval_ms), .awake);
+            continue;
+        }
+
+        if (try captureImageFirst(allocator, init, opened.cfg, &opened.store, &last_hash)) {
+            try std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(opened.cfg.poll_interval_ms), .awake);
+            continue;
+        }
+
+        captureText(allocator, init, opened.cfg, &opened.store, &last_hash) catch {};
 
         try std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(opened.cfg.poll_interval_ms), .awake);
     }
+}
+
+fn captureImageFirst(
+    allocator: std.mem.Allocator,
+    init: std.process.Init,
+    cfg: core.config.Config,
+    store: *core.storage.Storage,
+    last_hash: *?[64]u8,
+) !bool {
+    const types = core.clipboard.listMimeTypes(allocator, init) catch return false;
+    defer core.clipboard.freeMimeTypes(allocator, types);
+    const mime = core.clipboard.preferredImageMime(types) orelse return false;
+    const bytes = core.clipboard.readBytes(allocator, init, mime) catch return false;
+    defer allocator.free(bytes);
+    if (bytes.len == 0) return false;
+
+    const hash = core.util.sha256Hex(bytes);
+    if (last_hash.* != null and std.mem.eql(u8, &last_hash.*.?, &hash)) return true;
+    if (try shouldSkipSelfWrite(allocator, store, &hash)) {
+        last_hash.* = hash;
+        return true;
+    }
+    _ = try store.addImage(cfg, mime, bytes, core.util.imageMetadata(bytes, mime));
+    last_hash.* = hash;
+    return true;
+}
+
+fn captureText(
+    allocator: std.mem.Allocator,
+    init: std.process.Init,
+    cfg: core.config.Config,
+    store: *core.storage.Storage,
+    last_hash: *?[64]u8,
+) !void {
+    const text = try core.clipboard.readText(allocator, init);
+    defer allocator.free(text);
+    if (text.len == 0) return;
+    const hash = core.util.sha256Hex(text);
+    if (last_hash.* != null and std.mem.eql(u8, &last_hash.*.?, &hash)) return;
+    if (try shouldSkipSelfWrite(allocator, store, &hash)) {
+        last_hash.* = hash;
+        return;
+    }
+    _ = try store.addText(cfg, text);
+    last_hash.* = hash;
+}
+
+fn shouldSkipSelfWrite(allocator: std.mem.Allocator, store: *core.storage.Storage, hash: []const u8) !bool {
+    const self_hash = try store.selfWriteHash() orelse return false;
+    defer allocator.free(self_hash);
+    if (!std.mem.eql(u8, self_hash, hash)) return false;
+    try store.clearSelfWriteHash();
+    return true;
+}
+
+fn isActiveWindowExcluded(allocator: std.mem.Allocator, init: std.process.Init, cfg: core.config.Config) !bool {
+    const window = try core.clipboard.activeHyprlandWindow(allocator, init) orelse return false;
+    defer window.deinit(allocator);
+    return matchesAny(window.class, cfg.excluded_apps) or matchesAny(window.title, cfg.excluded_windows);
+}
+
+fn matchesAny(value: []const u8, patterns: []const []const u8) bool {
+    for (patterns) |pattern| {
+        if (pattern.len > 0 and std.mem.indexOf(u8, value, pattern) != null) return true;
+    }
+    return false;
 }

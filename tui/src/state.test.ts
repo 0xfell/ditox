@@ -1,5 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { clampSelection, formatAge, initialState, moveSelection, nextFilter, previewLines, toggleSelectedId } from "./state";
+import {
+  clampSelection,
+  formatAge,
+  initialState,
+  moveSelection,
+  nextFilter,
+  previewLines,
+  selectedIdsOrCurrent,
+  toggleSelectedId,
+  truncateText,
+  visibleEntries,
+} from "./state";
 import type { Entry } from "./types";
 
 const entry: Entry = {
@@ -14,6 +25,8 @@ const entry: Entry = {
   byte_len: 11,
   source_app: null,
   blob_path: null,
+  image_width: null,
+  image_height: null,
 };
 
 describe("state", () => {
@@ -32,6 +45,16 @@ describe("state", () => {
     expect(selected.selectedIds.has(7)).toBe(true);
   });
 
+  test("uses marked entries or current entry for bulk operations", () => {
+    expect(selectedIdsOrCurrent({ ...initialState(), entries: [entry] })).toEqual([7]);
+    expect(selectedIdsOrCurrent(toggleSelectedId({ ...initialState(), entries: [entry] }))).toEqual([7]);
+  });
+
+  test("windows visible entries around the selection", () => {
+    const entries = Array.from({ length: 10 }, (_, index) => ({ ...entry, id: index + 1 }));
+    expect(visibleEntries(entries, 8, 3).map((row) => row.index)).toEqual([7, 8, 9]);
+  });
+
   test("cycles filters", () => {
     expect(nextFilter("all")).toBe("text");
     expect(nextFilter("today")).toBe("all");
@@ -44,5 +67,12 @@ describe("state", () => {
   test("previews text content", () => {
     expect(previewLines(entry)).toEqual(["hello", "world"]);
   });
-});
 
+  test("previews image metadata", () => {
+    expect(previewLines({ ...entry, kind: "image", image_width: 2, image_height: 3 })[4]).toBe("Dimensions: 2x3");
+  });
+
+  test("truncates long row text", () => {
+    expect(truncateText("abcdef", 4)).toBe("a...");
+  });
+});

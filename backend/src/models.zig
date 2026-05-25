@@ -30,6 +30,8 @@ pub const Entry = struct {
     byte_len: i64,
     source_app: ?[]const u8 = null,
     blob_path: ?[]const u8 = null,
+    image_width: ?i64 = null,
+    image_height: ?i64 = null,
 
     pub fn deinit(self: Entry, allocator: std.mem.Allocator) void {
         allocator.free(self.kind);
@@ -47,5 +49,11 @@ pub const WatcherStatus = struct {
     paused: bool,
     backend: []const u8,
     poll_interval_ms: u32,
+    last_seen_ms: ?i64 = null,
+    last_error: ?[]const u8 = null,
 };
 
+pub const ImageMetadata = struct {
+    width: ?i64 = null,
+    height: ?i64 = null,
+};
