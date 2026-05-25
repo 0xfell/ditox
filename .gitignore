@@ -1,0 +1,12 @@
+.direnv/
+.env
+.zig-cache/
+zig-out/
+node_modules/
+bun.lockb
+*.db
+*.db-*
+tmp/
+dist/
+coverage/
+

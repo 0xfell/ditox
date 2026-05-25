@@ -1,0 +1,13 @@
+{
+  "name": "ditox-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun run build:backend && bun run build:tui",
+    "build:backend": "nix develop -c zig build",
+    "build:tui": "bun run --cwd tui contracts && bun run --cwd tui build",
+    "test": "bun run test:backend && bun run test:tui",
+    "test:backend": "nix develop -c zig build test",
+    "test:tui": "bun run --cwd tui test"
+  }
+}
