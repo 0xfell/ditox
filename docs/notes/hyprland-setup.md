@@ -1,8 +1,6 @@
 # Ditox on Hyprland
 
-> Status: forward-looking. Some features described here arrive in Phase 4
-> of the v1.0 plan (`docs/notes/master-plan-v1.md`). Marked **(future)**
-> below where applicable.
+> Status: Linux final-product setup guide. Hyprland is a first-class target.
 
 Hyprland is a first-class target. This document explains how to set
 ditox up and what to expect.
@@ -11,7 +9,7 @@ ditox up and what to expect.
 
 ## TL;DR
 
-After Phase 4 ships, the recommended setup is:
+The recommended setup is:
 
 ```bash
 ditox-gui --install-hyprland-config
@@ -35,7 +33,7 @@ launcher.
 | Feature | Status |
 |---|---|
 | Capture (text, images, HTML, RTF, files) | First-class (Phase 1) |
-| Floating launcher via `wlr-layer-shell` | First-class (Phase 4) |
+| Floating launcher via `wlr-layer-shell` | First-class |
 | Foreground tracking (paste-back to previous app) | First-class via `wlr-foreign-toplevel-management` + `hyprctl activewindow` |
 | Paste-back synthesis | First-class via `hyprctl dispatch sendshortcut` |
 | Tray icon | Works with `waybar` (StatusNotifierItem) and `hyprpanel` |
@@ -43,7 +41,7 @@ launcher.
 | Position at active-window centre | Works via `hyprctl monitors` + `activeworkspace` |
 | Position at caret (text input position) | **Not available** — Wayland has no protocol for this |
 | Global hotkey (in-app) | **Not available** — Wayland security model forbids it; use compositor binding instead |
-| Per-clip global hotkeys | First-class via generated Hyprland binds (Phase 5) |
+| Per-clip global hotkeys | First-class via generated Hyprland binds |
 | Run at login | First-class via `exec-once` in `~/.config/hypr/conf.d/ditox.conf` |
 
 ---
@@ -64,9 +62,8 @@ bind = CTRL, grave, exec, ditox-gui --toggle
 # bind = CTRL_SHIFT, c, exec, ditox save
 
 # When the launcher window opens it should float, pin, and not animate.
-# The layer-shell path (Phase 4) makes most of these unnecessary, but
-# they're harmless if you're using an interim build that uses
-# xdg_toplevel:
+# The layer-shell path makes most of these unnecessary, but they're harmless
+# if your compositor falls back to xdg_toplevel:
 windowrulev2 = float, class:^(ditox-gui)$
 windowrulev2 = pin, class:^(ditox-gui)$
 windowrulev2 = noborder, class:^(ditox-gui)$
@@ -153,10 +150,10 @@ position = "at_cursor"   # one of:
 
 ---
 
-## Per-clip hotkeys (future, Phase 5)
+## Per-clip hotkeys
 
-You'll be able to bind any clip to a global hotkey from the launcher's
-side panel. Behind the scenes ditox writes:
+You can bind a clip to a global hotkey from the launcher's side panel. Behind
+the scenes ditox writes:
 
 ```hyprlang
 # ~/.config/hypr/conf.d/ditox-binds.conf  (managed by ditox; do not edit)

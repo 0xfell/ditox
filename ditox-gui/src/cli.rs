@@ -8,6 +8,7 @@
 //! - `--show`   — always show the window.
 //! - `--hide`   — always hide the window (used by autostart).
 //! - `--quit`   — ask the running instance to exit.
+//! - `--status` — print daemon visibility/status through IPC.
 //!
 //! When one of these action flags is given and another instance is already
 //! running, the flag is forwarded over the IPC socket and this process exits.
@@ -25,6 +26,7 @@ pub enum Action {
     Show,
     Hide,
     Quit,
+    Status,
     /// Phase 4 sub-task 4.11: write Hyprland config snippet.
     InstallHyprlandConfig,
     /// Phase 4 sub-task 4.11: remove the previously-written snippet.
@@ -43,6 +45,7 @@ impl Action {
             Action::Show => Some("SHOW".into()),
             Action::Hide => Some("HIDE".into()),
             Action::Quit => Some("QUIT".into()),
+            Action::Status => Some("STATUS".into()),
             Action::PasteClip(id) => Some(format!("PASTE-CLIP {id}")),
             // The Hyprland-config actions are local to this
             // process — they never go over IPC.
@@ -64,31 +67,35 @@ pub struct Cli {
     pub command: Option<GuiCommand>,
 
     /// Toggle the window (show if hidden, hide if shown).
-    #[arg(long, conflicts_with_all = ["show", "hide", "quit", "install_hyprland_config", "uninstall_hyprland_config"])]
+    #[arg(long, conflicts_with_all = ["show", "hide", "quit", "status", "install_hyprland_config", "uninstall_hyprland_config"])]
     pub toggle: bool,
 
     /// Force the window to show.
-    #[arg(long, conflicts_with_all = ["toggle", "hide", "quit", "install_hyprland_config", "uninstall_hyprland_config"])]
+    #[arg(long, conflicts_with_all = ["toggle", "hide", "quit", "status", "install_hyprland_config", "uninstall_hyprland_config"])]
     pub show: bool,
 
     /// Force the window to hide.
-    #[arg(long, conflicts_with_all = ["toggle", "show", "quit", "install_hyprland_config", "uninstall_hyprland_config"])]
+    #[arg(long, conflicts_with_all = ["toggle", "show", "quit", "status", "install_hyprland_config", "uninstall_hyprland_config"])]
     pub hide: bool,
 
     /// Ask the running GUI instance to quit.
-    #[arg(long, conflicts_with_all = ["toggle", "show", "hide", "install_hyprland_config", "uninstall_hyprland_config"])]
+    #[arg(long, conflicts_with_all = ["toggle", "show", "hide", "status", "install_hyprland_config", "uninstall_hyprland_config"])]
     pub quit: bool,
+
+    /// Print running GUI daemon status.
+    #[arg(long, conflicts_with_all = ["toggle", "show", "hide", "quit", "install_hyprland_config", "uninstall_hyprland_config"])]
+    pub status: bool,
 
     /// Write a Hyprland config snippet to
     /// `~/.config/hypr/conf.d/ditox.conf` and print the one-line
     /// addition needed in `hyprland.conf`. Idempotent: re-running
     /// overwrites the snippet between its `# >>> ditox-managed >>>`
     /// markers without touching anything else.
-    #[arg(long, conflicts_with_all = ["toggle", "show", "hide", "quit", "uninstall_hyprland_config"])]
+    #[arg(long, conflicts_with_all = ["toggle", "show", "hide", "quit", "status", "uninstall_hyprland_config"])]
     pub install_hyprland_config: bool,
 
     /// Remove the snippet written by `--install-hyprland-config`.
-    #[arg(long, conflicts_with_all = ["toggle", "show", "hide", "quit", "install_hyprland_config"])]
+    #[arg(long, conflicts_with_all = ["toggle", "show", "hide", "quit", "status", "install_hyprland_config"])]
     pub uninstall_hyprland_config: bool,
 }
 
@@ -104,6 +111,8 @@ impl Cli {
             Action::Hide
         } else if self.quit {
             Action::Quit
+        } else if self.status {
+            Action::Status
         } else if self.install_hyprland_config {
             Action::InstallHyprlandConfig
         } else if self.uninstall_hyprland_config {

@@ -337,7 +337,7 @@ fn handle_normal_mode(
             app.toggle_search_mode();
         }
         Some(Action::ShowActions) => {
-            // TODO: Implement command palette
+            app.show_actions_summary();
         }
         Some(Action::CyclePreviewMode) => {
             app.cycle_preview_mode();
@@ -364,7 +364,7 @@ fn handle_normal_mode(
             app.start_edit_note();
         }
         Some(Action::ShowStats) => {
-            // TODO: Implement in Phase 1
+            app.show_stats_summary()?;
         }
 
         None => {}

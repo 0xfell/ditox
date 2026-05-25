@@ -698,6 +698,31 @@ impl App {
         self.message_time = None;
     }
 
+    pub fn show_actions_summary(&mut self) {
+        let summary = match self.selected_entry() {
+            Some(entry) => format!(
+                "{} {}: copy, delete, favorite, note, preview",
+                entry.entry_type.icon(),
+                entry.preview(32)
+            ),
+            None => "No entry selected".to_string(),
+        };
+        self.set_message(summary);
+    }
+
+    pub fn show_stats_summary(&mut self) -> Result<()> {
+        let stats = self.db.get_stats()?;
+        self.set_message(format!(
+            "Stats: {} entries ({} text, {} images), {} favorites, {} total copies",
+            stats.total_entries,
+            stats.text_count,
+            stats.image_count,
+            stats.favorites_count,
+            stats.total_usage
+        ));
+        Ok(())
+    }
+
     /// Set a message with timestamp for timeout
     pub fn set_message(&mut self, msg: impl Into<String>) {
         self.message = Some(msg.into());

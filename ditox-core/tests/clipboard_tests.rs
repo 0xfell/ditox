@@ -62,7 +62,13 @@ enum CapturedContent {
 /// Simulates the watcher's poll() logic for determining what to capture
 fn poll_clipboard(clipboard: &MockClipboard) -> CapturedContent {
     // Image MIME types to check, in order of preference
-    let image_mimes = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp"];
+    let image_mimes = [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/bmp",
+    ];
 
     // Try image first (this is the fix we implemented)
     if let Some((mime, data)) = clipboard.get_image(&image_mimes) {
@@ -154,8 +160,7 @@ fn test_png_preferred_over_jpeg() {
 
 #[test]
 fn test_gif_image_captured() {
-    let clipboard = MockClipboard::new()
-        .with_image("image/gif", vec![0x47, 0x49, 0x46]); // GIF magic bytes
+    let clipboard = MockClipboard::new().with_image("image/gif", vec![0x47, 0x49, 0x46]); // GIF magic bytes
 
     let captured = poll_clipboard(&clipboard);
 
@@ -169,8 +174,7 @@ fn test_gif_image_captured() {
 
 #[test]
 fn test_webp_image_captured() {
-    let clipboard = MockClipboard::new()
-        .with_image("image/webp", vec![0x52, 0x49, 0x46, 0x46]); // WEBP magic bytes
+    let clipboard = MockClipboard::new().with_image("image/webp", vec![0x52, 0x49, 0x46, 0x46]); // WEBP magic bytes
 
     let captured = poll_clipboard(&clipboard);
 
@@ -232,8 +236,7 @@ fn test_copy_text_only_scenario() {
 fn test_copy_image_url_as_text_scenario() {
     // User explicitly copies the URL (right-click -> Copy Link), not the image
     // In this case, only text is available
-    let clipboard =
-        MockClipboard::new().with_text("https://example.com/images/photo.png");
+    let clipboard = MockClipboard::new().with_text("https://example.com/images/photo.png");
 
     let captured = poll_clipboard(&clipboard);
 
@@ -258,11 +261,23 @@ fn test_mime_priority_order() {
         ("image/bmp", 4),
     ];
 
-    let image_mimes = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp"];
+    let image_mimes = [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/bmp",
+    ];
 
     for (mime, expected_idx) in test_cases {
         let idx = image_mimes.iter().position(|&m| m == mime);
-        assert_eq!(idx, Some(expected_idx), "MIME type {} should be at index {}", mime, expected_idx);
+        assert_eq!(
+            idx,
+            Some(expected_idx),
+            "MIME type {} should be at index {}",
+            mime,
+            expected_idx
+        );
     }
 }
 

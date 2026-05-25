@@ -5,9 +5,9 @@
 //!
 //! On Linux the binary doubles as its own "summon" tool: a second launch
 //! (typically from a compositor keybind) will find the first instance through
-//! a Unix socket and forward its `--toggle` / `--show` / `--hide` / `--quit`
-//! intent, then exit. When launched without flags and no other instance is
-//! running, it starts the iced GUI.
+//! a Unix socket and forward its `--toggle` / `--show` / `--hide` / `--quit` /
+//! `--status` intent, then exit. When launched without flags and no other
+//! instance is running, it starts the iced GUI.
 
 // Hide console window on Windows release builds
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -81,11 +81,8 @@ fn run() -> Result<()> {
     // launch" (start the daemon) and "summon" (forward to the
     // running one).
     //
-    // The daemon's full long-running UX (window stays open, hide on
-    // blur, modifier-held cycling, layer-shell) lands incrementally
-    // across sub-tasks 4.3-4.12. This commit ships the plumbing only
-    // — the daemon mode currently still exits on copy (one-shot
-    // semantics retained) but accepts IPC commands while alive.
+    // The daemon owns the window and tray for the process lifetime.
+    // Copy/Esc/blur hide the window; `--quit` exits the daemon.
     // -----------------------------------------------------------------
 
     // Step 1: forward action to the daemon if one is running.
@@ -96,6 +93,9 @@ fn run() -> Result<()> {
             if !reply.starts_with("OK") {
                 eprintln!("ditox-gui: daemon replied: {reply}");
                 std::process::exit(1);
+            }
+            if matches!(action, cli::Action::Status) {
+                println!("{}", reply.strip_prefix("OK ").unwrap_or(&reply));
             }
             return Ok(());
         }
@@ -113,6 +113,10 @@ fn run() -> Result<()> {
     if matches!(action, cli::Action::Quit) {
         tracing::info!("--quit requested but no daemon is running; nothing to do");
         return Ok(());
+    }
+    if matches!(action, cli::Action::Status) {
+        println!("not-running");
+        std::process::exit(1);
     }
 
     // Load config and database
@@ -163,8 +167,8 @@ fn run() -> Result<()> {
 
     tracing::info!("Ditox GUI starting (daemon, action={:?})", action);
 
-    // `--hide` is preserved as a no-op compatibility flag; in one-shot
-    // mode there's nothing to hide.
+    // `--hide` starts the daemon hidden so autostart can keep the IPC/tray
+    // process alive without showing the launcher immediately.
     let start_hidden = matches!(action, cli::Action::Hide);
 
     // ---------------------------------------------------------------
@@ -209,13 +213,8 @@ fn run() -> Result<()> {
     // Each launch fires the cursor: re-fires within
     // `paste.cursor_refire_window_ms` (default 800 ms) advance the
     // index by one, otherwise the index resets to 0. The launcher
-    // pre-selects the entry at that index, so rapid-firing
-    // Ctrl+Shift+V cycles through the most-recent clips even in the
-    // current one-shot model.
-    //
-    // Phase 4's daemon-mode revert will replace the filesystem
-    // round-trip with in-memory state, but the SelectionCursor
-    // primitive itself is unchanged.
+    // pre-selects the entry at that index, so rapid-firing the summon
+    // key cycles through the most-recent clips.
     // ---------------------------------------------------------------
     let initial_selection = match PersistentSelectionCursor::at_default_path() {
         Ok(persistent) => {

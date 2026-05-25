@@ -1,9 +1,9 @@
 # Ditox
 
-A cross-platform clipboard manager for Linux (Wayland) and Windows.
+A Linux clipboard manager for Wayland desktops.
 
 - **TUI** (`ditox`) — keyboard-driven terminal UI + full CLI.
-- **GUI** (`ditox-gui`) — iced + system tray, with Ctrl+Shift+V global hotkey on Windows and a `--toggle` IPC flag for compositor keybinds on Linux.
+- **GUI** (`ditox-gui`) — iced + system tray, summoned on Linux with compositor keybinds through `ditox-gui --toggle`.
 - **Daemon** — lightweight clipboard watcher with SHA-256 dedup.
 
 ## Features
@@ -13,8 +13,8 @@ A cross-platform clipboard manager for Linux (Wayland) and Windows.
 - Full-text search (FTS5), fuzzy and regex modes.
 - Named collections, pinned favorites, quick-snippet slots (1–9).
 - Pagination-aware lists; 10k+ entries load in milliseconds.
-- Wayland clipboard integration via `wl-clipboard`; Windows via arboard.
-- System tray (libappindicator on Linux, Win32 on Windows).
+- Wayland clipboard integration via `wl-clipboard`.
+- System tray via libappindicator/Ayatana AppIndicator.
 - Home Manager module + systemd user service.
 - `ditox repair` for image-store reconciliation.
 
@@ -99,25 +99,24 @@ sudo pacman -S wl-clipboard           # Arch
 sudo dnf install wl-clipboard         # Fedora
 ```
 
-### Windows
-
-Download `ditox-x86_64-windows.zip` from the
-[releases page](https://github.com/0xfell/ditox/releases/latest), unzip,
-and run `ditox-gui.exe`. Ctrl+Shift+V summons the window. The tray icon
-offers a "Run at login" toggle that writes to the `HKCU…\Run` registry key.
-
 ### Build from source
 
 ```sh
 git clone https://github.com/0xfell/ditox
 cd ditox
+nix develop
 cargo build --release --workspace
 # binaries: target/release/ditox  target/release/ditox-gui
 ```
 
-On Linux the GUI needs GTK 3, libayatana-appindicator, Vulkan loader,
-fontconfig, and friends — see `flake.nix devShells.default` for the
-exact dependency list. Easiest path: `nix develop`.
+`nix develop` is the recommended development environment because it supplies
+the native libraries needed by the GUI and tray stack. Non-Nix Linux builds
+must provide the equivalent system packages: `pkg-config`, GLib, GTK3,
+Wayland, libxkbcommon, libappindicator or Ayatana AppIndicator, X11 fallback
+libraries, Vulkan/OpenGL loader support, and fontconfig/freetype.
+
+Windows and macOS are future ports. Code may exist in the repository, but the
+final release target documented here is Linux.
 
 ## Usage
 
@@ -186,8 +185,7 @@ full storage protocol.
 
 ## Configuration
 
-`~/.config/ditox/config.toml` (Linux) or `%APPDATA%/ditox/config.toml`
-(Windows):
+`~/.config/ditox/config.toml`:
 
 ```toml
 [general]
@@ -210,11 +208,11 @@ declaratively — see the install example above.
 
 ## Data locations
 
-| | Linux | Windows |
-|---|---|---|
-| Database | `~/.local/share/ditox/ditox.db` | `%APPDATA%\ditox\ditox.db` |
-| Images | `~/.local/share/ditox/images/` | `%APPDATA%\ditox\images\` |
-| Config | `~/.config/ditox/config.toml` | `%APPDATA%\ditox\config.toml` |
+| Item | Linux path |
+|---|---|
+| Database | `~/.local/share/ditox/ditox.db` |
+| Images | `~/.local/share/ditox/images/` |
+| Config | `~/.config/ditox/config.toml` |
 
 ## Project docs
 
@@ -226,9 +224,12 @@ declaratively — see the install example above.
 ## Contributing
 
 1. `nix develop` (or install Rust + system deps manually).
-2. `cargo build --workspace && cargo test --workspace` — all 33 tests must pass.
-3. Follow Conventional Commits (`fix:`, `feat:`, `chore:`, etc.).
-4. Larger features: add a task file under `docs/tasks/in-progress/` and
+2. `scripts/check-no-root-tests.sh && nix develop --command cargo test --workspace --locked`.
+3. In live compositor sessions, run the matching GUI smoke script:
+   `scripts/smoke-gui-hyprland.sh`, `scripts/smoke-gui-sway.sh`, or
+   `scripts/smoke-gui-gnome-degraded.sh`.
+4. Follow Conventional Commits (`fix:`, `feat:`, `chore:`, etc.).
+5. Larger features: add a task file under `docs/tasks/in-progress/` and
    update `docs/ROADMAP.md` when done.
 
 ## License

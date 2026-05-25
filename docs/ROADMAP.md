@@ -1,7 +1,7 @@
 # Ditox Roadmap
 
 > **Current Version:** 0.3.1
-> **Target:** v1.0 — full Ditto feature parity, cross-platform first-class
+> **Target:** v1.0 — final Linux product, with Windows/macOS deferred as future ports
 > **Plan:** see [`notes/master-plan-v1.md`](notes/master-plan-v1.md)
 
 ## Status Overview
@@ -9,7 +9,7 @@
 | Category | Count |
 |----------|-------|
 | Completed | 30 |
-| In Progress | 3 |
+| In Progress | 4 |
 | Planned (Phase 0 — Foundation) | 0 |
 | Planned (Phase 1-8 epics + carry-overs) | 5 |
 
@@ -44,6 +44,7 @@ Internal UI design in [`notes/ui-replication.md`](notes/ui-replication.md).
 | [Windows installer & distribution](tasks/in-progress/004-windows-installer-distribution.md) | Inno Setup installer + code-signing (signing pending cert) |
 | [Windows 11 support](tasks/in-progress/010-windows-11-support.md) | Largely complete; CLI-test gaps remain |
 | [034 wlr-foreign-toplevel subscription](tasks/in-progress/034-phase-2-wlr-foreign-toplevel.md) | Generic Wayland foreground tracker for non-Hyprland wlroots compositors |
+| [036 Linux final product](tasks/in-progress/036-linux-final-product.md) | Final-product implementation and verification plan from root `final.md`; Linux is release scope, Windows/macOS are future-port work |
 
 ---
 
@@ -62,6 +63,12 @@ _All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; rea
 | [032 Windows multi-format capture](tasks/planned/032-phase-1-windows-multi-format.md) | Spun out from 023 sub-task 1.4: `AddClipboardFormatListener` event-driven capture; needs Windows-side validation | none |
 | [033 Windows paste-back](tasks/planned/033-phase-2-windows-paste-back.md) | Spun out from 024 sub-tasks 2.2 + 2.5: `Win32ForegroundTracker` + `Win32Synthesizer` (`SendInput` + stuck-modifier guard); needs Windows-side validation | none |
 | [035 wlr-layer-shell drag handle](tasks/planned/035-phase-4-layershell-drag.md) | Spun out from 026 sub-task 4.5: drag the launcher's title bar to reposition the layer-shell window via runtime `MarginChange` events. Window-local cursor tracking + anchor-aware delta math. | none |
+
+### Deferred / Future Ports
+
+Windows and macOS work can continue, but those tasks are not blockers for the
+final Linux release tracked by task 036. Linux support claims must not depend on
+Windows/macOS completion.
 
 ---
 
@@ -109,14 +116,13 @@ _All Phase 0 tasks complete (014-022). Workspace is at the v0.4 quality bar; rea
 **TUI (`ditox`):** Full feature set — list, search, copy, delete, pin, preview,
 pagination, notes, stats, collections.
 
-**GUI (`ditox-gui`):** One-shot floating launcher (420×520, bottom-left).
-Each launch opens a fresh window; click an entry / Enter / Esc / unfocus
-exits the process. Tab opens a side inspector panel.
-- **Windows:** system tray, Ctrl+Shift+V global hotkey, auto-start via
-  registry, Win32 focus recovery for Win+D.
-- **Linux (Wayland + X11):** system tray (StatusNotifierItem via
-  libappindicator); compositor keybind launches a fresh process per press.
-  `--toggle` / `--show` / `--hide` retained as no-op compatibility shims.
+**GUI (`ditox-gui`):** Long-running launcher process with IPC summon commands.
+On Linux, compositor keybinds should call `ditox-gui --toggle`; the running
+daemon shows/hides the launcher, keeps tray integration alive, and exits only
+on explicit quit. Tab opens a side inspector panel.
+- **Linux (Wayland):** first-class Hyprland/Sway layer-shell path, generic
+  wlroots/KDE where protocols are available, and GNOME degraded mode.
+- **Windows/macOS:** future-port scope for the final Linux release.
 
 **CLI (`ditox`):**
 - `ditox` — TUI
@@ -147,18 +153,18 @@ exits the process. Tab opens a side inspector panel.
 | Page navigation | ~0.25ms/page |
 | Search (10k entries) | <2ms |
 
-### Cross-platform support matrix (target after Phase 4)
+### Linux support matrix (final release target)
 
-| Feature | Windows | Hyprland | Sway | KDE Wayland | GNOME Wayland | macOS |
-|---|---|---|---|---|---|---|
-| Capture | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (Phase 8) |
-| Long-running launcher | ✅ | ✅ via layer-shell | ✅ via layer-shell | ✅ | 🟡 xdg_toplevel | ✅ |
-| Foreground tracking | ✅ | ✅ | ✅ | 🟡 | ❌ | ✅ |
-| Paste-back synthesis | ✅ SendInput | ✅ hyprctl | ✅ wtype | ✅ wtype | 🟡 ydotool | ✅ CGEvent |
-| Global hotkey (in-app) | ✅ | ❌ → compositor bind | ❌ → compositor bind | ❌ → KGlobalAccel (later) | ❌ → manual | ✅ |
-| Tray icon | ✅ | ✅ via waybar/hyprpanel | ✅ via waybar | ✅ Plasma | 🟡 needs extension | ✅ |
-| Run-at-login | ✅ registry | ✅ exec-once | ✅ exec | ✅ autostart | ✅ autostart | ✅ LaunchAgent |
-| Per-clip global hotkey | ✅ | ✅ via managed binds | ✅ via managed binds | ❌ (later) | ❌ (later) | ✅ |
+| Feature | Hyprland | Sway | KDE Wayland | GNOME Wayland |
+|---|---|---|---|---|
+| Capture | ✅ | ✅ | ✅ | ✅ |
+| Long-running launcher | ✅ via layer-shell | ✅ via layer-shell | ✅ where supported | 🟡 xdg_toplevel/degraded |
+| Foreground tracking | ✅ hyprctl + wlr | ✅ wlr | 🟡 protocol-dependent | ❌ |
+| Paste-back synthesis | ✅ hyprctl | ✅ wtype | ✅ wtype where available | 🟡 ydotool/manual |
+| Global hotkey | compositor bind | compositor bind | compositor bind/manual | manual |
+| Tray icon | ✅ via waybar/hyprpanel | ✅ via waybar | ✅ Plasma | 🟡 needs extension |
+| Run-at-login | ✅ exec-once/autostart | ✅ exec/autostart | ✅ autostart | ✅ autostart |
+| Per-clip global hotkey | ✅ managed binds | ✅ managed binds | ❌ future | ❌ future |
 
 ### File Locations
 

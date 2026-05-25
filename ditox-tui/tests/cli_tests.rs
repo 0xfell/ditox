@@ -24,11 +24,21 @@ fn ditox_cmd(fixture: &TestFixture) -> Command {
     // Set XDG directories to use temp paths
     cmd.env(
         "XDG_DATA_HOME",
-        fixture.temp_dir.path().join("data").to_string_lossy().to_string(),
+        fixture
+            .temp_dir
+            .path()
+            .join("data")
+            .to_string_lossy()
+            .to_string(),
     );
     cmd.env(
         "XDG_CONFIG_HOME",
-        fixture.temp_dir.path().join("config").to_string_lossy().to_string(),
+        fixture
+            .temp_dir
+            .path()
+            .join("config")
+            .to_string_lossy()
+            .to_string(),
     );
 
     // Disable tracing output for cleaner test output
@@ -83,7 +93,14 @@ fn insert_entry(db_path: &PathBuf, id: &str, content: &str, pinned: bool, create
     conn.execute(
         "INSERT INTO entries (id, entry_type, content, hash, byte_size, created_at, pinned)
          VALUES (?1, 'text', ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![id, content, hash, content.len(), created_at, pinned as i32],
+        rusqlite::params![
+            id,
+            content,
+            hash,
+            content.len() as i64,
+            created_at,
+            pinned as i32
+        ],
     )
     .unwrap();
 }
@@ -149,7 +166,13 @@ fn test_list_with_entries() {
     fixture.create_default_config();
     let db_path = setup_test_db(&fixture);
 
-    insert_entry(&db_path, "id-1", "Hello World", false, "2024-01-01T00:00:00Z");
+    insert_entry(
+        &db_path,
+        "id-1",
+        "Hello World",
+        false,
+        "2024-01-01T00:00:00Z",
+    );
     insert_entry(
         &db_path,
         "id-2",
@@ -202,7 +225,13 @@ fn test_list_json_output() {
     fixture.create_default_config();
     let db_path = setup_test_db(&fixture);
 
-    insert_entry(&db_path, "id-1", "Test content", false, "2024-01-01T00:00:00Z");
+    insert_entry(
+        &db_path,
+        "id-1",
+        "Test content",
+        false,
+        "2024-01-01T00:00:00Z",
+    );
 
     ditox_cmd(&fixture)
         .args(["list", "--json"])
@@ -303,7 +332,10 @@ fn test_list_default_limit_is_10() {
     let output = ditox_cmd(&fixture).arg("list").assert().success();
 
     let stdout = String::from_utf8_lossy(&output.get_output().stdout);
-    let entry_lines = stdout.lines().filter(|l| l.contains("Entry number")).count();
+    let entry_lines = stdout
+        .lines()
+        .filter(|l| l.contains("Entry number"))
+        .count();
 
     assert_eq!(entry_lines, 10, "Default limit should be 10");
 }
@@ -645,10 +677,7 @@ fn test_long_content_preview_truncated() {
     let stdout = String::from_utf8_lossy(&output.get_output().stdout);
 
     // Preview should be truncated (not contain full 500 chars)
-    assert!(
-        stdout.len() < 600,
-        "Output should be truncated for display"
-    );
+    assert!(stdout.len() < 600, "Output should be truncated for display");
 }
 
 #[test]

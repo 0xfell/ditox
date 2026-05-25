@@ -99,11 +99,10 @@ rustPlatform.buildRustPackage rec {
   meta = with lib; {
     description = "Clipboard manager (TUI + GUI) for Wayland";
     longDescription = ''
-      Ditox is a cross-platform clipboard manager with a terminal UI, a
-      graphical UI (iced + tray icon), and a full CLI. On Linux it speaks
-      Wayland natively via wl-clipboard; on Windows it uses arboard plus a
-      Ctrl+Shift+V global hotkey. Image entries are content-addressed and
-      stored with atomic writes and a refcount-backed prune queue.
+      Ditox is a Linux clipboard manager with a terminal UI, a graphical UI
+      (iced + tray icon), and a full CLI. It speaks Wayland natively via
+      wl-clipboard. Image entries are content-addressed and stored with atomic
+      writes and a refcount-backed prune queue.
     '';
     homepage = "https://github.com/0xfell/ditox";
     changelog = "https://github.com/0xfell/ditox/releases/tag/v${version}";

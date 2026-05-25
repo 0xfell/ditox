@@ -3,11 +3,13 @@ use crate::capture::PollingCaptureSource;
 use crate::capture::{clip_hash, CaptureSource, RawClip};
 use crate::clipboard::Clipboard;
 use crate::config::Config;
-use crate::db::Database;
+use crate::db::{Database, ExtraFormat};
 use crate::entry::Entry;
 use crate::error::{DitoxError, Result};
 use crate::foreground::{ForegroundTracker, NoopForegroundTracker};
+use crate::format::FormatId;
 use fs2::FileExt;
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -55,6 +57,30 @@ const HEARTBEAT_INTERVAL_SECS: u64 = 5;
 /// Heartbeat staleness threshold beyond which `--status` reports the
 /// daemon as unresponsive.
 pub const HEARTBEAT_STALE_AFTER_SECS: u64 = 30;
+
+const IMAGE_FORMAT_PRIORITY: &[&str] = &[
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "image/bmp",
+    "image/tiff",
+];
+
+#[derive(Debug)]
+struct PreparedFormat {
+    format_name: String,
+    bytes: Vec<u8>,
+    canonical_bytes: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct PreparedClip {
+    entry: Entry,
+    canonical_hash: String,
+    canonical_bytes: Vec<u8>,
+    extras: Vec<ExtraFormat>,
+}
 
 /// Path to the watcher PID file.
 pub fn get_pid_file_path() -> Result<PathBuf> {
@@ -589,11 +615,12 @@ impl Watcher {
         Ok(false)
     }
 
-    /// Convert a `RawClip` into a DB entry. Image formats take
-    /// priority (browser "Copy image" puts both URL text and rendered
-    /// image on the clipboard; we want the image). Phase 1 will
-    /// extend this to capture *all* formats per clip rather than
-    /// picking one — see `docs/tasks/planned/023-phase-1-multi-format-capture.md`.
+    /// Convert a `RawClip` into one canonical DB entry plus every
+    /// configured non-canonical format. Image formats take priority
+    /// for the display row (browser "Copy image" puts both URL text
+    /// and rendered image on the clipboard; we want the image), but
+    /// text/html, text/rtf, secondary image encodings, and other
+    /// allowed formats are persisted in `entry_formats`.
     fn process_clip(&mut self, mut clip: RawClip) -> Result<bool> {
         let script_engine = crate::scripting::ScriptEngine::new();
         let capture_dir = crate::scripting::scripts_root()?.join("capture");
@@ -675,18 +702,39 @@ impl Watcher {
                             // context should still be capturable.
                             return Ok(false);
                         }
-                        FilterAction::Transform(_) => {
-                            // Transform application requires more
-                            // plumbing (we'd need to mutate the
-                            // outgoing clip's text format and possibly
-                            // its hash). Land as a Phase 3 follow-up
-                            // — for now log + capture normally so the
-                            // user sees the rule fire.
-                            info!(
-                                rule = %matched.rule.name,
-                                action = %matched.rule.action.to_storage(),
-                                "filter rule matched: transform action not yet wired; capturing as-is"
-                            );
+                        FilterAction::Transform(transform_id) => {
+                            if clip_has_image(&clip) {
+                                warn!(
+                                    rule = %matched.rule.name,
+                                    action = %matched.rule.action.to_storage(),
+                                    "filter transform matched image clip; capturing image as-is"
+                                );
+                            } else if let Some(transform) = crate::transforms::get(transform_id) {
+                                match transform.apply_text(text) {
+                                    Ok(transformed) => {
+                                        clip.set_text(transformed);
+                                        info!(
+                                            rule = %matched.rule.name,
+                                            transform = %transform.id(),
+                                            "filter rule transformed captured text"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            rule = %matched.rule.name,
+                                            transform = %transform_id,
+                                            error = %e,
+                                            "filter transform failed; capturing original text"
+                                        );
+                                    }
+                                }
+                            } else {
+                                warn!(
+                                    rule = %matched.rule.name,
+                                    transform = %transform_id,
+                                    "filter transform id not found; capturing original text"
+                                );
+                            }
                         }
                         FilterAction::Tag(name) => {
                             matched_tag = Some(name.clone());
@@ -709,81 +757,157 @@ impl Watcher {
         let sentinel = crate::paste::sentinel::PasteSentinel::at_default_path().ok();
         let sentinel_ttl = self.config.paste.sentinel_ttl();
 
-        let captured = if let Some(img_format) = clip.first_with_prefix("image/") {
-            let extension = mime_to_extension(&img_format.mime);
-            let inner_hash = Clipboard::hash(&img_format.bytes);
-            if let Some(s) = &sentinel {
-                if s.matches(&inner_hash, sentinel_ttl) {
-                    debug!(
-                        hash = %&inner_hash[..8.min(inner_hash.len())],
-                        "skipping recently-pasted image clip (sentinel match)"
-                    );
-                    self.last_hash = Some(h);
-                    return Ok(false);
-                }
-            }
-            if !self.db.exists_by_hash(&inner_hash)? {
-                Database::store_image_blob(&inner_hash, extension, &img_format.bytes)?;
-                let entry = Entry::new_image(
-                    inner_hash.clone(),
-                    img_format.bytes.len(),
-                    extension.to_string(),
+        let prepared = match self.prepare_clip(&clip)? {
+            Some(prepared) => prepared,
+            None => {
+                debug!(
+                    "skipping clip with {} uncapturable format(s)",
+                    clip.formats.len()
                 );
-                self.db.insert(&entry)?;
-                if let Some(tag_name) = matched_tag.as_deref() {
-                    self.db
-                        .add_tag_to_entry_by_name(&entry.id, tag_name, None)?;
-                }
-                info!(
-                    "captured image entry: {} bytes ({}.{})",
-                    entry.byte_size,
-                    &inner_hash[..8.min(inner_hash.len())],
-                    extension
+                self.last_hash = Some(h);
+                return Ok(false);
+            }
+        };
+
+        if let Some(s) = &sentinel {
+            if s.matches(&prepared.canonical_hash, sentinel_ttl) {
+                debug!(
+                    hash = %&prepared.canonical_hash[..8.min(prepared.canonical_hash.len())],
+                    "skipping recently-pasted clip (sentinel match)"
                 );
-                self.run_cleanup()?;
-                true
-            } else {
-                false
+                self.last_hash = Some(h);
+                return Ok(false);
             }
-        } else if let Some(text_format) = clip.first_with_prefix("text/plain") {
-            // text/plain;charset=utf-8 — we always emit valid UTF-8 in
-            // `RawClip::text`, so this round-trips. Future non-UTF-8
-            // text formats (Phase 1 RTF) take a different branch.
-            let text = String::from_utf8_lossy(&text_format.bytes).into_owned();
-            let inner_hash = Clipboard::hash(text.as_bytes());
-            if let Some(s) = &sentinel {
-                if s.matches(&inner_hash, sentinel_ttl) {
-                    debug!(
-                        hash = %&inner_hash[..8.min(inner_hash.len())],
-                        "skipping recently-pasted text clip (sentinel match)"
-                    );
-                    self.last_hash = Some(h);
-                    return Ok(false);
-                }
+        }
+
+        let captured = if !self.db.exists_by_hash(&prepared.canonical_hash)? {
+            if prepared.entry.entry_type == crate::entry::EntryType::Image {
+                let extension = prepared.entry.image_extension.as_deref().unwrap_or("png");
+                Database::store_image_blob(
+                    &prepared.canonical_hash,
+                    extension,
+                    &prepared.canonical_bytes,
+                )?;
             }
-            if !self.db.exists_by_hash(&inner_hash)? {
-                let entry = Entry::new_text(text);
-                self.db.insert(&entry)?;
-                if let Some(tag_name) = matched_tag.as_deref() {
-                    self.db
-                        .add_tag_to_entry_by_name(&entry.id, tag_name, None)?;
-                }
-                info!("captured text entry: {} bytes", entry.byte_size);
-                self.run_cleanup()?;
-                true
-            } else {
-                false
+
+            self.db.insert_multi(&prepared.entry, &prepared.extras)?;
+            if let Some(tag_name) = matched_tag.as_deref() {
+                self.db
+                    .add_tag_to_entry_by_name(&prepared.entry.id, tag_name, None)?;
             }
-        } else {
-            // No format we recognise. Phase 1 will widen this.
-            debug!(
-                "skipping clip with {} unrecognised format(s)",
-                clip.formats.len()
+            info!(
+                entry_type = ?prepared.entry.entry_type,
+                bytes = prepared.entry.byte_size,
+                formats = 1 + prepared.extras.len(),
+                "captured clipboard entry"
             );
+            self.run_cleanup()?;
+            true
+        } else {
             false
         };
         self.last_hash = Some(h);
         Ok(captured)
+    }
+
+    fn prepare_clip(&self, clip: &RawClip) -> Result<Option<PreparedClip>> {
+        let mut seen = HashSet::with_capacity(clip.formats.len());
+        let mut formats = Vec::with_capacity(clip.formats.len());
+        let mut total_canonical_bytes = 0_u64;
+
+        for raw in &clip.formats {
+            let format_name = canonical_format_name(&raw.mime);
+            if !self.config.capture.should_capture_format(&format_name) {
+                debug!(format = %format_name, "capture config denied format");
+                continue;
+            }
+            if !self.config.capture.format_size_ok(raw.bytes.len() as u64) {
+                warn!(
+                    format = %format_name,
+                    bytes = raw.bytes.len(),
+                    cap = self.config.capture.max_format_size_bytes,
+                    "format exceeds max_format_size_bytes; dropping format"
+                );
+                continue;
+            }
+            if !seen.insert(format_name.clone()) {
+                debug!(format = %format_name, "duplicate canonical format skipped");
+                continue;
+            }
+
+            let canonical_bytes =
+                crate::format::canonicalise::canonical_bytes_for(&format_name, &raw.bytes);
+            if canonical_bytes.is_empty() {
+                debug!(format = %format_name, "empty canonical format skipped");
+                continue;
+            }
+            total_canonical_bytes =
+                total_canonical_bytes.saturating_add(canonical_bytes.len() as u64);
+            formats.push(PreparedFormat {
+                format_name,
+                bytes: raw.bytes.clone(),
+                canonical_bytes,
+            });
+        }
+
+        if formats.is_empty() {
+            return Ok(None);
+        }
+        if !self.config.capture.clip_size_ok(total_canonical_bytes) {
+            warn!(
+                bytes = total_canonical_bytes,
+                cap = self.config.capture.max_clip_size_bytes,
+                "clip exceeds max_clip_size_bytes; dropping whole clip"
+            );
+            return Ok(None);
+        }
+
+        let Some(canonical_idx) = select_canonical_format(&formats) else {
+            return Ok(None);
+        };
+        let canonical = &formats[canonical_idx];
+        let format_id = FormatId::parse(&canonical.format_name).ok_or_else(|| {
+            DitoxError::Other(format!(
+                "prepared format '{}' could not be parsed",
+                canonical.format_name
+            ))
+        })?;
+
+        let (entry, canonical_hash) = if format_id.is_image_like() {
+            let hash = Clipboard::hash(&canonical.bytes);
+            let extension = mime_to_extension(&canonical.format_name).to_string();
+            (
+                Entry::new_image(hash.clone(), canonical.bytes.len(), extension),
+                hash,
+            )
+        } else {
+            let text = String::from_utf8(canonical.canonical_bytes.clone()).unwrap_or_else(|_| {
+                String::from_utf8_lossy(&canonical.canonical_bytes).into_owned()
+            });
+            let entry = Entry::new_text(text);
+            let hash = entry.hash.clone();
+            (entry, hash)
+        };
+
+        let canonical_bytes = canonical.canonical_bytes.clone();
+        let extras = formats
+            .into_iter()
+            .enumerate()
+            .filter_map(|(idx, format)| {
+                if idx == canonical_idx {
+                    None
+                } else {
+                    Some(ExtraFormat::new(format.format_name, format.bytes))
+                }
+            })
+            .collect();
+
+        Ok(Some(PreparedClip {
+            entry,
+            canonical_hash,
+            canonical_bytes,
+            extras,
+        }))
     }
 
     fn run_cleanup(&mut self) -> Result<()> {
@@ -827,4 +951,55 @@ fn mime_to_extension(mime: &str) -> &'static str {
         "image/tiff" => "tiff",
         _ => "png",
     }
+}
+
+fn canonical_format_name(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.starts_with("win32:") {
+        FormatId::parse(trimmed)
+            .map(|f| f.canonical())
+            .unwrap_or_else(|| trimmed.to_string())
+    } else {
+        FormatId::from_wayland_mime(trimmed).canonical()
+    }
+}
+
+fn clip_has_image(clip: &RawClip) -> bool {
+    clip.formats.iter().any(|format| {
+        FormatId::parse(&canonical_format_name(&format.mime))
+            .map(|format_id| format_id.is_image_like())
+            .unwrap_or(false)
+    })
+}
+
+fn select_canonical_format(formats: &[PreparedFormat]) -> Option<usize> {
+    for preferred in IMAGE_FORMAT_PRIORITY {
+        if let Some(idx) = formats
+            .iter()
+            .position(|format| format.format_name == *preferred)
+        {
+            return Some(idx);
+        }
+    }
+
+    if let Some(idx) = formats.iter().position(|format| {
+        FormatId::parse(&format.format_name)
+            .map(|format_id| format_id.is_image_like())
+            .unwrap_or(false)
+    }) {
+        return Some(idx);
+    }
+
+    if let Some(idx) = formats
+        .iter()
+        .position(|format| format.format_name == "text/plain;charset=utf-8")
+    {
+        return Some(idx);
+    }
+
+    formats.iter().position(|format| {
+        FormatId::parse(&format.format_name)
+            .map(|format_id| format_id.is_text_like())
+            .unwrap_or(false)
+    })
 }

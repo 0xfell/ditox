@@ -35,7 +35,7 @@ use iced::{
 };
 
 // Bootstrap Icons font
-const ICONS: Font = Font::with_name("bootstrap-icons");
+const ICONS: Font = iced_fonts::BOOTSTRAP_FONT;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -1121,7 +1121,7 @@ mod colors {
 mod icons {
     // Window controls
     pub const X: char = '\u{F62A}'; // x mark
-    pub const GRIP_VERTICAL: char = '\u{F3FF}'; // grip-vertical (resize handle)
+    pub const GRIP_VERTICAL: char = '\u{F3FE}'; // grip-vertical (resize handle)
 
     // Actions
     pub const GEAR: char = '\u{F3E5}'; // settings gear
@@ -1131,26 +1131,51 @@ mod icons {
     pub const STAR_FILL: char = '\u{F586}'; // star filled
 
     // Phase 4 sub-task 4.6: pin button (always-on-top toggle).
-    pub const PIN: char = '\u{F4D7}'; // pin angle
-    pub const PIN_FILL: char = '\u{F4D5}'; // pin angle fill
+    pub const PIN: char = '\u{F4EB}'; // pin angle
+    pub const PIN_FILL: char = '\u{F4EA}'; // pin angle fill
 
     // Phase 4 sub-task 4.10: inline list extras (collection /
     // notes glyphs). Bootstrap Icons codepoints.
-    pub const FOLDER: char = '\u{F3D6}'; // folder outline (entry in collection)
-    pub const JOURNAL_TEXT: char = '\u{F4A4}'; // journal-text (entry has notes)
+    pub const FOLDER: char = '\u{F3D7}'; // folder outline (entry in collection)
+    pub const JOURNAL_TEXT: char = '\u{F444}'; // journal-text (entry has notes)
     pub const TAG: char = '\u{F5B0}'; // tag outline
 
     // Status
     pub const CIRCLE_FILL: char = '\u{F287}'; // filled circle (status indicator)
 
     // Types
-    pub const FILE_TEXT: char = '\u{F3C1}'; // text file
-    pub const IMAGE: char = '\u{F40D}'; // image
+    pub const FILE_TEXT: char = '\u{F3B9}'; // text file
+    pub const IMAGE: char = '\u{F42A}'; // image
 }
 
 /// Create an icon text widget
 fn icon(codepoint: char) -> iced::widget::Text<'static> {
-    text(codepoint.to_string()).font(ICONS)
+    if app_uses_layer_shell() {
+        text(layer_shell_icon_label(codepoint)).shaping(text::Shaping::Basic)
+    } else {
+        text(codepoint).font(ICONS).shaping(text::Shaping::Basic)
+    }
+}
+
+fn layer_shell_icon_label(codepoint: char) -> &'static str {
+    match codepoint {
+        icons::X => "×",
+        icons::GRIP_VERTICAL => "⋮",
+        icons::GEAR => "⚙",
+        icons::QUESTION => "?",
+        icons::TRASH => "⌫",
+        icons::STAR => "☆",
+        icons::STAR_FILL => "★",
+        icons::PIN => "◇",
+        icons::PIN_FILL => "◆",
+        icons::FOLDER => "▣",
+        icons::JOURNAL_TEXT => "≡",
+        icons::TAG => "#",
+        icons::CIRCLE_FILL => "●",
+        icons::FILE_TEXT => "T",
+        icons::IMAGE => "▧",
+        _ => "?",
+    }
 }
 
 // ============================================================================
@@ -1592,7 +1617,7 @@ pub enum ViewMode {
 /// On non-Linux builds the macro still emits the variants but
 /// they're never produced by iced — harmless dead code that
 /// keeps the same Message enum buildable cross-platform.
-#[cfg_attr(unix, iced_layershell::to_layer_message)]
+#[cfg_attr(unix, iced_layershell::to_layer_message(multi))]
 #[derive(Debug, Clone)]
 pub enum Message {
     // Entry interactions
@@ -1728,6 +1753,9 @@ pub enum Message {
 
     // Scroll tracking
     Scrolled(scrollable::Viewport),
+
+    // Font loading
+    BootstrapFontLoaded(Result<(), iced::font::Error>),
 }
 
 pub struct DitoxApp {
@@ -1770,10 +1798,10 @@ pub struct DitoxApp {
     /// threaded through `boot_app`. `None` when no foreground tracker
     /// is available (GNOME Wayland, unsupported platforms) or the
     /// snapshot returned `None` (no foreground / launcher already
-    /// running). Consumed (cloned) by `paste_and_exit`.
+    /// running). Consumed (cloned) by `paste_and_hide`.
     previous_foreground: Option<ForegroundSnapshot>,
     /// Phase 2 paste-back: foreground tracker used by
-    /// `paste_and_exit` to call `restore()` before synthesising the
+    /// `paste_and_hide` to call `restore()` before synthesising the
     /// paste keystroke. Wrapped in `Box<dyn>` so the platform-specific
     /// impl is opaque to the GUI.
     foreground_tracker: Box<dyn ForegroundTracker>,
@@ -1988,7 +2016,10 @@ impl DitoxApp {
         app.refresh_tag_cache();
         #[cfg(windows)]
         app.register_windows_hotkeys();
-        let initial_task = delayed_focus_search();
+        let initial_task = Task::batch([
+            iced::font::load(iced_fonts::BOOTSTRAP_FONT_BYTES).map(Message::BootstrapFontLoaded),
+            delayed_focus_search(),
+        ]);
 
         (app, initial_task)
     }
@@ -2006,13 +2037,10 @@ impl DitoxApp {
     /// carries a one-shot reply channel so the IPC client (a fresh
     /// `ditox-gui --foo` invocation) sees a synchronous OK / ERR.
     ///
-    /// Today's scope is plumbing only: `Show` / `Hide` / `Toggle`
-    /// update the in-memory `visible` flag and (best-effort) issue
-    /// `iced::window::set_mode` if we know the main window's `Id`,
-    /// but the existing one-shot UX (paste → exit) stays unchanged.
-    /// Phase 4 sub-task 4.3 will integrate `iced_layershell` and
-    /// rework `paste_and_exit` into `paste_and_hide` so the daemon
-    /// genuinely lives across multiple show/hide cycles.
+    /// `Show` / `Hide` / `Toggle` update the in-memory `visible` flag
+    /// and issue `iced::window::set_mode` if we know the main window's
+    /// `Id`. Copy/Esc/blur hide the window instead of exiting, so the
+    /// daemon lives across repeated show/hide cycles.
     fn drain_ipc(&mut self) -> Task<Message> {
         use crate::ipc::Command;
 
@@ -2035,46 +2063,16 @@ impl DitoxApp {
 
             match cmd.command.clone() {
                 Command::Show => {
-                    // Snapshot the previously-focused app BEFORE
-                    // showing — once we're visible, the foreground
-                    // is the daemon itself.
-                    self.refresh_foreground_snapshot();
-                    // Phase 4 sub-task 4.7: fire the cycling cursor
-                    // so rapid re-summons advance the selection.
-                    self.fire_cursor_for_summon();
-                    self.visible = true;
-                    self.last_show_time = Instant::now();
                     cmd.reply_ok();
-                    if let Some(id) = APP_MAIN_WINDOW_ID.get() {
-                        tasks.push(iced::window::set_mode(*id, iced::window::Mode::Windowed));
-                    }
+                    tasks.push(self.show_window());
                 }
                 Command::Hide => {
-                    self.visible = false;
                     cmd.reply_ok();
-                    if let Some(id) = APP_MAIN_WINDOW_ID.get() {
-                        tasks.push(iced::window::set_mode(*id, iced::window::Mode::Hidden));
-                    }
+                    tasks.push(self.hide_window());
                 }
                 Command::Toggle => {
-                    let was_visible = self.visible;
-                    if !was_visible {
-                        // About to show: refresh foreground first,
-                        // then advance the cycling cursor.
-                        self.refresh_foreground_snapshot();
-                        self.fire_cursor_for_summon();
-                        self.last_show_time = Instant::now();
-                    }
-                    self.visible = !self.visible;
                     cmd.reply_ok();
-                    if let Some(id) = APP_MAIN_WINDOW_ID.get() {
-                        let mode = if self.visible {
-                            iced::window::Mode::Windowed
-                        } else {
-                            iced::window::Mode::Hidden
-                        };
-                        tasks.push(iced::window::set_mode(*id, mode));
-                    }
+                    tasks.push(self.toggle_window());
                 }
                 Command::Quit => {
                     cmd.reply_ok();
@@ -2249,11 +2247,56 @@ impl DitoxApp {
     /// the next iced tick.
     fn hide_window(&mut self) -> Task<Message> {
         self.visible = false;
-        if let Some(id) = APP_MAIN_WINDOW_ID.get() {
-            iced::window::set_mode(*id, iced::window::Mode::Hidden)
+        #[cfg(target_os = "linux")]
+        if app_uses_layer_shell() {
+            if let Some(id) = main_window_id() {
+                return hide_layer_shell_window(id);
+            }
+            tracing::debug!("hide_window: layer-shell window id not captured; skipping hide");
+            return Task::none();
+        }
+
+        if let Some(id) = main_window_id() {
+            iced::window::set_mode(id, iced::window::Mode::Hidden)
         } else {
             tracing::debug!("hide_window: window id not captured yet; skipping set_mode");
             Task::none()
+        }
+    }
+
+    fn show_window(&mut self) -> Task<Message> {
+        self.refresh_foreground_snapshot();
+        self.fire_cursor_for_summon();
+        self.visible = true;
+        self.last_show_time = Instant::now();
+
+        #[cfg(target_os = "linux")]
+        if app_uses_layer_shell() {
+            if let Some(id) = main_window_id() {
+                return show_layer_shell_window(id, &self.config);
+            }
+            let (id, task) =
+                Message::layershell_open(new_layer_shell_settings_for_config(&self.config));
+            set_main_window_id(id);
+            return task;
+        }
+
+        if let Some(id) = main_window_id() {
+            Task::batch([
+                iced::window::set_mode(id, iced::window::Mode::Windowed),
+                window::gain_focus(id),
+            ])
+        } else {
+            tracing::debug!("show_window: window id not captured yet; falling back to oldest");
+            window::oldest().and_then(window::gain_focus)
+        }
+    }
+
+    fn toggle_window(&mut self) -> Task<Message> {
+        if self.visible {
+            self.hide_window()
+        } else {
+            self.show_window()
         }
     }
 
@@ -2452,6 +2495,10 @@ impl DitoxApp {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::BootstrapFontLoaded(Ok(())) => {}
+            Message::BootstrapFontLoaded(Err(e)) => {
+                tracing::warn!("failed to load Bootstrap Icons font: {e:?}");
+            }
             Message::CopyEntry(index) => {
                 // Phase 2 paste-back + Phase 4 daemon: clipboard
                 // write + sentinel + restore + keystroke synthesis,
@@ -3087,14 +3134,12 @@ impl DitoxApp {
             }
 
             Message::ToggleWindow => {
-                // One-shot mode: only the tray "Show" item routes here, and
-                // we're always already shown — so just gain focus.
-                return window::oldest().and_then(window::gain_focus);
+                return self.toggle_window();
             }
 
             Message::HideWindow | Message::CloseOverlay => {
-                // One-shot mode: Esc / overlay-click closes any overlay first;
-                // pressing it again from Main exits the process.
+                // Esc / overlay-click closes any overlay first; pressing it
+                // again from Main hides the daemon window.
                 if self.view_mode != ViewMode::Main {
                     self.view_mode = ViewMode::Main;
                     return Task::none();
@@ -3123,8 +3168,12 @@ impl DitoxApp {
             }
 
             Message::WindowOpened(id) => {
-                let _ = APP_MAIN_WINDOW_ID.set(id);
+                set_main_window_id(id);
                 tracing::debug!(?id, "main window opened");
+                #[cfg(target_os = "linux")]
+                if app_uses_layer_shell() && !self.visible {
+                    return self.hide_window();
+                }
             }
 
             Message::TogglePin => {
@@ -3143,7 +3192,12 @@ impl DitoxApp {
                     } else {
                         Layer::Top
                     };
-                    return Task::done(Message::LayerChange(new_layer));
+                    if let Some(id) = main_window_id() {
+                        return Task::done(Message::LayerChange {
+                            id,
+                            layer: new_layer,
+                        });
+                    }
                 }
             }
 
@@ -5461,10 +5515,32 @@ static APP_IPC_RX: std::sync::OnceLock<
     Mutex<Option<std::sync::mpsc::Receiver<crate::ipc::DaemonCommand>>>,
 > = std::sync::OnceLock::new();
 
-/// Once iced reports the main window's `Id` (via `open_events`), we
-/// store it here so subsequent IPC `Show`/`Hide`/`Toggle` commands
-/// can target it via `iced::window::set_mode`.
-static APP_MAIN_WINDOW_ID: std::sync::OnceLock<iced::window::Id> = std::sync::OnceLock::new();
+/// The active main window id. This is mutable because layer-shell hide removes
+/// the surface and show creates a fresh one.
+static APP_MAIN_WINDOW_ID: std::sync::OnceLock<Mutex<Option<iced::window::Id>>> =
+    std::sync::OnceLock::new();
+
+/// True when the Linux wlr-layer-shell backend is active. Non-layer-shell
+/// desktops use regular iced window mode changes instead.
+static APP_USES_LAYER_SHELL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn app_uses_layer_shell() -> bool {
+    APP_USES_LAYER_SHELL.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn set_main_window_id(id: iced::window::Id) {
+    let state = APP_MAIN_WINDOW_ID.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = state.lock() {
+        *guard = Some(id);
+    }
+}
+
+fn main_window_id() -> Option<iced::window::Id> {
+    APP_MAIN_WINDOW_ID
+        .get()
+        .and_then(|state| state.lock().ok().and_then(|guard| guard.as_ref().cloned()))
+}
 
 /// Phase 2 paste-back state. Wrapped in `Mutex<Option<T>>` so
 /// `boot_app` can `take()` ownership into the `DitoxApp` instance —
@@ -5490,9 +5566,9 @@ fn boot_app() -> (DitoxApp, Task<Message>) {
     let db = Database::open().expect("Failed to open database for app");
 
     // Take ownership of the paste-back state from the statics. After
-    // this `take()`, subsequent calls to `boot_app` (which iced
-    // shouldn't do — boot is one-shot) would receive `None` and the
-    // launcher would degrade gracefully (clipboard-only, no restore).
+    // this `take()`, an unexpected second call to `boot_app` would receive
+    // `None` and the launcher would degrade gracefully (clipboard-only, no
+    // restore).
     let previous_foreground = APP_PREVIOUS_FOREGROUND
         .get()
         .and_then(|m| m.lock().ok().and_then(|mut g| g.take()));
@@ -5601,16 +5677,22 @@ pub fn run_with(
     {
         let platform = ditox_core::platform::detect();
         if platform.supports_layer_shell() {
+            APP_USES_LAYER_SHELL.store(true, std::sync::atomic::Ordering::Relaxed);
             tracing::info!(
                 platform = ?platform,
                 "starting iced_layershell window (wlr-layer-shell)"
             );
             return run_layer_shell(start_hidden);
         }
+        APP_USES_LAYER_SHELL.store(false, std::sync::atomic::Ordering::Relaxed);
         tracing::info!(
             platform = ?platform,
             "starting iced xdg_toplevel window (compositor lacks wlr-layer-shell)"
         );
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        APP_USES_LAYER_SHELL.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     iced::application(boot_app, DitoxApp::update, DitoxApp::view)
@@ -5643,33 +5725,17 @@ pub fn run_with(
 /// - Exclusive keyboard interactivity so the launcher captures
 ///   key events without depending on compositor focus.
 #[cfg(target_os = "linux")]
-fn run_layer_shell(_start_hidden: bool) -> ditox_core::Result<()> {
-    use iced_layershell::reexport::{KeyboardInteractivity, Layer};
-    use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
+fn run_layer_shell(start_hidden: bool) -> ditox_core::Result<()> {
+    use iced_layershell::settings::{Settings, StartMode};
 
     let config = APP_CONFIG.get().cloned().unwrap_or_default();
-    let (anchor, margin) = layer_anchor_and_margin_for(&config.gui.position);
-
-    let layer_settings = LayerShellSettings {
-        anchor,
-        layer: if config.gui.pinned {
-            Layer::Overlay
-        } else {
-            Layer::Top
-        },
-        size: Some((
-            DEFAULT_WINDOW_SIZE.width as u32,
-            DEFAULT_WINDOW_SIZE.height as u32,
-        )),
-        // (top, right, bottom, left) per layershellev.
-        margin,
-        keyboard_interactivity: KeyboardInteractivity::Exclusive,
-        // exclusive_zone = -1 means "no zone reserved" (we float over
-        // other windows rather than push them).
-        exclusive_zone: -1,
-        start_mode: StartMode::Active,
-        events_transparent: false,
-    };
+    let mut layer_settings = layer_shell_settings_for_config(&config);
+    if start_hidden {
+        tracing::debug!(
+            "layer-shell backend starts active and removes the first surface after WindowOpened"
+        );
+    }
+    layer_settings.start_mode = StartMode::Active;
 
     iced_layershell::build_pattern::application(
         boot_app,
@@ -5689,6 +5755,110 @@ fn run_layer_shell(_start_hidden: bool) -> ditox_core::Result<()> {
     .map_err(|e| ditox_core::DitoxError::Other(e.to_string()))?;
 
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn layer_shell_settings_for_config(
+    config: &Config,
+) -> iced_layershell::settings::LayerShellSettings {
+    use iced_layershell::reexport::{KeyboardInteractivity, Layer};
+    use iced_layershell::settings::StartMode;
+
+    let (anchor, margin) = layer_anchor_and_margin_for(&config.gui.position);
+
+    iced_layershell::settings::LayerShellSettings {
+        anchor,
+        layer: if config.gui.pinned {
+            Layer::Overlay
+        } else {
+            Layer::Top
+        },
+        size: Some((
+            DEFAULT_WINDOW_SIZE.width as u32,
+            DEFAULT_WINDOW_SIZE.height as u32,
+        )),
+        // (top, right, bottom, left) per layershellev.
+        margin,
+        keyboard_interactivity: KeyboardInteractivity::Exclusive,
+        // exclusive_zone = -1 means "no zone reserved" (we float over
+        // other windows rather than push them).
+        exclusive_zone: -1,
+        start_mode: StartMode::Active,
+        events_transparent: false,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn new_layer_shell_settings_for_config(
+    config: &Config,
+) -> iced_layershell::reexport::NewLayerShellSettings {
+    use iced_layershell::reexport::OutputOption;
+
+    let settings = layer_shell_settings_for_config(config);
+    iced_layershell::reexport::NewLayerShellSettings {
+        size: settings.size,
+        layer: settings.layer,
+        anchor: settings.anchor,
+        exclusive_zone: Some(settings.exclusive_zone),
+        margin: Some(settings.margin),
+        keyboard_interactivity: settings.keyboard_interactivity,
+        output_option: OutputOption::None,
+        events_transparent: settings.events_transparent,
+        namespace: Some("ditox-gui".to_string()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn hide_layer_shell_window(id: iced::window::Id) -> Task<Message> {
+    use iced_layershell::reexport::KeyboardInteractivity;
+
+    Task::batch([
+        Task::done(Message::SizeChange { id, size: (1, 1) }),
+        Task::done(Message::MarginChange {
+            id,
+            margin: hidden_layer_shell_margin(),
+        }),
+        Task::done(Message::KeyboardInteractivityChange {
+            id,
+            keyboard_interactivity: KeyboardInteractivity::OnDemand,
+        }),
+    ])
+}
+
+#[cfg(target_os = "linux")]
+fn show_layer_shell_window(id: iced::window::Id, config: &Config) -> Task<Message> {
+    let settings = layer_shell_settings_for_config(config);
+    let size = settings.size.unwrap_or((
+        DEFAULT_WINDOW_SIZE.width as u32,
+        DEFAULT_WINDOW_SIZE.height as u32,
+    ));
+
+    Task::batch([
+        Task::done(Message::AnchorChange {
+            id,
+            anchor: settings.anchor,
+        }),
+        Task::done(Message::SizeChange { id, size }),
+        Task::done(Message::MarginChange {
+            id,
+            margin: settings.margin,
+        }),
+        Task::done(Message::LayerChange {
+            id,
+            layer: settings.layer,
+        }),
+        Task::done(Message::KeyboardInteractivityChange {
+            id,
+            keyboard_interactivity: settings.keyboard_interactivity,
+        }),
+    ])
+}
+
+#[cfg(target_os = "linux")]
+fn hidden_layer_shell_margin() -> (i32, i32, i32, i32) {
+    // (top, right, bottom, left). Keep the layer out of the visible
+    // viewport even on very wide desktops.
+    (0, 0, 0, -100_000)
 }
 
 /// Phase 4 sub-task 4.4: translate a [`ditox_core::config::GuiPosition`]

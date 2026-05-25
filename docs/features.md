@@ -1,6 +1,8 @@
 # Ditox Features
 
-A comprehensive list of all features available in ditox, the Wayland clipboard manager.
+A comprehensive list of Linux features available in ditox, the Wayland
+clipboard manager. Windows and macOS are future ports and are not final Linux
+release blockers.
 
 ## Core Functionality
 
@@ -217,3 +219,15 @@ Track your clipboard usage:
 - Background image loading
 - Efficient incremental search
 - Configurable history limits
+
+## Linux Desktop Support
+
+- **Hyprland:** first-class target for layer-shell launcher, foreground
+  tracking, paste-back synthesis, generated per-clip binds, and run-at-login.
+- **Sway:** first-class target where wlroots protocols and `wtype` are
+  available.
+- **Generic wlroots/KDE Wayland:** supported where compositor protocols are
+  exposed; unavailable features must degrade gracefully.
+- **GNOME Wayland:** degraded mode because Mutter does not expose the wlroots
+  protocols used for layer-shell and foreground tracking. Capture and manual
+  paste workflows remain supported.

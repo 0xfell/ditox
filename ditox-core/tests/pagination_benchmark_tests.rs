@@ -64,7 +64,14 @@ fn insert_test_entry(
     conn.execute(
         "INSERT OR IGNORE INTO entries (id, entry_type, content, hash, byte_size, created_at, last_used, pinned, usage_count)
          VALUES (?1, 'text', ?2, ?3, ?4, ?5, ?5, ?6, 0)",
-        rusqlite::params![id, content, hash, content.len(), created_at, pinned as i32],
+        rusqlite::params![
+            id,
+            content,
+            hash,
+            content.len() as i64,
+            created_at,
+            pinned as i32
+        ],
     )
     .unwrap();
 }
@@ -83,7 +90,7 @@ fn generate_content(i: usize) -> String {
         "Entry number {} with some additional text content here",
         "Multi\nline\ncontent\nfor entry\n{}",
     ];
-    format!("{}", templates[i % templates.len()].replace("{}", &i.to_string()))
+    templates[i % templates.len()].replace("{}", &i.to_string())
 }
 
 /// Generate a timestamp for entry ordering
@@ -120,7 +127,13 @@ fn test_insert_10k_entries() {
     for i in 0..entry_count {
         let content = generate_content(i);
         let timestamp = generate_timestamp(i);
-        insert_test_entry(&conn, &format!("id-{}", i), &content, i % 100 == 0, &timestamp);
+        insert_test_entry(
+            &conn,
+            &format!("id-{}", i),
+            &content,
+            i % 100 == 0,
+            &timestamp,
+        );
     }
 
     conn.execute("COMMIT", []).unwrap();
@@ -153,7 +166,13 @@ fn test_pagination_performance_10k() {
     for i in 0..entry_count {
         let content = generate_content(i);
         let timestamp = generate_timestamp(i);
-        insert_test_entry(&conn, &format!("id-{}", i), &content, i % 100 == 0, &timestamp);
+        insert_test_entry(
+            &conn,
+            &format!("id-{}", i),
+            &content,
+            i % 100 == 0,
+            &timestamp,
+        );
     }
     conn.execute("COMMIT", []).unwrap();
 
@@ -171,7 +190,9 @@ fn test_pagination_performance_10k() {
                  LIMIT ?1 OFFSET ?2",
             )
             .unwrap()
-            .query_map(rusqlite::params![page_size, offset], |row| row.get(0))
+            .query_map(rusqlite::params![page_size as i64, offset as i64], |row| {
+                row.get(0)
+            })
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
@@ -367,7 +388,9 @@ fn test_pinned_entries_appear_first_in_pagination() {
 
     // Pinned entries should be on later pages (since they're older)
     let pinned_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM entries WHERE pinned = 1", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM entries WHERE pinned = 1", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_eq!(pinned_count, 5, "Should have 5 pinned entries (favorites)");
 
@@ -424,9 +447,14 @@ fn test_pinned_entries_across_pages() {
 
     // Total pinned count should still be correct
     let total_pinned: i64 = conn
-        .query_row("SELECT COUNT(*) FROM entries WHERE pinned = 1", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM entries WHERE pinned = 1", [], |row| {
+            row.get(0)
+        })
         .unwrap();
-    assert_eq!(total_pinned, 30, "Should have 30 pinned entries (favorites)");
+    assert_eq!(
+        total_pinned, 30,
+        "Should have 30 pinned entries (favorites)"
+    );
 
     println!("Pinned entries correctly stored as favorites (sorted by last_used)");
 }
@@ -555,11 +583,7 @@ fn test_search_respects_limit() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
 
-    assert_eq!(
-        results.len(),
-        100,
-        "Search should respect LIMIT"
-    );
+    assert_eq!(results.len(), 100, "Search should respect LIMIT");
 
     println!("Search correctly respects LIMIT");
 }
@@ -584,7 +608,7 @@ fn test_rapid_page_navigation() {
     conn.execute("COMMIT", []).unwrap();
 
     let page_size = 20;
-    let total_pages = (entry_count + page_size - 1) / page_size;
+    let total_pages = entry_count.div_ceil(page_size);
 
     // Simulate rapid navigation: jump around pages
     let pages_to_visit = [0, total_pages / 2, total_pages - 1, 10, total_pages / 4, 0];
@@ -599,7 +623,9 @@ fn test_rapid_page_navigation() {
                  LIMIT ?1 OFFSET ?2",
             )
             .unwrap()
-            .query_map(rusqlite::params![page_size, offset], |row| row.get(0))
+            .query_map(rusqlite::params![page_size as i64, offset as i64], |row| {
+                row.get(0)
+            })
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
@@ -649,7 +675,7 @@ fn test_sequential_page_navigation() {
     conn.execute("COMMIT", []).unwrap();
 
     let page_size = 20;
-    let total_pages = (entry_count + page_size - 1) / page_size;
+    let total_pages = entry_count.div_ceil(page_size);
 
     // Navigate through all pages sequentially
     let start = Instant::now();
@@ -663,7 +689,9 @@ fn test_sequential_page_navigation() {
                  LIMIT ?1 OFFSET ?2",
             )
             .unwrap()
-            .query_map(rusqlite::params![page_size, offset], |row| row.get(0))
+            .query_map(rusqlite::params![page_size as i64, offset as i64], |row| {
+                row.get(0)
+            })
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
@@ -672,10 +700,7 @@ fn test_sequential_page_navigation() {
     }
     let total_duration = start.elapsed();
 
-    assert_eq!(
-        visited, entry_count,
-        "Should visit all entries"
-    );
+    assert_eq!(visited, entry_count, "Should visit all entries");
 
     println!(
         "Sequential navigation: {} pages ({} entries) in {:?} ({:.2}ms per page)",
@@ -719,7 +744,9 @@ fn test_memory_comparison_paginated_vs_full() {
              LIMIT ?1",
         )
         .unwrap()
-        .query_map([page_size], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .query_map([page_size], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
@@ -816,7 +843,7 @@ fn test_last_page_partial() {
     let page0: Vec<String> = conn
         .prepare("SELECT id FROM entries ORDER BY last_used DESC LIMIT ?1 OFFSET ?2")
         .unwrap()
-        .query_map(rusqlite::params![page_size, 0], |row| row.get(0))
+        .query_map(rusqlite::params![page_size as i64, 0_i64], |row| row.get(0))
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
@@ -826,7 +853,9 @@ fn test_last_page_partial() {
     let page1: Vec<String> = conn
         .prepare("SELECT id FROM entries ORDER BY last_used DESC LIMIT ?1 OFFSET ?2")
         .unwrap()
-        .query_map(rusqlite::params![page_size, 20], |row| row.get(0))
+        .query_map(rusqlite::params![page_size as i64, 20_i64], |row| {
+            row.get(0)
+        })
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
@@ -836,7 +865,9 @@ fn test_last_page_partial() {
     let page2: Vec<String> = conn
         .prepare("SELECT id FROM entries ORDER BY last_used DESC LIMIT ?1 OFFSET ?2")
         .unwrap()
-        .query_map(rusqlite::params![page_size, 40], |row| row.get(0))
+        .query_map(rusqlite::params![page_size as i64, 40_i64], |row| {
+            row.get(0)
+        })
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
@@ -846,7 +877,9 @@ fn test_last_page_partial() {
     let page3: Vec<String> = conn
         .prepare("SELECT id FROM entries ORDER BY last_used DESC LIMIT ?1 OFFSET ?2")
         .unwrap()
-        .query_map(rusqlite::params![page_size, 60], |row| row.get(0))
+        .query_map(rusqlite::params![page_size as i64, 60_i64], |row| {
+            row.get(0)
+        })
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
@@ -860,7 +893,13 @@ fn test_single_entry_pagination() {
     let fixture = TestFixture::new();
     let conn = create_test_db(&fixture.db_path);
 
-    insert_test_entry(&conn, "only-one", "single entry", false, "2024-01-01T00:00:00Z");
+    insert_test_entry(
+        &conn,
+        "only-one",
+        "single entry",
+        false,
+        "2024-01-01T00:00:00Z",
+    );
 
     let page: Vec<String> = conn
         .prepare("SELECT id FROM entries ORDER BY last_used DESC LIMIT 20 OFFSET 0")
@@ -897,7 +936,13 @@ fn test_pagination_benchmark_summary() {
     for i in 0..entry_count {
         let content = format!("{} - {}", generate_content(i), "x".repeat(100));
         let timestamp = generate_timestamp(i);
-        insert_test_entry(&conn, &format!("id-{}", i), &content, i % 100 == 0, &timestamp);
+        insert_test_entry(
+            &conn,
+            &format!("id-{}", i),
+            &content,
+            i % 100 == 0,
+            &timestamp,
+        );
     }
     conn.execute("COMMIT", []).unwrap();
     println!("  Created in {:?}\n", insert_start.elapsed());
@@ -913,7 +958,11 @@ fn test_pagination_benchmark_summary() {
         .unwrap();
     let full_duration = full_start.elapsed();
     println!("FULL LOAD (old behavior):");
-    println!("  {} entries loaded in {:?}", full_entries.len(), full_duration);
+    println!(
+        "  {} entries loaded in {:?}",
+        full_entries.len(),
+        full_duration
+    );
 
     // 2. First page load benchmark
     let page_start = Instant::now();
@@ -927,7 +976,10 @@ fn test_pagination_benchmark_summary() {
     let page_duration = page_start.elapsed();
     println!("\nFIRST PAGE LOAD (new behavior):");
     println!("  20 entries loaded in {:?}", page_duration);
-    println!("  Speedup: {:.1}x faster", full_duration.as_secs_f64() / page_duration.as_secs_f64());
+    println!(
+        "  Speedup: {:.1}x faster",
+        full_duration.as_secs_f64() / page_duration.as_secs_f64()
+    );
 
     // 3. Count query benchmark
     let count_start = Instant::now();
@@ -949,7 +1001,11 @@ fn test_pagination_benchmark_summary() {
         .unwrap();
     let search_duration = search_start.elapsed();
     println!("\nSEARCH 'Hello':");
-    println!("  {} results in {:?}", search_results.len(), search_duration);
+    println!(
+        "  {} results in {:?}",
+        search_results.len(),
+        search_duration
+    );
 
     // 5. Memory estimation
     let page_mem: usize = 20 * 150; // ~150 bytes per entry estimate

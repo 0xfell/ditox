@@ -34,7 +34,10 @@ fn test_compute_hash_different_content() {
     hasher2.update(b"content2");
     let hash2 = hex::encode(hasher2.finalize());
 
-    assert_ne!(hash1, hash2, "Different content should produce different hash");
+    assert_ne!(
+        hash1, hash2,
+        "Different content should produce different hash"
+    );
 }
 
 #[test]

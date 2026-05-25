@@ -62,8 +62,16 @@ cargo test --workspace --locked
 #     resolves to (usually 1–2 versions behind). To guarantee parity with
 #     CI, run clippy with the host stable explicitly:
 cargo fmt --all -- --check
+scripts/check-no-root-tests.sh
 rustup run stable cargo clippy --workspace --all-targets --locked -- -D warnings
 nix build .#default
+
+# 1f. Run the live-compositor GUI smoke for each session you can access.
+#     Hyprland and Sway are first-class; GNOME is degraded mode.
+cargo build -p ditox-gui --locked
+scripts/smoke-gui-hyprland.sh
+scripts/smoke-gui-sway.sh
+scripts/smoke-gui-gnome-degraded.sh
 ```
 
 If any step fails, fix it and restart from the failing step.

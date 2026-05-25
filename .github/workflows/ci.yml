@@ -68,6 +68,9 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
+      - name: root integration test guard
+        run: scripts/check-no-root-tests.sh
+
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 

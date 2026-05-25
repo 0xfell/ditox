@@ -40,15 +40,34 @@ impl TestFixture {
     /// Get environment variables to override ditox paths for testing.
     pub fn env_vars(&self) -> Vec<(&str, String)> {
         vec![
-            ("XDG_DATA_HOME", self.temp_dir.path().join("data").to_string_lossy().to_string()),
-            ("XDG_CONFIG_HOME", self.temp_dir.path().join("config").to_string_lossy().to_string()),
+            (
+                "XDG_DATA_HOME",
+                self.temp_dir
+                    .path()
+                    .join("data")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+            (
+                "XDG_CONFIG_HOME",
+                self.temp_dir
+                    .path()
+                    .join("config")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
         ]
     }
 
     /// Create a minimal config file.
     pub fn create_config(&self, content: &str) {
         std::fs::create_dir_all(self.config_path.parent().unwrap()).unwrap();
-        let ditox_config = self.temp_dir.path().join("config").join("ditox").join("config.toml");
+        let ditox_config = self
+            .temp_dir
+            .path()
+            .join("config")
+            .join("ditox")
+            .join("config.toml");
         std::fs::create_dir_all(ditox_config.parent().unwrap()).unwrap();
         std::fs::write(&ditox_config, content).unwrap();
     }

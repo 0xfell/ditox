@@ -496,6 +496,7 @@ mod tests {
         assert_eq!(action_to_wire(Action::Show), Some("SHOW".into()));
         assert_eq!(action_to_wire(Action::Hide), Some("HIDE".into()));
         assert_eq!(action_to_wire(Action::Quit), Some("QUIT".into()));
+        assert_eq!(action_to_wire(Action::Status), Some("STATUS".into()));
         // Launch maps to TOGGLE for the "summon a running daemon"
         // case; when no daemon, the caller falls back to becoming
         // one.

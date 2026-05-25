@@ -28,13 +28,11 @@
 //!
 //! ## v0.4 limitations
 //!
-//! - **`subscribe()` is a stub.** The watcher only ever calls
-//!   `current_snapshot()` (see `Watcher::poll_internal`), so an
-//!   event-driven backend isn't required yet. Future work will use
-//!   `wlr-data-control-v1::data_offer.offer` events directly via a
-//!   dedicated thread; that module is currently private inside
-//!   `wl-clipboard-rs` so it would require either a fork or moving
-//!   to a different protocol crate (e.g. `smithay-client-toolkit`).
+//! - **`subscribe()` is polling-backed.** The watcher currently calls
+//!   `current_snapshot()` directly, but trait consumers can subscribe
+//!   and receive deduplicated snapshots from a worker thread. A future
+//!   backend can replace this with direct `wlr-data-control-v1`
+//!   events.
 //! - **Pipe reads are blocking.** A slow source app (e.g. one that
 //!   converts an image on the fly) will block the watcher thread
 //!   until it finishes writing. Acceptable at the 250 ms poll
@@ -46,12 +44,15 @@
 
 use std::collections::HashSet;
 use std::io::Read;
-use std::sync::mpsc;
-use std::time::SystemTime;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
+use std::thread::JoinHandle;
+use std::time::{Duration, SystemTime};
 
 use tracing::{trace, warn};
 use wl_clipboard_rs::paste::{self, ClipboardType, Error as PasteError, MimeType, Seat};
 
+use crate::capture::clip_hash;
 use crate::capture::{CaptureSource, RawClip, RawFormat};
 use crate::config::CaptureConfig;
 use crate::error::{DitoxError, Result};
@@ -63,6 +64,8 @@ use crate::format::FormatId;
 /// Wayland state; each `current_snapshot()` opens its own connection.
 pub struct WaylandLibraryCapture {
     config: CaptureConfig,
+    shutdown_flag: Arc<AtomicBool>,
+    join: Option<JoinHandle<()>>,
 }
 
 impl WaylandLibraryCapture {
@@ -70,7 +73,11 @@ impl WaylandLibraryCapture {
     /// cloned (cheap — it's three primitive fields plus two `Vec<String>`
     /// allow/deny lists that are typically empty).
     pub fn new(config: CaptureConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            shutdown_flag: Arc::new(AtomicBool::new(false)),
+            join: None,
+        }
     }
 
     /// Map a `wl-clipboard-rs` paste error into our
@@ -230,18 +237,57 @@ impl CaptureSource for WaylandLibraryCapture {
     }
 
     fn subscribe(&mut self) -> Result<mpsc::Receiver<RawClip>> {
-        // v0.4: not wired. The watcher polls via current_snapshot()
-        // at config.general.poll_interval_ms. Returning an empty
-        // channel keeps the trait contract (Send, drop-safe) without
-        // pretending to deliver events.
-        let (_tx, rx) = mpsc::channel();
+        if self.join.is_some() {
+            self.shutdown()?;
+        }
+
+        self.shutdown_flag.store(false, Ordering::SeqCst);
+        let shutdown = Arc::clone(&self.shutdown_flag);
+        let config = self.config.clone();
+        let (tx, rx) = mpsc::channel();
+        let join = std::thread::Builder::new()
+            .name("ditox-wayland-capture".into())
+            .spawn(move || {
+                let capture = WaylandLibraryCapture::new(config);
+                let mut last_hash: Option<String> = None;
+                while !shutdown.load(Ordering::SeqCst) {
+                    match capture.current_snapshot() {
+                        Ok(Some(clip)) => {
+                            let hash = clip_hash(&clip);
+                            if last_hash.as_ref() != Some(&hash) {
+                                last_hash = Some(hash);
+                                if tx.send(clip).is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            last_hash = None;
+                        }
+                        Err(error) => {
+                            tracing::debug!(%error, "wayland capture subscription read failed");
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+            })
+            .map_err(|e| DitoxError::Other(format!("spawn wayland capture thread: {e}")))?;
+        self.join = Some(join);
         Ok(rx)
     }
 
     fn shutdown(&mut self) -> Result<()> {
-        // Nothing to clean up — `paste::get_contents` opens and drops
-        // its own `wl_display` per call. Idempotent.
+        self.shutdown_flag.store(true, Ordering::SeqCst);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
         Ok(())
+    }
+}
+
+impl Drop for WaylandLibraryCapture {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
     }
 }
 
@@ -297,17 +343,15 @@ mod tests {
     }
 
     #[test]
-    fn subscribe_returns_empty_channel() {
-        // v0.4: subscribe() is a stub. The receiver should be valid
-        // (drop-safe) but no events are ever sent to it.
+    fn subscribe_starts_polling_channel_and_shutdown_closes_it() {
         let mut cap = WaylandLibraryCapture::new(CaptureConfig::default());
         let rx = cap.subscribe().unwrap();
-        // Try-recv must return Empty (channel open, no senders alive
-        // because `_tx` was dropped at the end of subscribe()).
-        match rx.try_recv() {
-            Err(mpsc::TryRecvError::Disconnected) => {} // expected
-            other => panic!("expected Disconnected (sender dropped), got {:?}", other),
-        }
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        cap.shutdown().unwrap();
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
     }
 
     #[test]

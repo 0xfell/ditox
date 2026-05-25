@@ -18,11 +18,10 @@
 //! ```
 //!
 //! Hyprland also publishes an event stream on
-//! `$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock`
-//! (`activewindow>>class,title` lines), which a future
-//! `subscribe()` impl can tail to deliver focus-change events
-//! without polling. v0.4 leaves `subscribe()` as an empty channel
-//! since the launcher only needs `snapshot()`.
+//! `$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock`.
+//! `subscribe()` tails that socket and emits a fresh
+//! `hyprctl activewindow -j` snapshot whenever Hyprland reports an
+//! `activewindow` / `activewindowv2` focus-change event.
 //!
 //! For the wlroots-but-not-Hyprland compositors (Sway, generic
 //! wlroots, KDE Wayland), the equivalent is the
@@ -39,10 +38,15 @@
 //! Linux convention for the per-app keystroke-override lookup in
 //! sub-task 2.6).
 
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::time::SystemTime;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
+use std::thread::JoinHandle;
+use std::time::{Duration, SystemTime};
+
+use std::os::unix::net::UnixStream;
 
 use serde::Deserialize;
 
@@ -56,12 +60,16 @@ use crate::foreground::{ForegroundId, ForegroundSnapshot, ForegroundTracker};
 /// connection is held.
 pub struct HyprctlForegroundTracker {
     binary: PathBuf,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
 }
 
 impl HyprctlForegroundTracker {
     pub fn new() -> Self {
         Self {
             binary: PathBuf::from("hyprctl"),
+            stop: Arc::new(AtomicBool::new(false)),
+            thread: None,
         }
     }
 
@@ -69,6 +77,8 @@ impl HyprctlForegroundTracker {
     pub fn with_binary(path: impl Into<PathBuf>) -> Self {
         Self {
             binary: path.into(),
+            stop: Arc::new(AtomicBool::new(false)),
+            thread: None,
         }
     }
 
@@ -199,25 +209,7 @@ impl ForegroundTracker for HyprctlForegroundTracker {
     }
 
     fn snapshot(&self) -> Result<Option<ForegroundSnapshot>> {
-        let argv = self.snapshot_argv();
-        let out = Command::new(&argv[0])
-            .args(&argv[1..])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .map_err(|e| DitoxError::Other(format!("spawn hyprctl: {}", e)))?;
-        if !out.status.success() {
-            // Non-zero from hyprctl on a healthy session usually
-            // means "no active window" — return None rather than
-            // erroring up the chain.
-            tracing::trace!(
-                code = ?out.status.code(),
-                "hyprctl activewindow -j non-zero exit; treating as no focus"
-            );
-            return Ok(None);
-        }
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        Ok(parse_activewindow(&stdout))
+        snapshot_with_binary(&self.binary)
     }
 
     fn restore(&self, snapshot: &ForegroundSnapshot) -> Result<()> {
@@ -242,18 +234,130 @@ impl ForegroundTracker for HyprctlForegroundTracker {
     }
 
     fn subscribe(&mut self) -> Result<mpsc::Receiver<ForegroundSnapshot>> {
-        // v0.4: not wired. Tailing
-        // `$XDG_RUNTIME_DIR/hypr/$HIS/.socket2.sock` for
-        // `activewindow>>class,title` events would let us push
-        // changes; the launcher today is fine with snapshot-on-demand.
-        let (_tx, rx) = mpsc::channel();
+        if self.thread.is_some() {
+            self.shutdown()?;
+        }
+
+        let socket = hyprland_event_socket_path_from_env()?;
+        let stream = UnixStream::connect(&socket).map_err(|e| {
+            DitoxError::Other(format!(
+                "connect Hyprland event socket {}: {e}",
+                socket.display()
+            ))
+        })?;
+        stream
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .map_err(|e| DitoxError::Other(format!("set Hyprland socket read timeout: {e}")))?;
+
+        self.stop.store(false, Ordering::Relaxed);
+        let stop = Arc::clone(&self.stop);
+        let binary = self.binary.clone();
+        let (tx, rx) = mpsc::channel();
+        let thread = std::thread::Builder::new()
+            .name("ditox-hypr-foreground".into())
+            .spawn(move || run_event_loop(binary, stream, tx, stop))
+            .map_err(|e| DitoxError::Other(format!("spawn hypr foreground thread: {e}")))?;
+        self.thread = Some(thread);
         Ok(rx)
     }
 
     fn shutdown(&mut self) -> Result<()> {
-        // Stateless tracker; nothing to clean up.
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
         Ok(())
     }
+}
+
+impl Drop for HyprctlForegroundTracker {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
+    }
+}
+
+fn snapshot_with_binary(binary: &Path) -> Result<Option<ForegroundSnapshot>> {
+    let out = Command::new(binary)
+        .args(["activewindow", "-j"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|e| DitoxError::Other(format!("spawn hyprctl: {}", e)))?;
+    if !out.status.success() {
+        // Non-zero from hyprctl on a healthy session usually means
+        // "no active window" — return None rather than erroring up
+        // the chain.
+        tracing::trace!(
+            code = ?out.status.code(),
+            "hyprctl activewindow -j non-zero exit; treating as no focus"
+        );
+        return Ok(None);
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    Ok(parse_activewindow(&stdout))
+}
+
+fn hyprland_event_socket_path_from_env() -> Result<PathBuf> {
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
+        DitoxError::Other("XDG_RUNTIME_DIR is not set; cannot find Hyprland socket2".to_string())
+    })?;
+    let signature = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").ok_or_else(|| {
+        DitoxError::Other(
+            "HYPRLAND_INSTANCE_SIGNATURE is not set; cannot find Hyprland socket2".to_string(),
+        )
+    })?;
+    Ok(hyprland_event_socket_path(runtime, signature))
+}
+
+fn hyprland_event_socket_path(
+    runtime: impl Into<PathBuf>,
+    signature: impl Into<PathBuf>,
+) -> PathBuf {
+    runtime
+        .into()
+        .join("hypr")
+        .join(signature.into())
+        .join(".socket2.sock")
+}
+
+fn run_event_loop(
+    binary: PathBuf,
+    stream: UnixStream,
+    tx: mpsc::Sender<ForegroundSnapshot>,
+    stop: Arc<AtomicBool>,
+) {
+    let mut reader = BufReader::new(stream);
+    while !stop.load(Ordering::Relaxed) {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) if is_focus_event(&line) => match snapshot_with_binary(&binary) {
+                Ok(Some(snapshot)) => {
+                    if tx.send(snapshot).is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::debug!(%error, "hypr foreground snapshot after event failed");
+                }
+            },
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => {
+                tracing::debug!(%error, "hypr foreground socket read failed");
+                break;
+            }
+        }
+    }
+}
+
+fn is_focus_event(line: &str) -> bool {
+    line.starts_with("activewindow>>") || line.starts_with("activewindowv2>>")
 }
 
 #[cfg(test)]
@@ -463,13 +567,39 @@ mod tests {
     }
 
     #[test]
-    fn subscribe_returns_disconnected_channel() {
+    fn event_socket_path_uses_hyprland_layout() {
+        let path = hyprland_event_socket_path("/run/user/1000", "instance-123");
+        assert_eq!(
+            path,
+            PathBuf::from("/run/user/1000/hypr/instance-123/.socket2.sock")
+        );
+    }
+
+    #[test]
+    fn focus_event_detection_matches_hyprland_events() {
+        assert!(is_focus_event("activewindow>>kitty,term\n"));
+        assert!(is_focus_event("activewindowv2>>0xfeedface\n"));
+        assert!(!is_focus_event("workspace>>1\n"));
+        assert!(!is_focus_event("openwindow>>0x1,1,kitty,term\n"));
+    }
+
+    #[test]
+    fn subscribe_without_hyprland_env_returns_error() {
         let mut t = HyprctlForegroundTracker::new();
-        let rx = t.subscribe().unwrap();
-        assert!(matches!(
-            rx.try_recv(),
-            Err(mpsc::TryRecvError::Disconnected)
-        ));
+        let old_runtime = std::env::var_os("XDG_RUNTIME_DIR");
+        let old_signature = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE");
+        std::env::remove_var("XDG_RUNTIME_DIR");
+        std::env::remove_var("HYPRLAND_INSTANCE_SIGNATURE");
+
+        let err = t.subscribe().unwrap_err();
+        assert!(format!("{}", err).contains("XDG_RUNTIME_DIR"));
+
+        if let Some(value) = old_runtime {
+            std::env::set_var("XDG_RUNTIME_DIR", value);
+        }
+        if let Some(value) = old_signature {
+            std::env::set_var("HYPRLAND_INSTANCE_SIGNATURE", value);
+        }
     }
 
     /// End-to-end snapshot test against a real Hyprland session.

@@ -13,6 +13,7 @@ use ditox_core::foreground::{
 };
 use ditox_core::watcher::Watcher;
 use ditox_core::EntryType;
+use rusqlite::Connection;
 use std::error::Error as StdError;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -172,6 +173,89 @@ fn watcher_prefers_image_over_text_in_same_clip() -> Result<(), Box<dyn StdError
         EntryType::Image,
         "image must win over text in mixed-format clip"
     );
+
+    let conn = Connection::open(Database::get_db_path()?)?;
+    let format_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM entry_formats WHERE entry_id = ?1",
+        [&entries[0].id],
+        |row| row.get(0),
+    )?;
+    assert_eq!(
+        format_count, 2,
+        "image canonical row and text/plain extra must both be stored"
+    );
+
+    let text_search = db2.search_entries_in_format(
+        "https://example.com/cat.png",
+        "text/plain;charset=utf-8",
+        10,
+    )?;
+    assert_eq!(
+        text_search.len(),
+        1,
+        "stored text/plain extra should be searchable"
+    );
+
+    reset_override();
+    Ok(())
+}
+
+#[test]
+fn watcher_persists_all_allowed_formats_from_same_clip() -> Result<(), Box<dyn StdError>> {
+    let _g = OVERRIDE_LOCK.lock().unwrap();
+    reset_override();
+    let (_tmp, db) = setup_db();
+
+    let rich = RawClip {
+        captured_at: SystemTime::now(),
+        source_app: None,
+        formats: vec![
+            RawFormat {
+                mime: "text/plain".to_string(),
+                bytes: b"hello formatted".to_vec(),
+            },
+            RawFormat {
+                mime: "text/html".to_string(),
+                bytes: b"<p><strong>hello formatted</strong></p>".to_vec(),
+            },
+            RawFormat {
+                mime: "text/rtf".to_string(),
+                bytes: br"{\rtf1\rsid12345 hello formatted}".to_vec(),
+            },
+        ],
+    };
+
+    let source = Box::new(QueueSource::new("rich", vec![rich]));
+    let mut watcher = Watcher::with_sources(db, Config::default(), vec![source]);
+    assert!(watcher.poll_once()?, "rich text clip captured");
+
+    let db2 = open_with_schema();
+    let entries = db2.get_all(1000)?;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].entry_type, EntryType::Text);
+    assert_eq!(entries[0].content, "hello formatted");
+
+    let conn = Connection::open(Database::get_db_path()?)?;
+    let rows: Vec<(String, i64)> = conn
+        .prepare(
+            "SELECT format_name, canonical FROM entry_formats
+             WHERE entry_id = ?1
+             ORDER BY canonical DESC, format_name ASC",
+        )?
+        .query_map([&entries[0].id], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    assert_eq!(
+        rows,
+        vec![
+            ("text/plain;charset=utf-8".to_string(), 1),
+            ("text/html".to_string(), 0),
+            ("text/rtf".to_string(), 0),
+        ]
+    );
+
+    let html = db2.search_entries_in_format("strong", "text/html", 10)?;
+    assert_eq!(html.len(), 1, "HTML extra should feed format FTS");
 
     reset_override();
     Ok(())
@@ -639,6 +723,47 @@ fn watcher_filter_rule_tag_action_tags_inserted_entry() -> Result<(), Box<dyn St
     let tags = db2.get_tags_for_entry(&entries[0].id)?;
     assert_eq!(tags.len(), 1);
     assert_eq!(tags[0].name, "rust");
+
+    reset_override();
+    Ok(())
+}
+
+#[test]
+fn watcher_filter_rule_transform_action_mutates_text_before_insert() -> Result<(), Box<dyn StdError>>
+{
+    use ditox_core::filter::{FilterAction, FilterRule, PatternKind};
+
+    let _g = OVERRIDE_LOCK.lock().unwrap();
+    reset_override();
+    let (_tmp, db) = setup_db();
+
+    let rule = FilterRule::new_now(
+        "lowercase-captures",
+        "SHOUT",
+        PatternKind::Contains,
+        None,
+        FilterAction::Transform("lower-case".to_string()),
+        0,
+    );
+    db.add_filter_rule(&rule)?;
+
+    let source = Box::new(QueueSource::new(
+        "transform-rule",
+        vec![RawClip::text("SHOUT THIS".to_string())],
+    ));
+    let tracker: Box<dyn ForegroundTracker> = Box::new(MockForegroundTracker::new(None));
+
+    let mut watcher =
+        Watcher::with_sources_and_tracker(db, Config::default(), vec![source], tracker);
+
+    assert!(watcher.poll_once()?);
+    let db2 = open_with_schema();
+    let entries = db2.get_all(1000)?;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].content, "shout this",
+        "transform:<id> filter action must alter captured text before insertion"
+    );
 
     reset_override();
     Ok(())

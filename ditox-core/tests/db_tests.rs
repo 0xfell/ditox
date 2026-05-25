@@ -56,7 +56,14 @@ fn insert_test_entry(
     conn.execute(
         "INSERT INTO entries (id, entry_type, content, hash, byte_size, created_at, pinned)
          VALUES (?1, 'text', ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![id, content, hash, content.len(), created_at, pinned as i32],
+        rusqlite::params![
+            id,
+            content,
+            hash,
+            content.len() as i64,
+            created_at,
+            pinned as i32
+        ],
     )
     .unwrap();
 }
@@ -629,11 +636,9 @@ fn test_cleanup_preserves_pinned_entries() {
 
     // Verify all pinned entries still exist
     let pinned_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM entries WHERE pinned = 1",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT COUNT(*) FROM entries WHERE pinned = 1", [], |row| {
+            row.get(0)
+        })
         .unwrap();
 
     assert_eq!(pinned_count, 5);
