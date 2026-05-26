@@ -34,6 +34,7 @@ pub fn build(b: *std.Build) void {
     });
     wireSqlite(b, daemon.root_module);
     b.installArtifact(daemon);
+    installTuiAssets(b);
 
     const test_step = b.step("test", "Run backend tests");
     const core_tests = b.addTest(.{ .root_module = core });
@@ -69,6 +70,25 @@ fn wireSqlite(b: *std.Build, module: *std.Build.Module) void {
         module.addLibraryPath(.{ .cwd_relative = dir });
         module.addRPath(.{ .cwd_relative = dir });
     }
+}
+
+fn installTuiAssets(b: *std.Build) void {
+    if (pathExists(b, "tui/dist/index.js")) {
+        b.installDirectory(.{
+            .source_dir = b.path("tui/dist"),
+            .install_dir = .prefix,
+            .install_subdir = "share/ditox/tui/dist",
+        });
+    }
+    b.installFile("tui/tui-config.example.json", "share/ditox/tui/tui-config.example.json");
+    b.installFile("tui/tui-config.schema.json", "share/ditox/tui/tui-config.schema.json");
+    b.installFile("tui/custom_theme.example.json", "share/ditox/tui/custom_theme.example.json");
+}
+
+fn pathExists(b: *std.Build, path: []const u8) bool {
+    const path_z = b.allocator.dupeZ(u8, path) catch return false;
+    defer b.allocator.free(path_z);
+    return std.os.linux.errno(std.os.linux.access(path_z.ptr, std.os.linux.F_OK)) == .SUCCESS;
 }
 
 fn env(b: *std.Build, name: []const u8) ?[]const u8 {

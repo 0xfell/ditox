@@ -51,6 +51,11 @@ export type ImagePreviewFallbackLabels = Pick<
   | "imagePreviewUnsupportedMime"
   | "imagePreviewUnsupportedBytes"
   | "imagePreviewDecodeFailed"
+  | "imagePreviewBlocksSource"
+  | "imagePreviewKittyFallbackSource"
+  | "imagePreviewSixelFallbackSource"
+  | "imagePreviewKittyProtocolName"
+  | "imagePreviewSixelProtocolName"
   | "imagePreviewProtocolUnknown"
   | "imagePreviewProtocolUnsupported"
   | "imagePreviewProtocolRendererUnavailable"
@@ -67,6 +72,11 @@ const defaultFallbackLabels: ImagePreviewFallbackLabels = {
   imagePreviewUnsupportedMime: "{mime} block preview is not supported yet",
   imagePreviewUnsupportedBytes: "unsupported image bytes",
   imagePreviewDecodeFailed: "{error}",
+  imagePreviewBlocksSource: "image blocks",
+  imagePreviewKittyFallbackSource: "kitty fallback blocks",
+  imagePreviewSixelFallbackSource: "sixel fallback blocks",
+  imagePreviewKittyProtocolName: "Kitty",
+  imagePreviewSixelProtocolName: "Sixel",
   imagePreviewProtocolUnknown: "{protocol} support unknown; showing block fallback",
   imagePreviewProtocolUnsupported: "{protocol} not detected; showing block fallback",
   imagePreviewProtocolRendererUnavailable: "{protocol} detected; native renderer unavailable; showing block fallback",
@@ -98,7 +108,7 @@ export function imageBlockPreview(
 
   let result: ImageBlockPreview;
   try {
-    result = imageBlockPreviewFromBytes(readFileSync(entry.blob_path), width, rows, background, entry.mime, text, glyph, previewSourcePrefix(mode), notice, imagePreviewProtocol(mode));
+    result = imageBlockPreviewFromBytes(readFileSync(entry.blob_path), width, rows, background, entry.mime, text, glyph, previewSourcePrefix(mode, text), notice, imagePreviewProtocol(mode));
   } catch (error) {
     result = { kind: "fallback", reason: decodeErrorReason(error, text) };
   }
@@ -140,7 +150,7 @@ export async function imageBlockPreviewAsync(
         entry.mime,
         text,
         glyph,
-        previewSourcePrefix(mode),
+        previewSourcePrefix(mode, text),
         notice,
         imagePreviewProtocol(mode),
       );
@@ -235,7 +245,7 @@ export function imagePreviewProtocolNotice(
   const protocol = imagePreviewProtocol(mode);
   if (!protocol) return null;
   const text = fallbackLabels(labels);
-  const protocolName = protocol === "kitty" ? "Kitty" : "Sixel";
+  const protocolName = protocol === "kitty" ? text.imagePreviewKittyProtocolName : text.imagePreviewSixelProtocolName;
   const supported = protocol === "kitty" ? capabilities?.kittyGraphics : capabilities?.sixel;
   if (supported === false) return text.imagePreviewProtocolUnsupported.replaceAll("{protocol}", protocolName);
   if (supported === true && capabilities?.nativeRenderer === true) return null;
@@ -483,10 +493,10 @@ function imagePreviewProtocol(mode: ImagePreviewMode): ImagePreviewProtocol | nu
   return null;
 }
 
-function previewSourcePrefix(mode: ImagePreviewMode): string {
-  if (mode === "kitty") return "kitty fallback blocks";
-  if (mode === "sixel") return "sixel fallback blocks";
-  return "image blocks";
+function previewSourcePrefix(mode: ImagePreviewMode, labels: ImagePreviewFallbackLabels): string {
+  if (mode === "kitty") return labels.imagePreviewKittyFallbackSource;
+  if (mode === "sixel") return labels.imagePreviewSixelFallbackSource;
+  return labels.imagePreviewBlocksSource;
 }
 
 export function isBlockPreviewMime(mime: string): boolean {

@@ -11,6 +11,9 @@ export type RpcErrorLabelSet = Pick<
   | "errorClipboardWriteFailed"
   | "errorPasteBackFailed"
   | "errorDitoxdExited"
+  | "errorUnknownStatus"
+  | "errorProcessTemplate"
+  | "errorRpcTemplate"
 >;
 
 const defaultErrorLabels: RpcErrorLabelSet = {
@@ -20,6 +23,9 @@ const defaultErrorLabels: RpcErrorLabelSet = {
   errorClipboardWriteFailed: "failed to write the clipboard with wl-copy",
   errorPasteBackFailed: "failed to paste through Hyprland",
   errorDitoxdExited: "ditoxd exited with {status}",
+  errorUnknownStatus: "unknown status",
+  errorProcessTemplate: "{message}",
+  errorRpcTemplate: "{message}",
 };
 
 export class RpcError extends Error {
@@ -110,7 +116,9 @@ export function formatProcessError(method: string, stderr: string, exitCode: num
   if (text.includes("FileNotFound") && method.includes("paste")) return textLabels.errorPasteToolMissing;
   if (text.includes("ClipboardWriteFailed")) return textLabels.errorClipboardWriteFailed;
   if (text.includes("PasteBackFailed")) return textLabels.errorPasteBackFailed;
-  return text || textLabels.errorDitoxdExited.replaceAll("{status}", String(exitCode ?? "unknown status"));
+  const status = String(exitCode ?? textLabels.errorUnknownStatus);
+  const message = text || textLabels.errorDitoxdExited.replaceAll("{status}", status);
+  return formatErrorTemplate(textLabels.errorProcessTemplate, { method, message, status });
 }
 
 export function formatRpcError(method: string, message: string, labels?: Partial<RpcErrorLabelSet>): string {
@@ -119,11 +127,15 @@ export function formatRpcError(method: string, message: string, labels?: Partial
   if (message === "FileNotFound" && method.includes("paste")) return textLabels.errorPasteToolMissing;
   if (message === "ClipboardWriteFailed") return textLabels.errorClipboardWriteFailed;
   if (message === "PasteBackFailed") return textLabels.errorPasteBackFailed;
-  return message;
+  return formatErrorTemplate(textLabels.errorRpcTemplate, { method, message });
 }
 
 function errorLabels(labels: Partial<RpcErrorLabelSet> | undefined): RpcErrorLabelSet {
   return { ...defaultErrorLabels, ...labels };
+}
+
+function formatErrorTemplate(template: string, values: Record<string, string>): string {
+  return Object.entries(values).reduce((output, [key, value]) => output.replaceAll(`{${key}}`, value), template);
 }
 
 export function parseFrame<T>(raw: string): T {

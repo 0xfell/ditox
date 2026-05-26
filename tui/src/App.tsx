@@ -30,7 +30,15 @@ import {
 } from "./state";
 import { bulkCopyEntries, clearEntries, copyEntry, deleteEntry, favoriteEntry, getWatcherStatus, listEntries, outputEntries, pasteEntry } from "./rpc";
 import { currentTuiConfig, normalizeKey, surface, type ResolvedTuiConfig, type TuiStatusHintMode } from "./tui-config";
-import { formatClearedStatus, formatCopiedCountStatus, formatDeletedStatus, formatEntriesStatus, formatViewStatus, previewModel } from "./presentation";
+import {
+  formatClearedStatus,
+  formatCopiedCountStatus,
+  formatDeletedStatus,
+  formatEntriesStatus,
+  formatPinStatus,
+  formatViewStatus,
+  previewModel,
+} from "./presentation";
 import { Shell } from "./components/Shell";
 import { HeaderBar } from "./components/HeaderBar";
 import { EntryList } from "./components/EntryList";
@@ -57,12 +65,14 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
   const [state, setState] = createSignal<UiState>(initialState(config.startup));
   const [terminalCapabilities, setTerminalCapabilities] = createSignal<TerminalCapabilities | null>(renderer.capabilities);
   const dimensions = useTerminalDimensions();
+  const contentWidth = () => Math.max(1, dimensions().width - config.layout.shellPaddingX * 2);
+  const contentHeight = () => Math.max(1, dimensions().height - config.layout.shellPaddingY * 2);
   const overlayHeight = () => activeOverlayHeight(state(), config);
   const headerRows = () => (config.layout.showHeader ? config.layout.headerHeight : 0);
   const statusRows = () => (config.layout.showStatusLine ? config.layout.statusHeight : 0);
-  const listRows = () => Math.max(1, dimensions().height - headerRows() - statusRows() - overlayHeight());
+  const listRows = () => Math.max(1, contentHeight() - headerRows() - statusRows() - overlayHeight());
   const visibleListEntries = () => visibleEntryCapacity(listRows(), config.layout.rowSpacing);
-  const splitPaneTotalWidth = () => Math.max(1, dimensions().width);
+  const splitPaneTotalWidth = () => Math.max(1, contentWidth());
   const splitPaneGap = () =>
     config.layout.showPreviewPane ? Math.min(config.layout.splitPaneGap, Math.max(0, splitPaneTotalWidth() - config.layout.minPaneWidth * 2)) : 0;
   const splitPaneAvailableWidth = () => Math.max(1, splitPaneTotalWidth() - splitPaneGap());
@@ -71,7 +81,7 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
   const rowWidth = () =>
     config.layout.showPreviewPane
       ? Math.max(config.layout.minPaneWidth, Math.floor((splitPaneAvailableWidth() * config.layout.listWidthPercent) / 100) - config.layout.splitPaneWidthInset)
-      : Math.max(config.layout.minPaneWidth, dimensions().width);
+      : Math.max(config.layout.minPaneWidth, contentWidth());
   const previewWidth = () => Math.max(config.layout.minPaneWidth, Math.floor((splitPaneAvailableWidth() * config.layout.previewWidthPercent) / 100) - config.layout.splitPaneWidthInset);
   const previewVisibleRows = () =>
     visibleFullPreviewLineCapacity(
@@ -180,8 +190,13 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
   async function toggleFavorite() {
     const entry = selectedEntry(state());
     if (!entry) return;
-    await favoriteEntry(entry.id, !entry.favorite, config.labels);
-    await refresh();
+    const nextFavorite = !entry.favorite;
+    try {
+      await favoriteEntry(entry.id, nextFavorite, config.labels);
+      await refresh({ status: formatPinStatus(entry, nextFavorite, config.labels) });
+    } catch (error) {
+      setState((previous) => ({ ...previous, status: error instanceof Error ? error.message : String(error) }));
+    }
   }
 
   async function confirmDelete() {
@@ -275,14 +290,14 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
   return (
     <AppFrame
       config={config}
-      header={config.layout.showHeader ? <HeaderBar config={config} state={state()} selectedCount={state().selectedIds.size} /> : null}
+      header={config.layout.showHeader ? <HeaderBar config={config} state={state()} selectedCount={state().selectedIds.size} width={contentWidth()} /> : null}
       content={
         state().mode === "preview" ? (
           <FullPreview
             config={config}
             entry={selectedEntry(state())}
             rows={listRows()}
-            width={Math.max(config.layout.minPaneWidth, dimensions().width - config.layout.fullPreviewWidthInset)}
+            width={Math.max(config.layout.minPaneWidth, contentWidth() - config.layout.fullPreviewWidthInset)}
             offset={state().previewOffset}
             imageCapabilities={imageProtocolCapabilities(terminalCapabilities())}
             onScroll={(direction) =>
@@ -330,8 +345,8 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
           </box>
         )
       }
-      status={config.layout.showStatusLine ? <StatusLine config={config} status={state().status} watcher={state().watcher} width={dimensions().width} mode={statusHintMode(state().mode)} /> : null}
-      overlay={<ModeOverlay config={config} state={state()} />}
+      status={config.layout.showStatusLine ? <StatusLine config={config} status={state().status} watcher={state().watcher} width={contentWidth()} mode={statusHintMode(state().mode)} /> : null}
+      overlay={<ModeOverlay config={config} state={state()} width={contentWidth()} />}
     />
   );
 }
@@ -534,12 +549,12 @@ function previewVisibleRows(actions: DitoxKeymapActions): number {
   );
 }
 
-function fullPreviewReservedRows(entry: Entry | undefined, config: ResolvedTuiConfig, rows: number): number {
+export function fullPreviewReservedRows(entry: Entry | undefined, config: ResolvedTuiConfig, rows: number): number {
   const metadataRows = config.layout.showFullPreviewMetadata && entry ? config.layout.fullPreviewMetaHeight : 0;
   return metadataRows + estimatedImagePreviewRows(entry, config, rows);
 }
 
-function estimatedImagePreviewRows(entry: Entry | undefined, config: ResolvedTuiConfig, rows: number): number {
+export function estimatedImagePreviewRows(entry: Entry | undefined, config: ResolvedTuiConfig, rows: number): number {
   if (entry?.kind !== "image" || config.layout.fullPreviewImageMode === "metadata") return 0;
   const canRenderBlocks = entry.blob_path !== null && isBlockPreviewMime(entry.mime);
   if (!canRenderBlocks) return 1;
@@ -549,7 +564,7 @@ function estimatedImagePreviewRows(entry: Entry | undefined, config: ResolvedTui
     (config.layout.fullPreviewImageNoticeVisibility === "protocol" && (config.layout.fullPreviewImageMode === "kitty" || config.layout.fullPreviewImageMode === "sixel"))
       ? 1
       : 0;
-  return renderedRows + noticeRows;
+  return renderedRows + noticeRows + (noticeRows > 0 ? config.layout.fullPreviewImageNoticeSpacing : 0);
 }
 
 function liveSearchKey(state: UiState): string {

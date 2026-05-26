@@ -1,6 +1,7 @@
 import { For } from "solid-js";
 import type { UiState } from "../state";
-import { formatFilter } from "../presentation";
+import { formatFilter, truncateText } from "../presentation";
+import type { ContentAlign, VerticalAlign } from "../ui-config";
 import {
   formatTemplate,
   headerLinePartNames,
@@ -14,7 +15,7 @@ import {
   type TuiSurfaceStyle,
 } from "../tui-config";
 
-export function HeaderBar(props: { config: ResolvedTuiConfig; state: UiState; selectedCount: number }) {
+export function HeaderBar(props: { config: ResolvedTuiConfig; state: UiState; selectedCount: number; width?: number }) {
   const style = () => surface(props.config, "header");
   const labels = () => props.config.labels;
   const layout = () => props.config.layout;
@@ -26,18 +27,23 @@ export function HeaderBar(props: { config: ResolvedTuiConfig; state: UiState; se
       ? formatTemplate(labels().selectedCountTemplate, { prefix: labels().selectedPrefix, count: props.selectedCount })
       : labels().singleSelection;
   };
-  const lineParts = () =>
-    templateSegments(labels().headerLineTemplate, {
-      brand: labels().brand,
-      sectionSeparator: labels().headerSectionSeparator,
-      labelSeparator: labels().headerLabelSeparator,
-      filterLabel: labels().filterLabel,
-      filter: filter(),
-      queryLabel: labels().queryLabel,
-      query: query(),
-      modeLabel: labels().modeLabel,
-      mode: selected(),
-    });
+  const lineValues = () =>
+    fittedHeaderLineValues(
+      props.config,
+      {
+        brand: labels().brand,
+        sectionSeparator: labels().headerSectionSeparator,
+        labelSeparator: labels().headerLabelSeparator,
+        filterLabel: labels().filterLabel,
+        filter: filter(),
+        queryLabel: labels().queryLabel,
+        query: query(),
+        modeLabel: labels().modeLabel,
+        mode: selected(),
+      },
+      props.width === undefined ? Number.MAX_SAFE_INTEGER : Math.max(0, props.width - layout().headerPaddingX * 2),
+    );
+  const lineParts = () => templateSegments(labels().headerLineTemplate, lineValues());
   return (
     <box
       height={layout().headerHeight}
@@ -47,16 +53,64 @@ export function HeaderBar(props: { config: ResolvedTuiConfig; state: UiState; se
       backgroundColor={style().bg}
       paddingX={layout().headerPaddingX}
       paddingY={layout().headerPaddingY}
-      title={props.config.chrome.headerBorder && props.config.chrome.showHeaderTitle ? paddedTitle(labels().appTitle, layout().frameTitlePadding) : undefined}
+      title={
+        props.config.chrome.headerBorder && props.config.chrome.showHeaderTitle
+          ? paddedTitle(labels().appTitle, layout().frameTitlePaddingLeft, layout().frameTitlePaddingRight)
+          : undefined
+      }
       titleAlignment={props.config.chrome.headerTitleAlignment}
     >
-      <text style={textStyle(style())}>
-        <For each={lineParts()}>
-          {(part) => <span style={textStyle(style(), headerPartColor(props.config, part.key, props.state.pinnedOnly))}>{part.text}</span>}
-        </For>
-      </text>
+      <box width="100%" flexGrow={1} flexDirection="column" justifyContent={verticalJustify(layout().headerVerticalAlign)}>
+        <box width="100%" flexDirection="row" justifyContent={justifyContent(layout().headerContentAlign)}>
+          <text style={textStyle(style())}>
+            <For each={lineParts()}>
+              {(part) => <span style={textStyle(style(), headerPartColor(props.config, part.key, props.state.pinnedOnly))}>{part.text}</span>}
+            </For>
+          </text>
+        </box>
+      </box>
     </box>
   );
+}
+
+type HeaderLineValues = Record<"brand" | "sectionSeparator" | "labelSeparator" | "filterLabel" | "filter" | "queryLabel" | "query" | "modeLabel" | "mode", string>;
+
+function fittedHeaderLineValues(config: ResolvedTuiConfig, values: HeaderLineValues, width: number): HeaderLineValues {
+  const fitted = {
+    ...values,
+    brand: configuredMax(values.brand, config.layout.headerBrandMaxWidth, config),
+    filter: configuredMax(values.filter, config.layout.headerFilterMaxWidth, config),
+    query: configuredMax(values.query, config.layout.headerQueryMaxWidth, config),
+    mode: configuredMax(values.mode, config.layout.headerModeMaxWidth, config),
+  };
+  const shrinkOrder: Array<keyof HeaderLineValues> = ["query", "mode", "filter", "brand", "queryLabel", "modeLabel", "filterLabel", "sectionSeparator", "labelSeparator"];
+  for (const key of shrinkOrder) {
+    const overflow = templateWidth(config, fitted) - width;
+    if (overflow <= 0) break;
+    if (fitted[key].length === 0) continue;
+    fitted[key] = truncateText(fitted[key], Math.max(0, fitted[key].length - overflow), config.labels);
+  }
+  return fitted;
+}
+
+function configuredMax(value: string, maxWidth: number, config: ResolvedTuiConfig): string {
+  return truncateText(value, maxWidth > 0 ? maxWidth : value.length, config.labels);
+}
+
+function templateWidth(config: ResolvedTuiConfig, values: HeaderLineValues): number {
+  return templateSegments(config.labels.headerLineTemplate, values).reduce((width, part) => width + part.text.length, 0);
+}
+
+function justifyContent(align: ContentAlign): "flex-start" | "center" | "flex-end" {
+  if (align === "right") return "flex-end";
+  if (align === "center") return "center";
+  return "flex-start";
+}
+
+function verticalJustify(align: VerticalAlign): "flex-start" | "center" | "flex-end" {
+  if (align === "bottom") return "flex-end";
+  if (align === "center") return "center";
+  return "flex-start";
 }
 
 function headerPartColor(config: ResolvedTuiConfig, key: string | null, pinnedOnly: boolean): string {

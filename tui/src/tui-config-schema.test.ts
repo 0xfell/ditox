@@ -6,6 +6,7 @@ import {
   clipseKeyBindingAliasNames,
   headerLinePartNames,
   helpActionNames,
+  imagePreviewAlignNames,
   imagePreviewNoticeVisibilityNames,
   imagePreviewRendererNames,
   listContentPartNames,
@@ -104,6 +105,7 @@ describe("tui config schema", () => {
     expect(sorted(schema.$defs.titleAlignment.enum as string[])).toEqual(sorted(titleAlignmentNames));
     expect(sorted(schema.$defs.imagePreviewNoticeVisibility.enum as string[])).toEqual(sorted(imagePreviewNoticeVisibilityNames));
     expect(sorted(schema.$defs.imagePreviewRenderer.enum as string[])).toEqual(sorted(imagePreviewRendererNames));
+    expect(sorted(schema.$defs.imagePreviewAlign.enum as string[])).toEqual(sorted(imagePreviewAlignNames));
     expect(sorted(schema.$defs.overlayPlacement.enum as string[])).toEqual(sorted(overlayPlacementNames));
   });
 });

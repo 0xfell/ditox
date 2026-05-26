@@ -49,6 +49,8 @@ describe("tui config", () => {
     expect(config.layout.fullPreviewImageMaxRows).toBe(16);
     expect(config.layout.imagePreviewRenderer).toBe("auto");
     expect(config.layout.fullPreviewImageRenderer).toBe("auto");
+    expect(config.layout.imagePreviewAlign).toBe("left");
+    expect(config.layout.fullPreviewImageAlign).toBe("left");
     expect(config.layout.imagePreviewBlockGlyph).toBe("▀");
     expect(config.layout.fullPreviewImageBlockGlyph).toBe("▀");
     expect(config.layout.imagePreviewBackground).toBe("auto");
@@ -68,32 +70,76 @@ describe("tui config", () => {
     expect(config.layout.fullPreviewWidthInset).toBe(4);
     expect(config.layout.previewTextWidthInset).toBe(8);
     expect(config.layout.fullPreviewTextWidthInset).toBe(8);
+    expect(config.layout.previewContentAlign).toBe("left");
+    expect(config.layout.fullPreviewContentAlign).toBe("left");
+    expect(config.layout.previewBodyVerticalAlign).toBe("top");
+    expect(config.layout.fullPreviewBodyVerticalAlign).toBe("top");
     expect(config.layout.imagePreviewRowInset).toBe(6);
     expect(config.layout.fullPreviewImageRowInset).toBe(6);
     expect(config.layout.fullPreviewScrollInsetRows).toBe(2);
     expect(config.layout.previewLineNumberWidth).toBe(3);
     expect(config.layout.previewGutterWidth).toBe(4);
     expect(config.layout.fullPreviewGutterWidth).toBe(4);
+    expect(config.layout.previewGutterAlign).toBe("right");
+    expect(config.layout.fullPreviewGutterAlign).toBe("right");
     expect(config.layout.previewLineSpacing).toBe(0);
     expect(config.layout.fullPreviewLineSpacing).toBe(0);
     expect(config.layout.previewMetaHeight).toBe(3);
     expect(config.layout.fullPreviewMetaHeight).toBe(1);
+    expect(config.layout.previewMetaLineSpacing).toBe(0);
+    expect(config.layout.fullPreviewMetaLineSpacing).toBe(0);
     expect(config.layout.previewMetaHashLength).toBe(12);
+    expect(config.layout.fullPreviewMetaHashLength).toBe(12);
     expect(config.layout.previewImageFields).toEqual(["type", "mime", "size", "dimensions", "hash", "blob"]);
+    expect(config.layout.headerBrandMaxWidth).toBe(0);
+    expect(config.layout.headerFilterMaxWidth).toBe(0);
+    expect(config.layout.headerQueryMaxWidth).toBe(0);
+    expect(config.layout.headerModeMaxWidth).toBe(0);
     expect(config.layout.statusSeparatorPadding).toBe(2);
+    expect(config.layout.statusSeparatorPaddingLeft).toBe(2);
+    expect(config.layout.statusSeparatorPaddingRight).toBe(2);
+    expect(config.layout.statusOperationMaxWidth).toBe(0);
+    expect(config.layout.statusWatcherMaxWidth).toBe(0);
+    expect(config.layout.statusHintMaxWidth).toBe(0);
+    expect(config.layout.searchOverlayPromptMaxWidth).toBe(0);
+    expect(config.layout.searchOverlayQueryMaxWidth).toBe(0);
+    expect(config.layout.searchOverlayCursorMaxWidth).toBe(0);
+    expect(config.layout.dangerOverlayPromptMaxWidth).toBe(0);
+    expect(config.layout.dangerOverlayHintMaxWidth).toBe(0);
+    expect(config.layout.helpOverlayActionMaxWidth).toBe(0);
     expect(config.layout.frameTitlePadding).toBe(1);
+    expect(config.layout.frameTitlePaddingLeft).toBe(1);
+    expect(config.layout.frameTitlePaddingRight).toBe(1);
+    expect(config.layout.shellPaddingX).toBe(0);
+    expect(config.layout.shellPaddingY).toBe(0);
     expect(config.layout.headerPaddingX).toBe(1);
     expect(config.layout.headerPaddingY).toBe(0);
     expect(config.layout.statusPaddingX).toBe(1);
     expect(config.layout.statusPaddingY).toBe(0);
+    expect(config.layout.headerContentAlign).toBe("left");
+    expect(config.layout.statusContentAlign).toBe("left");
+    expect(config.layout.headerVerticalAlign).toBe("top");
+    expect(config.layout.statusVerticalAlign).toBe("top");
     expect(config.layout.overlayPaddingX).toBe(1);
     expect(config.layout.overlayPaddingY).toBe(0);
+    expect(config.layout.overlayContentAlign).toBe("left");
+    expect(config.layout.overlayVerticalAlign).toBe("top");
+    expect(config.layout.overlayLineSpacing).toBe(0);
     expect(config.layout.searchOverlayPaddingX).toBe(1);
     expect(config.layout.searchOverlayPaddingY).toBe(0);
+    expect(config.layout.searchOverlayContentAlign).toBe("left");
+    expect(config.layout.searchOverlayVerticalAlign).toBe("top");
+    expect(config.layout.searchOverlayLineSpacing).toBe(0);
     expect(config.layout.dangerOverlayPaddingX).toBe(1);
     expect(config.layout.dangerOverlayPaddingY).toBe(0);
+    expect(config.layout.dangerOverlayContentAlign).toBe("left");
+    expect(config.layout.dangerOverlayVerticalAlign).toBe("top");
+    expect(config.layout.dangerOverlayLineSpacing).toBe(0);
     expect(config.layout.helpOverlayPaddingX).toBe(1);
     expect(config.layout.helpOverlayPaddingY).toBe(0);
+    expect(config.layout.helpOverlayContentAlign).toBe("left");
+    expect(config.layout.helpOverlayVerticalAlign).toBe("top");
+    expect(config.layout.helpOverlayLineSpacing).toBe(0);
     expect(config.layout.listPaddingX).toBe(1);
     expect(config.layout.listPaddingY).toBe(0);
     expect(config.layout.previewPaddingX).toBe(1);
@@ -104,14 +150,32 @@ describe("tui config", () => {
     expect(config.layout.previewMetaPaddingY).toBe(0);
     expect(config.layout.fullPreviewMetaPaddingX).toBe(0);
     expect(config.layout.fullPreviewMetaPaddingY).toBe(0);
+    expect(config.layout.previewMetaContentAlign).toBe("left");
+    expect(config.layout.fullPreviewMetaContentAlign).toBe("left");
+    expect(config.layout.previewMetaVerticalAlign).toBe("top");
+    expect(config.layout.fullPreviewMetaVerticalAlign).toBe("top");
     expect(config.layout.emptyStatePaddingX).toBe(1);
     expect(config.layout.emptyStatePaddingY).toBe(1);
+    expect(config.layout.emptyStateContentAlign).toBe("left");
+    expect(config.layout.emptyStateTitleAlign).toBe("left");
+    expect(config.layout.emptyStateHelpAlign).toBe("left");
+    expect(config.layout.emptyStateVerticalAlign).toBe("top");
+    expect(config.layout.emptyStateLineSpacing).toBe(0);
     expect(config.layout.helpKeyWidth).toBe(24);
+    expect(config.layout.helpKeyAlign).toBe("left");
     expect(config.layout.confirmHintIndent).toBe(2);
+    expect(config.layout.rowContentAlign).toBe("left");
+    expect(config.layout.rowMetadataAlign).toBe("left");
+    expect(config.layout.rowPreviewAlign).toBe("left");
     expect(config.layout.rowAgeWidth).toBe(2);
+    expect(config.layout.rowAgeAlign).toBe("right");
     expect(config.layout.rowSizeWidth).toBe(6);
+    expect(config.layout.rowSizeAlign).toBe("right");
     expect(config.layout.rowPinnedWidth).toBe(3);
+    expect(config.layout.rowPinnedAlign).toBe("left");
     expect(config.layout.rowMetaHashLength).toBe(8);
+    expect(config.layout.rowMarkerWidth).toBe(0);
+    expect(config.layout.rowMarkerAlign).toBe("left");
     expect(config.layout.rowMarkerGap).toBe(1);
     expect(config.layout.rowMetaPreviewGap).toBe(2);
     expect(config.layout.rowPreviewReservedWidth).toBe(28);
@@ -121,7 +185,10 @@ describe("tui config", () => {
     expect(config.layout.refreshIntervalMs).toBe(1000);
     expect(config.layout.mouseEnabled).toBe(true);
     expect(config.layout.mouseScrollRows).toBe(3);
+    expect(config.layout.showScrollbar).toBe(true);
     expect(config.layout.scrollbarWidth).toBe(1);
+    expect(config.layout.scrollbarPlacement).toBe("right");
+    expect(config.layout.scrollbarAlign).toBe("left");
     expect(config.layout.showRowMetadata).toBe(true);
     expect(config.layout.showPreviewPane).toBe(true);
     expect(config.layout.showFullPreviewMetadata).toBe(true);
@@ -131,6 +198,8 @@ describe("tui config", () => {
     expect(config.layout.showEmptyStateHelp).toBe(true);
     expect(config.layout.imagePreviewNoticeVisibility).toBe("protocol");
     expect(config.layout.fullPreviewImageNoticeVisibility).toBe("protocol");
+    expect(config.layout.imagePreviewNoticeSpacing).toBe(0);
+    expect(config.layout.fullPreviewImageNoticeSpacing).toBe(0);
     expect(config.layout.overlayPlacement).toBe("bottom");
     expect(config.chrome.panelBorderStyle).toBe("rounded");
     expect(config.chrome.panelBorder).toBe(true);
@@ -139,6 +208,7 @@ describe("tui config", () => {
     expect(config.chrome.listBorder).toBe(true);
     expect(config.chrome.previewBorder).toBe(true);
     expect(config.chrome.fullPreviewBorder).toBe(true);
+    expect(config.chrome.statusBorder).toBe(false);
     expect(config.chrome.searchOverlayBorder).toBe(true);
     expect(config.chrome.dangerOverlayBorder).toBe(true);
     expect(config.chrome.helpOverlayBorder).toBe(true);
@@ -148,6 +218,7 @@ describe("tui config", () => {
     expect(config.chrome.showListTitle).toBe(true);
     expect(config.chrome.showPreviewTitle).toBe(true);
     expect(config.chrome.showFullPreviewTitle).toBe(true);
+    expect(config.chrome.showStatusTitle).toBe(false);
     expect(config.chrome.showSearchOverlayTitle).toBe(true);
     expect(config.chrome.showDangerOverlayTitle).toBe(true);
     expect(config.chrome.showHelpOverlayTitle).toBe(true);
@@ -158,6 +229,7 @@ describe("tui config", () => {
     expect(config.chrome.listBorderStyle).toBe("rounded");
     expect(config.chrome.previewBorderStyle).toBe("rounded");
     expect(config.chrome.fullPreviewBorderStyle).toBe("rounded");
+    expect(config.chrome.statusBorderStyle).toBe("rounded");
     expect(config.chrome.searchOverlayBorderStyle).toBe("rounded");
     expect(config.chrome.dangerOverlayBorderStyle).toBe("rounded");
     expect(config.chrome.helpOverlayBorderStyle).toBe("rounded");
@@ -168,6 +240,7 @@ describe("tui config", () => {
     expect(config.chrome.listTitleAlignment).toBe("left");
     expect(config.chrome.previewTitleAlignment).toBe("left");
     expect(config.chrome.fullPreviewTitleAlignment).toBe("left");
+    expect(config.chrome.statusTitleAlignment).toBe("left");
     expect(config.chrome.listBottomTitleAlignment).toBe("left");
     expect(config.chrome.previewBottomTitleAlignment).toBe("left");
     expect(config.chrome.fullPreviewBottomTitleAlignment).toBe("left");
@@ -212,7 +285,7 @@ describe("tui config", () => {
     expect(config.keyLabels.space).toBe("space");
     expect(config.keyLabels.escape).toBe("esc");
     expect(config.keyLabels.enter).toBe("enter");
-    expect(config.statusTones.success).toEqual(["copied", "pasted", "cleared"]);
+    expect(config.statusTones.success).toEqual(["copied", "pasted", "cleared", "pinned", "unpinned"]);
     expect(config.statusTones.warning).toEqual(["paused"]);
     expect(config.statusTones.error).toContain("failed");
     expect(config.headerLineTones).toEqual({
@@ -283,6 +356,8 @@ describe("tui config", () => {
       splitMetaDetails: "fg",
       fullBorder: "auto",
       fullMeta: "auto",
+      fullMetaHeader: "auto",
+      fullMetaDetails: "fg",
       fullEmptyTitle: "muted",
       fullEmptyHelp: "secondary",
       fullImageFallbackPrefix: "muted",
@@ -332,6 +407,7 @@ describe("tui config", () => {
     });
     expect(config.labels.selectedCountTemplate).toBe("{prefix} {count}");
     expect(config.labels.kindText).toBe("TXT");
+    expect(config.labels.statusTitle).toBe("status");
     expect(config.labels.rowPinnedLabel).toBe("PIN");
     expect(config.labels.rowMetaTemplate).toBe("{kind} {age} {size}{pinnedSlot}");
     expect(config.labels.rowPinnedSlotTemplate).toBe(" {pinned}");
@@ -366,11 +442,27 @@ describe("tui config", () => {
     expect(config.labels.previewMetaHeaderTemplate).toBe("{kind} {entryIdPrefix}{id}{separator}{hashLabel}{hashLabelSeparator}{hash}");
     expect(config.labels.previewMetaDetailsTemplate).toBe("{mime}{separator}{size}{pinnedSuffix}");
     expect(config.labels.fullPreviewMetaTemplate).toBe("{kind} {entryIdPrefix}{id}{separator}{mime}{pinnedSuffix}");
+    expect(config.labels.fullPreviewMetaHeaderTemplate).toBe("{kind} {entryIdPrefix}{id}{separator}{mime}{pinnedSuffix}");
+    expect(config.labels.fullPreviewMetaDetailsTemplate).toBe("{size}{separator}{hashLabel}{hashLabelSeparator}{hash}");
     expect(config.labels.fullPreviewBottomTitleTemplate).toBe("{entryIdPrefix}{id} {start}-{end}/{total}{separator}{back}");
+    expect(config.labels.previewTextGutterTemplate).toBe("{linePadded}");
     expect(config.labels.imagePreviewDecodePending).toBe("decoding image preview");
     expect(config.labels.imagePreviewUnsupportedMime).toBe("{mime} block preview is not supported yet");
+    expect(config.labels.imagePreviewBlocksSource).toBe("image blocks");
+    expect(config.labels.imagePreviewKittyFallbackSource).toBe("kitty fallback blocks");
+    expect(config.labels.imagePreviewSixelFallbackSource).toBe("sixel fallback blocks");
+    expect(config.labels.imagePreviewKittyProtocolName).toBe("Kitty");
+    expect(config.labels.imagePreviewSixelProtocolName).toBe("Sixel");
     expect(config.labels.watcherRunning).toBe("watcher live");
     expect(config.labels.watcherErrorSeparator).toBe(": ");
+    expect(config.labels.watcherRunningTemplate).toBe("{status} {age}");
+    expect(config.labels.watcherPausedTemplate).toBe("{status}");
+    expect(config.labels.watcherStaleTemplate).toBe("{status} {age}");
+    expect(config.labels.watcherStoppedTemplate).toBe("{status}");
+    expect(config.labels.watcherErrorTemplate).toBe("{status}{separator}{error}");
+    expect(config.labels.errorUnknownStatus).toBe("unknown status");
+    expect(config.labels.errorProcessTemplate).toBe("{message}");
+    expect(config.labels.errorRpcTemplate).toBe("{message}");
     expect(config.labels.keyAlternativeSeparator).toBe(" / ");
     expect(config.labels.keyGroupSeparator).toBe(" ");
     expect(config.labels.statusHintSeparator).toBe("  ");
@@ -403,6 +495,9 @@ describe("tui config", () => {
     expect(config.labels.statusPreviewScrollHint).toBe("scroll");
     expect(config.labels.statusConfirmYesHint).toBe("confirm");
     expect(config.labels.statusConfirmNoHint).toBe("cancel");
+    expect(config.labels.statusPinnedPrefix).toBe("pinned");
+    expect(config.labels.statusUnpinnedPrefix).toBe("unpinned");
+    expect(config.labels.statusPinTemplate).toBe("{prefix} {entryIdPrefix}{id}");
     expect(config.labels.statusClearedTemplate).toBe("{prefix} {count}; {pinned}");
     expect(config.labels.statusEntriesTemplate).toBe("{count} {entries}");
     expect(config.labels.helpSearchCopyMatches).toBe("copy matched search results");
@@ -447,7 +542,11 @@ describe("tui config", () => {
     expect(compact.layout.previewMetaHeight).toBe(2);
     expect(compact.layout.fullPreviewMetaHeight).toBe(1);
     expect(compact.layout.statusSeparatorPadding).toBe(1);
+    expect(compact.layout.statusSeparatorPaddingLeft).toBe(1);
+    expect(compact.layout.statusSeparatorPaddingRight).toBe(1);
     expect(compact.layout.frameTitlePadding).toBe(0);
+    expect(compact.layout.frameTitlePaddingLeft).toBe(0);
+    expect(compact.layout.frameTitlePaddingRight).toBe(0);
     expect(compact.layout.overlayPaddingX).toBe(0);
     expect(compact.layout.searchOverlayPaddingX).toBe(0);
     expect(compact.layout.dangerOverlayPaddingX).toBe(0);
@@ -486,9 +585,16 @@ describe("tui config", () => {
         previewPaddingX: 3,
         fullPreviewPaddingX: 4,
         overlayPaddingX: 3,
+        overlayContentAlign: "center",
+        overlayVerticalAlign: "center",
+        overlayLineSpacing: 1,
         searchOverlayPaddingX: 0,
+        searchOverlayContentAlign: "right",
+        searchOverlayVerticalAlign: "bottom",
+        searchOverlayLineSpacing: 2,
         dangerOverlayPaddingX: 2,
         helpOverlayPaddingX: 1,
+        helpOverlayContentAlign: "left",
       },
     });
     expect(explicit.layout.maxPreviewLines).toBe(30);
@@ -506,9 +612,21 @@ describe("tui config", () => {
     expect(explicit.layout.previewPaddingX).toBe(3);
     expect(explicit.layout.fullPreviewPaddingX).toBe(4);
     expect(explicit.layout.overlayPaddingX).toBe(3);
+    expect(explicit.layout.overlayContentAlign).toBe("center");
+    expect(explicit.layout.overlayVerticalAlign).toBe("center");
+    expect(explicit.layout.overlayLineSpacing).toBe(1);
     expect(explicit.layout.searchOverlayPaddingX).toBe(0);
+    expect(explicit.layout.searchOverlayContentAlign).toBe("right");
+    expect(explicit.layout.searchOverlayVerticalAlign).toBe("bottom");
+    expect(explicit.layout.searchOverlayLineSpacing).toBe(2);
     expect(explicit.layout.dangerOverlayPaddingX).toBe(2);
+    expect(explicit.layout.dangerOverlayContentAlign).toBe("center");
+    expect(explicit.layout.dangerOverlayVerticalAlign).toBe("center");
+    expect(explicit.layout.dangerOverlayLineSpacing).toBe(1);
     expect(explicit.layout.helpOverlayPaddingX).toBe(1);
+    expect(explicit.layout.helpOverlayContentAlign).toBe("left");
+    expect(explicit.layout.helpOverlayVerticalAlign).toBe("center");
+    expect(explicit.layout.helpOverlayLineSpacing).toBe(1);
 
     const envCompact = resolveTuiConfig(
       { layout: { compactMode: false } },
@@ -527,6 +645,9 @@ describe("tui config", () => {
         panelPaddingY: 1,
         overlayPaddingX: 3,
         overlayPaddingY: 2,
+        overlayContentAlign: "center",
+        overlayVerticalAlign: "bottom",
+        overlayLineSpacing: 2,
       },
     });
     expect(legacy.layout.listPaddingX).toBe(2);
@@ -537,10 +658,19 @@ describe("tui config", () => {
     expect(legacy.layout.fullPreviewPaddingY).toBe(1);
     expect(legacy.layout.searchOverlayPaddingX).toBe(3);
     expect(legacy.layout.searchOverlayPaddingY).toBe(2);
+    expect(legacy.layout.searchOverlayContentAlign).toBe("center");
+    expect(legacy.layout.searchOverlayVerticalAlign).toBe("bottom");
+    expect(legacy.layout.searchOverlayLineSpacing).toBe(2);
     expect(legacy.layout.dangerOverlayPaddingX).toBe(3);
     expect(legacy.layout.dangerOverlayPaddingY).toBe(2);
+    expect(legacy.layout.dangerOverlayContentAlign).toBe("center");
+    expect(legacy.layout.dangerOverlayVerticalAlign).toBe("bottom");
+    expect(legacy.layout.dangerOverlayLineSpacing).toBe(2);
     expect(legacy.layout.helpOverlayPaddingX).toBe(3);
     expect(legacy.layout.helpOverlayPaddingY).toBe(2);
+    expect(legacy.layout.helpOverlayContentAlign).toBe("center");
+    expect(legacy.layout.helpOverlayVerticalAlign).toBe("bottom");
+    expect(legacy.layout.helpOverlayLineSpacing).toBe(2);
 
     const explicit = resolveTuiConfig({
       layout: {
@@ -551,9 +681,18 @@ describe("tui config", () => {
         fullPreviewPaddingX: 4,
         overlayPaddingX: 3,
         overlayPaddingY: 2,
+        overlayContentAlign: "center",
+        overlayVerticalAlign: "bottom",
+        overlayLineSpacing: 2,
         searchOverlayPaddingX: 0,
+        searchOverlayContentAlign: "right",
+        searchOverlayVerticalAlign: "center",
+        searchOverlayLineSpacing: 1,
         dangerOverlayPaddingY: 1,
+        dangerOverlayVerticalAlign: "top",
+        dangerOverlayLineSpacing: 0,
         helpOverlayPaddingX: 4,
+        helpOverlayContentAlign: "left",
       },
     });
     expect(explicit.layout.listPaddingX).toBe(0);
@@ -564,10 +703,19 @@ describe("tui config", () => {
     expect(explicit.layout.fullPreviewPaddingY).toBe(1);
     expect(explicit.layout.searchOverlayPaddingX).toBe(0);
     expect(explicit.layout.searchOverlayPaddingY).toBe(2);
+    expect(explicit.layout.searchOverlayContentAlign).toBe("right");
+    expect(explicit.layout.searchOverlayVerticalAlign).toBe("center");
+    expect(explicit.layout.searchOverlayLineSpacing).toBe(1);
     expect(explicit.layout.dangerOverlayPaddingX).toBe(3);
     expect(explicit.layout.dangerOverlayPaddingY).toBe(1);
+    expect(explicit.layout.dangerOverlayContentAlign).toBe("center");
+    expect(explicit.layout.dangerOverlayVerticalAlign).toBe("top");
+    expect(explicit.layout.dangerOverlayLineSpacing).toBe(0);
     expect(explicit.layout.helpOverlayPaddingX).toBe(4);
     expect(explicit.layout.helpOverlayPaddingY).toBe(2);
+    expect(explicit.layout.helpOverlayContentAlign).toBe("left");
+    expect(explicit.layout.helpOverlayVerticalAlign).toBe("bottom");
+    expect(explicit.layout.helpOverlayLineSpacing).toBe(2);
   });
 
   test("uses legacy global chrome as per-panel and per-overlay fallback", () => {
@@ -588,6 +736,7 @@ describe("tui config", () => {
     expect(legacy.chrome.listBorder).toBe(false);
     expect(legacy.chrome.previewBorder).toBe(false);
     expect(legacy.chrome.fullPreviewBorder).toBe(false);
+    expect(legacy.chrome.statusBorder).toBe(false);
     expect(legacy.chrome.searchOverlayBorder).toBe(false);
     expect(legacy.chrome.dangerOverlayBorder).toBe(false);
     expect(legacy.chrome.helpOverlayBorder).toBe(false);
@@ -595,6 +744,7 @@ describe("tui config", () => {
     expect(legacy.chrome.showListTitle).toBe(false);
     expect(legacy.chrome.showPreviewTitle).toBe(false);
     expect(legacy.chrome.showFullPreviewTitle).toBe(false);
+    expect(legacy.chrome.showStatusTitle).toBe(false);
     expect(legacy.chrome.showSearchOverlayTitle).toBe(false);
     expect(legacy.chrome.showDangerOverlayTitle).toBe(false);
     expect(legacy.chrome.showHelpOverlayTitle).toBe(false);
@@ -602,6 +752,7 @@ describe("tui config", () => {
     expect(legacy.chrome.listBorderStyle).toBe("heavy");
     expect(legacy.chrome.previewBorderStyle).toBe("heavy");
     expect(legacy.chrome.fullPreviewBorderStyle).toBe("heavy");
+    expect(legacy.chrome.statusBorderStyle).toBe("rounded");
     expect(legacy.chrome.searchOverlayBorderStyle).toBe("double");
     expect(legacy.chrome.dangerOverlayBorderStyle).toBe("double");
     expect(legacy.chrome.helpOverlayBorderStyle).toBe("double");
@@ -609,6 +760,7 @@ describe("tui config", () => {
     expect(legacy.chrome.listTitleAlignment).toBe("center");
     expect(legacy.chrome.previewTitleAlignment).toBe("center");
     expect(legacy.chrome.fullPreviewTitleAlignment).toBe("center");
+    expect(legacy.chrome.statusTitleAlignment).toBe("left");
     expect(legacy.chrome.listBottomTitleAlignment).toBe("right");
     expect(legacy.chrome.previewBottomTitleAlignment).toBe("right");
     expect(legacy.chrome.fullPreviewBottomTitleAlignment).toBe("right");
@@ -622,17 +774,20 @@ describe("tui config", () => {
         overlayBorder: false,
         headerBorder: true,
         previewBorder: true,
+        statusBorder: true,
         searchOverlayBorder: true,
         helpOverlayBorder: true,
         showPanelTitles: false,
         showOverlayTitles: false,
         showHeaderTitle: true,
         showPreviewTitle: true,
+        showStatusTitle: true,
         showSearchOverlayTitle: true,
         showHelpOverlayTitle: true,
         panelBorderStyle: "heavy",
         headerBorderStyle: "single",
         previewBorderStyle: "rounded",
+        statusBorderStyle: "double",
         overlayBorderStyle: "double",
         searchOverlayBorderStyle: "single",
         helpOverlayBorderStyle: "heavy",
@@ -641,6 +796,7 @@ describe("tui config", () => {
         overlayTitleAlignment: "right",
         headerTitleAlignment: "left",
         previewTitleAlignment: "right",
+        statusTitleAlignment: "right",
         listBottomTitleAlignment: "left",
         searchOverlayTitleAlignment: "center",
         helpOverlayTitleAlignment: "left",
@@ -650,6 +806,7 @@ describe("tui config", () => {
     expect(explicit.chrome.listBorder).toBe(false);
     expect(explicit.chrome.previewBorder).toBe(true);
     expect(explicit.chrome.fullPreviewBorder).toBe(false);
+    expect(explicit.chrome.statusBorder).toBe(true);
     expect(explicit.chrome.searchOverlayBorder).toBe(true);
     expect(explicit.chrome.dangerOverlayBorder).toBe(false);
     expect(explicit.chrome.helpOverlayBorder).toBe(true);
@@ -657,6 +814,7 @@ describe("tui config", () => {
     expect(explicit.chrome.showListTitle).toBe(false);
     expect(explicit.chrome.showPreviewTitle).toBe(true);
     expect(explicit.chrome.showFullPreviewTitle).toBe(false);
+    expect(explicit.chrome.showStatusTitle).toBe(true);
     expect(explicit.chrome.showSearchOverlayTitle).toBe(true);
     expect(explicit.chrome.showDangerOverlayTitle).toBe(false);
     expect(explicit.chrome.showHelpOverlayTitle).toBe(true);
@@ -664,6 +822,7 @@ describe("tui config", () => {
     expect(explicit.chrome.listBorderStyle).toBe("heavy");
     expect(explicit.chrome.previewBorderStyle).toBe("rounded");
     expect(explicit.chrome.fullPreviewBorderStyle).toBe("heavy");
+    expect(explicit.chrome.statusBorderStyle).toBe("double");
     expect(explicit.chrome.searchOverlayBorderStyle).toBe("single");
     expect(explicit.chrome.dangerOverlayBorderStyle).toBe("double");
     expect(explicit.chrome.helpOverlayBorderStyle).toBe("heavy");
@@ -671,6 +830,7 @@ describe("tui config", () => {
     expect(explicit.chrome.listTitleAlignment).toBe("center");
     expect(explicit.chrome.previewTitleAlignment).toBe("right");
     expect(explicit.chrome.fullPreviewTitleAlignment).toBe("center");
+    expect(explicit.chrome.statusTitleAlignment).toBe("right");
     expect(explicit.chrome.listBottomTitleAlignment).toBe("left");
     expect(explicit.chrome.previewBottomTitleAlignment).toBe("right");
     expect(explicit.chrome.fullPreviewBottomTitleAlignment).toBe("right");
@@ -689,9 +849,11 @@ describe("tui config", () => {
         imagePreviewMaxWidth: 24,
         imagePreviewMaxRows: 8,
         imagePreviewRenderer: "text",
+        imagePreviewAlign: "center",
         imagePreviewBlockGlyph: "█",
         imagePreviewBackground: "#112233",
         imagePreviewNoticeVisibility: "always",
+        imagePreviewNoticeSpacing: 2,
         imagePreviewRowInset: 7,
       },
     });
@@ -709,12 +871,16 @@ describe("tui config", () => {
     expect(legacy.layout.fullPreviewImageMaxRows).toBe(8);
     expect(legacy.layout.imagePreviewRenderer).toBe("text");
     expect(legacy.layout.fullPreviewImageRenderer).toBe("text");
+    expect(legacy.layout.imagePreviewAlign).toBe("center");
+    expect(legacy.layout.fullPreviewImageAlign).toBe("center");
     expect(legacy.layout.imagePreviewBlockGlyph).toBe("█");
     expect(legacy.layout.fullPreviewImageBlockGlyph).toBe("█");
     expect(legacy.layout.imagePreviewBackground).toBe("#112233");
     expect(legacy.layout.fullPreviewImageBackground).toBe("#112233");
     expect(legacy.layout.imagePreviewNoticeVisibility).toBe("always");
     expect(legacy.layout.fullPreviewImageNoticeVisibility).toBe("always");
+    expect(legacy.layout.imagePreviewNoticeSpacing).toBe(2);
+    expect(legacy.layout.fullPreviewImageNoticeSpacing).toBe(2);
     expect(legacy.layout.imagePreviewRowInset).toBe(7);
     expect(legacy.layout.fullPreviewImageRowInset).toBe(7);
 
@@ -733,12 +899,16 @@ describe("tui config", () => {
         fullPreviewImageMaxRows: 10,
         imagePreviewRenderer: "text",
         fullPreviewImageRenderer: "opentui",
+        imagePreviewAlign: "center",
+        fullPreviewImageAlign: "right",
         imagePreviewBlockGlyph: "█",
         fullPreviewImageBlockGlyph: "░",
         imagePreviewBackground: "#112233",
         fullPreviewImageBackground: "#445566",
         imagePreviewNoticeVisibility: "always",
         fullPreviewImageNoticeVisibility: "never",
+        imagePreviewNoticeSpacing: 2,
+        fullPreviewImageNoticeSpacing: 3,
         imagePreviewRowInset: 7,
         fullPreviewImageRowInset: 2,
       },
@@ -757,12 +927,16 @@ describe("tui config", () => {
     expect(explicit.layout.fullPreviewImageMaxRows).toBe(10);
     expect(explicit.layout.imagePreviewRenderer).toBe("text");
     expect(explicit.layout.fullPreviewImageRenderer).toBe("opentui");
+    expect(explicit.layout.imagePreviewAlign).toBe("center");
+    expect(explicit.layout.fullPreviewImageAlign).toBe("right");
     expect(explicit.layout.imagePreviewBlockGlyph).toBe("█");
     expect(explicit.layout.fullPreviewImageBlockGlyph).toBe("░");
     expect(explicit.layout.imagePreviewBackground).toBe("#112233");
     expect(explicit.layout.fullPreviewImageBackground).toBe("#445566");
     expect(explicit.layout.imagePreviewNoticeVisibility).toBe("always");
     expect(explicit.layout.fullPreviewImageNoticeVisibility).toBe("never");
+    expect(explicit.layout.imagePreviewNoticeSpacing).toBe(2);
+    expect(explicit.layout.fullPreviewImageNoticeSpacing).toBe(3);
     expect(explicit.layout.imagePreviewRowInset).toBe(7);
     expect(explicit.layout.fullPreviewImageRowInset).toBe(2);
   });
@@ -1012,11 +1186,14 @@ describe("tui config", () => {
           fullPreviewImageMaxRows: 1,
           imagePreviewRenderer: "opentui",
           fullPreviewImageRenderer: "text",
+          imagePreviewAlign: "center",
+          fullPreviewImageAlign: "right",
           imagePreviewBlockGlyph: "▓▓",
           fullPreviewImageBlockGlyph: "▒▒",
           imagePreviewBackground: "#123abc",
           fullPreviewImageBackground: "#445566",
           fullPreviewImageNoticeVisibility: "never",
+          fullPreviewImageNoticeSpacing: 1,
           headerHeight: 99,
           statusHeight: 0,
           showHeader: false,
@@ -1033,32 +1210,76 @@ describe("tui config", () => {
           fullPreviewWidthInset: 99,
           previewTextWidthInset: 99,
           fullPreviewTextWidthInset: 99,
+          previewContentAlign: "center",
+          fullPreviewContentAlign: "right",
+          previewBodyVerticalAlign: "center",
+          fullPreviewBodyVerticalAlign: "bottom",
           imagePreviewRowInset: 99,
           fullPreviewImageRowInset: 99,
           fullPreviewScrollInsetRows: 99,
           previewLineNumberWidth: 0,
           previewGutterWidth: 99,
           fullPreviewGutterWidth: 99,
+          previewGutterAlign: "center",
+          fullPreviewGutterAlign: "left",
           previewLineSpacing: 99,
           fullPreviewLineSpacing: 99,
           previewMetaHeight: 99,
           fullPreviewMetaHeight: 99,
+          previewMetaLineSpacing: 99,
+          fullPreviewMetaLineSpacing: 1,
           previewMetaHashLength: 2,
+          fullPreviewMetaHashLength: 99,
           previewImageFields: ["mime", "hash", "mime", "bad" as never],
+          headerBrandMaxWidth: 201,
+          headerFilterMaxWidth: 12,
+          headerQueryMaxWidth: 13,
+          headerModeMaxWidth: 14,
           statusSeparatorPadding: 99,
+          statusSeparatorPaddingLeft: 3,
+          statusSeparatorPaddingRight: 4,
+          statusOperationMaxWidth: 201,
+          statusWatcherMaxWidth: 17,
+          statusHintMaxWidth: 18,
+          searchOverlayPromptMaxWidth: 19,
+          searchOverlayQueryMaxWidth: 20,
+          searchOverlayCursorMaxWidth: 21,
+          dangerOverlayPromptMaxWidth: 22,
+          dangerOverlayHintMaxWidth: 23,
+          helpOverlayActionMaxWidth: 201,
           frameTitlePadding: 99,
+          frameTitlePaddingLeft: 2,
+          frameTitlePaddingRight: 3,
+          shellPaddingX: 99,
+          shellPaddingY: 99,
           headerPaddingX: 99,
           headerPaddingY: 99,
           statusPaddingX: 99,
           statusPaddingY: 99,
+          headerContentAlign: "center",
+          statusContentAlign: "right",
+          headerVerticalAlign: "bottom",
+          statusVerticalAlign: "center",
           overlayPaddingX: 99,
           overlayPaddingY: 99,
+          overlayContentAlign: "center",
+          overlayVerticalAlign: "center",
+          overlayLineSpacing: 99,
           searchOverlayPaddingX: 99,
           searchOverlayPaddingY: 99,
+          searchOverlayContentAlign: "right",
+          searchOverlayVerticalAlign: "bottom",
+          searchOverlayLineSpacing: 99,
           dangerOverlayPaddingX: 99,
           dangerOverlayPaddingY: 99,
+          dangerOverlayContentAlign: "left",
+          dangerOverlayVerticalAlign: "top",
+          dangerOverlayLineSpacing: 99,
           helpOverlayPaddingX: 99,
           helpOverlayPaddingY: 99,
+          helpOverlayContentAlign: "center",
+          helpOverlayVerticalAlign: "bottom",
+          helpOverlayLineSpacing: 99,
           listPaddingX: 99,
           listPaddingY: 99,
           previewPaddingX: 99,
@@ -1069,14 +1290,32 @@ describe("tui config", () => {
           previewMetaPaddingY: 99,
           fullPreviewMetaPaddingX: 99,
           fullPreviewMetaPaddingY: 99,
+          previewMetaContentAlign: "right",
+          fullPreviewMetaContentAlign: "center",
+          previewMetaVerticalAlign: "center",
+          fullPreviewMetaVerticalAlign: "bottom",
           emptyStatePaddingX: 99,
           emptyStatePaddingY: 99,
+          emptyStateContentAlign: "center",
+          emptyStateTitleAlign: "right",
+          emptyStateHelpAlign: "left",
+          emptyStateVerticalAlign: "bottom",
+          emptyStateLineSpacing: 99,
           helpKeyWidth: 2,
+          helpKeyAlign: "center",
           confirmHintIndent: 99,
+          rowContentAlign: "center",
+          rowMetadataAlign: "right",
+          rowPreviewAlign: "center",
           rowAgeWidth: 99,
+          rowAgeAlign: "left",
           rowSizeWidth: 99,
+          rowSizeAlign: "center",
           rowPinnedWidth: 99,
+          rowPinnedAlign: "right",
           rowMetaHashLength: 2,
+          rowMarkerWidth: 99,
+          rowMarkerAlign: "center",
           rowMarkerGap: 99,
           rowMetaPreviewGap: 99,
           rowPreviewReservedWidth: 2,
@@ -1087,6 +1326,8 @@ describe("tui config", () => {
           mouseEnabled: false,
           mouseScrollRows: 100,
           scrollbarWidth: 99,
+          scrollbarPlacement: "left",
+          scrollbarAlign: "center",
           showMetadata: false,
           showRowMetadata: true,
           showPreviewPane: false,
@@ -1096,6 +1337,7 @@ describe("tui config", () => {
           highlightSearchMatches: false,
           showEmptyStateHelp: false,
           imagePreviewNoticeVisibility: "always",
+          imagePreviewNoticeSpacing: 99,
         },
         chrome: {
           panelBorder: false,
@@ -1104,6 +1346,7 @@ describe("tui config", () => {
           listBorder: false,
           previewBorder: true,
           fullPreviewBorder: false,
+          statusBorder: true,
           searchOverlayBorder: true,
           dangerOverlayBorder: false,
           helpOverlayBorder: true,
@@ -1113,6 +1356,7 @@ describe("tui config", () => {
           showListTitle: false,
           showPreviewTitle: true,
           showFullPreviewTitle: false,
+          showStatusTitle: true,
           showSearchOverlayTitle: true,
           showDangerOverlayTitle: false,
           showHelpOverlayTitle: true,
@@ -1124,12 +1368,14 @@ describe("tui config", () => {
           listBorderStyle: "bad" as never,
           previewBorderStyle: "heavy",
           fullPreviewBorderStyle: "rounded",
+          statusBorderStyle: "single",
           searchOverlayBorderStyle: "single",
           dangerOverlayBorderStyle: "heavy",
           helpOverlayBorderStyle: "double",
           panelTitleAlignment: "center",
           panelBottomTitleAlignment: "right",
           overlayTitleAlignment: "right",
+          statusTitleAlignment: "center",
           selectedMarker: ">>",
           selectedMarkedMarker: "**",
           scrollbarThumb: "█",
@@ -1158,10 +1404,13 @@ describe("tui config", () => {
         },
         labels: {
           brand: "DX",
+          statusTitle: "state",
           ready: "idle",
           selectedCountTemplate: "{count} {prefix}",
           watcherRunning: "daemon live",
           watcherErrorSeparator: " -> ",
+          watcherRunningTemplate: "{age} / {status}",
+          watcherErrorTemplate: "{error} / {status}",
           kindText: "TEXT",
           rowPinnedLabel: "SV",
           rowMetaTemplate: "{kind}|{age}|{size}|{pinnedSlot}",
@@ -1191,7 +1440,10 @@ describe("tui config", () => {
           previewMetaHeaderTemplate: "{kind}/{id}/{hash}",
           previewMetaDetailsTemplate: "{size}/{mime}{pinnedSuffix}",
           fullPreviewMetaTemplate: "{kind}/{id}/{mime}{pinnedSuffix}",
+          fullPreviewMetaHeaderTemplate: "full:{kind}/{id}/{mime}",
+          fullPreviewMetaDetailsTemplate: "{size}/{hashShort}{pinnedSuffix}",
           fullPreviewBottomTitleTemplate: "{id}:{start}-{end}/{total}{separator}{back}",
+          previewTextGutterTemplate: "L{line}",
           imagePreviewFallbackSeparator: " -> ",
           splitImagePreviewFallbackPrefix: "split-img",
           splitImagePreviewFallbackSeparator: " <- ",
@@ -1201,8 +1453,19 @@ describe("tui config", () => {
           imagePreviewSourceTemplate: "SRC {source}",
           splitImagePreviewSourceTemplate: "SPLIT {source}",
           fullImagePreviewSourceTemplate: "FULL {source}",
+          imagePreviewBlocksSource: "ansi blocks",
+          imagePreviewKittyFallbackSource: "kitty ansi fallback",
+          imagePreviewSixelFallbackSource: "sixel ansi fallback",
+          imagePreviewKittyProtocolName: "KITTY",
+          imagePreviewSixelProtocolName: "SIXEL",
           errorPasteBackFailed: "paste transport failed",
+          errorUnknownStatus: "unknown backend exit",
+          errorProcessTemplate: "process {method}: {message}",
+          errorRpcTemplate: "rpc {method}: {message}",
           statusPinnedView: "SAVED",
+          statusPinnedPrefix: "saved",
+          statusUnpinnedPrefix: "unsaved",
+          statusPinTemplate: "{prefix}:{entryIdPrefix}{id}",
           statusClearedTemplate: "{prefix}: {count} ({pinned})",
           statusEntriesTemplate: "{entries}: {count}",
           imagePreviewUnsupportedMime: "cannot draw {mime}",
@@ -1301,6 +1564,8 @@ describe("tui config", () => {
           splitMetaDetails: "border",
           fullBorder: "image",
           fullMeta: "favorite",
+          fullMetaHeader: "accent",
+          fullMetaDetails: "secondary",
           fullEmptyTitle: "warning",
           fullEmptyHelp: "secondary",
           fullImageFallbackPrefix: "accent",
@@ -1337,11 +1602,14 @@ describe("tui config", () => {
     expect(config.layout.fullPreviewImageMaxRows).toBe(2);
     expect(config.layout.imagePreviewRenderer).toBe("opentui");
     expect(config.layout.fullPreviewImageRenderer).toBe("text");
+    expect(config.layout.imagePreviewAlign).toBe("center");
+    expect(config.layout.fullPreviewImageAlign).toBe("right");
     expect(config.layout.imagePreviewBlockGlyph).toBe("▓");
     expect(config.layout.fullPreviewImageBlockGlyph).toBe("▒");
     expect(config.layout.imagePreviewBackground).toBe("#123abc");
     expect(config.layout.fullPreviewImageBackground).toBe("#445566");
     expect(config.layout.fullPreviewImageNoticeVisibility).toBe("never");
+    expect(config.layout.fullPreviewImageNoticeSpacing).toBe(1);
     expect(config.layout.headerHeight).toBe(6);
     expect(config.layout.statusHeight).toBe(1);
     expect(config.layout.showHeader).toBe(false);
@@ -1357,32 +1625,76 @@ describe("tui config", () => {
     expect(config.layout.fullPreviewWidthInset).toBe(20);
     expect(config.layout.previewTextWidthInset).toBe(24);
     expect(config.layout.fullPreviewTextWidthInset).toBe(24);
+    expect(config.layout.previewContentAlign).toBe("center");
+    expect(config.layout.fullPreviewContentAlign).toBe("right");
+    expect(config.layout.previewBodyVerticalAlign).toBe("center");
+    expect(config.layout.fullPreviewBodyVerticalAlign).toBe("bottom");
     expect(config.layout.imagePreviewRowInset).toBe(20);
     expect(config.layout.fullPreviewImageRowInset).toBe(20);
     expect(config.layout.fullPreviewScrollInsetRows).toBe(12);
     expect(config.layout.previewLineNumberWidth).toBe(1);
     expect(config.layout.previewGutterWidth).toBe(12);
     expect(config.layout.fullPreviewGutterWidth).toBe(12);
+    expect(config.layout.previewGutterAlign).toBe("center");
+    expect(config.layout.fullPreviewGutterAlign).toBe("left");
     expect(config.layout.previewLineSpacing).toBe(3);
     expect(config.layout.fullPreviewLineSpacing).toBe(3);
     expect(config.layout.previewMetaHeight).toBe(4);
     expect(config.layout.fullPreviewMetaHeight).toBe(4);
+    expect(config.layout.previewMetaLineSpacing).toBe(2);
+    expect(config.layout.fullPreviewMetaLineSpacing).toBe(1);
     expect(config.layout.previewMetaHashLength).toBe(6);
+    expect(config.layout.fullPreviewMetaHashLength).toBe(64);
     expect(config.layout.previewImageFields).toEqual(["mime", "hash"]);
+    expect(config.layout.headerBrandMaxWidth).toBe(200);
+    expect(config.layout.headerFilterMaxWidth).toBe(12);
+    expect(config.layout.headerQueryMaxWidth).toBe(13);
+    expect(config.layout.headerModeMaxWidth).toBe(14);
     expect(config.layout.statusSeparatorPadding).toBe(6);
+    expect(config.layout.statusSeparatorPaddingLeft).toBe(3);
+    expect(config.layout.statusSeparatorPaddingRight).toBe(4);
+    expect(config.layout.statusOperationMaxWidth).toBe(200);
+    expect(config.layout.statusWatcherMaxWidth).toBe(17);
+    expect(config.layout.statusHintMaxWidth).toBe(18);
+    expect(config.layout.searchOverlayPromptMaxWidth).toBe(19);
+    expect(config.layout.searchOverlayQueryMaxWidth).toBe(20);
+    expect(config.layout.searchOverlayCursorMaxWidth).toBe(21);
+    expect(config.layout.dangerOverlayPromptMaxWidth).toBe(22);
+    expect(config.layout.dangerOverlayHintMaxWidth).toBe(23);
+    expect(config.layout.helpOverlayActionMaxWidth).toBe(200);
     expect(config.layout.frameTitlePadding).toBe(4);
+    expect(config.layout.frameTitlePaddingLeft).toBe(2);
+    expect(config.layout.frameTitlePaddingRight).toBe(3);
+    expect(config.layout.shellPaddingX).toBe(6);
+    expect(config.layout.shellPaddingY).toBe(4);
     expect(config.layout.headerPaddingX).toBe(4);
     expect(config.layout.headerPaddingY).toBe(3);
     expect(config.layout.statusPaddingX).toBe(4);
     expect(config.layout.statusPaddingY).toBe(3);
+    expect(config.layout.headerContentAlign).toBe("center");
+    expect(config.layout.statusContentAlign).toBe("right");
+    expect(config.layout.headerVerticalAlign).toBe("bottom");
+    expect(config.layout.statusVerticalAlign).toBe("center");
     expect(config.layout.overlayPaddingX).toBe(4);
     expect(config.layout.overlayPaddingY).toBe(3);
+    expect(config.layout.overlayContentAlign).toBe("center");
+    expect(config.layout.overlayVerticalAlign).toBe("center");
+    expect(config.layout.overlayLineSpacing).toBe(3);
     expect(config.layout.searchOverlayPaddingX).toBe(4);
     expect(config.layout.searchOverlayPaddingY).toBe(3);
+    expect(config.layout.searchOverlayContentAlign).toBe("right");
+    expect(config.layout.searchOverlayVerticalAlign).toBe("bottom");
+    expect(config.layout.searchOverlayLineSpacing).toBe(3);
     expect(config.layout.dangerOverlayPaddingX).toBe(4);
     expect(config.layout.dangerOverlayPaddingY).toBe(3);
+    expect(config.layout.dangerOverlayContentAlign).toBe("left");
+    expect(config.layout.dangerOverlayVerticalAlign).toBe("top");
+    expect(config.layout.dangerOverlayLineSpacing).toBe(3);
     expect(config.layout.helpOverlayPaddingX).toBe(4);
     expect(config.layout.helpOverlayPaddingY).toBe(3);
+    expect(config.layout.helpOverlayContentAlign).toBe("center");
+    expect(config.layout.helpOverlayVerticalAlign).toBe("bottom");
+    expect(config.layout.helpOverlayLineSpacing).toBe(3);
     expect(config.layout.listPaddingX).toBe(4);
     expect(config.layout.listPaddingY).toBe(2);
     expect(config.layout.previewPaddingX).toBe(4);
@@ -1393,14 +1705,32 @@ describe("tui config", () => {
     expect(config.layout.previewMetaPaddingY).toBe(2);
     expect(config.layout.fullPreviewMetaPaddingX).toBe(4);
     expect(config.layout.fullPreviewMetaPaddingY).toBe(2);
+    expect(config.layout.previewMetaContentAlign).toBe("right");
+    expect(config.layout.fullPreviewMetaContentAlign).toBe("center");
+    expect(config.layout.previewMetaVerticalAlign).toBe("center");
+    expect(config.layout.fullPreviewMetaVerticalAlign).toBe("bottom");
     expect(config.layout.emptyStatePaddingX).toBe(4);
     expect(config.layout.emptyStatePaddingY).toBe(2);
+    expect(config.layout.emptyStateContentAlign).toBe("center");
+    expect(config.layout.emptyStateTitleAlign).toBe("right");
+    expect(config.layout.emptyStateHelpAlign).toBe("left");
+    expect(config.layout.emptyStateVerticalAlign).toBe("bottom");
+    expect(config.layout.emptyStateLineSpacing).toBe(4);
     expect(config.layout.helpKeyWidth).toBe(8);
+    expect(config.layout.helpKeyAlign).toBe("center");
     expect(config.layout.confirmHintIndent).toBe(8);
+    expect(config.layout.rowContentAlign).toBe("center");
+    expect(config.layout.rowMetadataAlign).toBe("right");
+    expect(config.layout.rowPreviewAlign).toBe("center");
     expect(config.layout.rowAgeWidth).toBe(12);
+    expect(config.layout.rowAgeAlign).toBe("left");
     expect(config.layout.rowSizeWidth).toBe(16);
+    expect(config.layout.rowSizeAlign).toBe("center");
     expect(config.layout.rowPinnedWidth).toBe(12);
+    expect(config.layout.rowPinnedAlign).toBe("right");
     expect(config.layout.rowMetaHashLength).toBe(4);
+    expect(config.layout.rowMarkerWidth).toBe(12);
+    expect(config.layout.rowMarkerAlign).toBe("center");
     expect(config.layout.rowMarkerGap).toBe(4);
     expect(config.layout.rowMetaPreviewGap).toBe(8);
     expect(config.layout.rowPreviewReservedWidth).toBe(8);
@@ -1411,6 +1741,8 @@ describe("tui config", () => {
     expect(config.layout.mouseEnabled).toBe(false);
     expect(config.layout.mouseScrollRows).toBe(20);
     expect(config.layout.scrollbarWidth).toBe(4);
+    expect(config.layout.scrollbarPlacement).toBe("left");
+    expect(config.layout.scrollbarAlign).toBe("center");
     expect(config.layout.showMetadata).toBe(false);
     expect(config.layout.showRowMetadata).toBe(true);
     expect(config.layout.showPreviewPane).toBe(false);
@@ -1420,6 +1752,7 @@ describe("tui config", () => {
     expect(config.layout.highlightSearchMatches).toBe(false);
     expect(config.layout.showEmptyStateHelp).toBe(false);
     expect(config.layout.imagePreviewNoticeVisibility).toBe("always");
+    expect(config.layout.imagePreviewNoticeSpacing).toBe(4);
     expect(config.layout.overlayPlacement).toBe("top");
     expect(config.chrome.panelBorder).toBe(false);
     expect(config.chrome.overlayBorder).toBe(false);
@@ -1427,6 +1760,7 @@ describe("tui config", () => {
     expect(config.chrome.listBorder).toBe(false);
     expect(config.chrome.previewBorder).toBe(true);
     expect(config.chrome.fullPreviewBorder).toBe(false);
+    expect(config.chrome.statusBorder).toBe(true);
     expect(config.chrome.searchOverlayBorder).toBe(true);
     expect(config.chrome.dangerOverlayBorder).toBe(false);
     expect(config.chrome.helpOverlayBorder).toBe(true);
@@ -1436,6 +1770,7 @@ describe("tui config", () => {
     expect(config.chrome.showListTitle).toBe(false);
     expect(config.chrome.showPreviewTitle).toBe(true);
     expect(config.chrome.showFullPreviewTitle).toBe(false);
+    expect(config.chrome.showStatusTitle).toBe(true);
     expect(config.chrome.showSearchOverlayTitle).toBe(true);
     expect(config.chrome.showDangerOverlayTitle).toBe(false);
     expect(config.chrome.showHelpOverlayTitle).toBe(true);
@@ -1447,12 +1782,14 @@ describe("tui config", () => {
     expect(config.chrome.listBorderStyle).toBe("double");
     expect(config.chrome.previewBorderStyle).toBe("heavy");
     expect(config.chrome.fullPreviewBorderStyle).toBe("rounded");
+    expect(config.chrome.statusBorderStyle).toBe("single");
     expect(config.chrome.searchOverlayBorderStyle).toBe("single");
     expect(config.chrome.dangerOverlayBorderStyle).toBe("heavy");
     expect(config.chrome.helpOverlayBorderStyle).toBe("double");
     expect(config.chrome.panelTitleAlignment).toBe("center");
     expect(config.chrome.panelBottomTitleAlignment).toBe("right");
     expect(config.chrome.overlayTitleAlignment).toBe("right");
+    expect(config.chrome.statusTitleAlignment).toBe("center");
     expect(config.chrome.selectedMarker).toBe(">>");
     expect(config.chrome.selectedMarkedMarker).toBe("**");
     expect(config.chrome.scrollbarThumb).toBe("█");
@@ -1502,9 +1839,12 @@ describe("tui config", () => {
     expect(surface(config, "status").error).toBe("#552222");
     expect(surface(config, "status").dim).toBe(true);
     expect(config.labels.brand).toBe("DX");
+    expect(config.labels.statusTitle).toBe("state");
     expect(config.labels.selectedCountTemplate).toBe("{count} {prefix}");
     expect(config.labels.watcherRunning).toBe("daemon live");
     expect(config.labels.watcherErrorSeparator).toBe(" -> ");
+    expect(config.labels.watcherRunningTemplate).toBe("{age} / {status}");
+    expect(config.labels.watcherErrorTemplate).toBe("{error} / {status}");
     expect(config.labels.kindText).toBe("TEXT");
     expect(config.labels.rowPinnedLabel).toBe("SV");
     expect(config.labels.rowMetaTemplate).toBe("{kind}|{age}|{size}|{pinnedSlot}");
@@ -1534,7 +1874,10 @@ describe("tui config", () => {
     expect(config.labels.previewMetaHeaderTemplate).toBe("{kind}/{id}/{hash}");
     expect(config.labels.previewMetaDetailsTemplate).toBe("{size}/{mime}{pinnedSuffix}");
     expect(config.labels.fullPreviewMetaTemplate).toBe("{kind}/{id}/{mime}{pinnedSuffix}");
+    expect(config.labels.fullPreviewMetaHeaderTemplate).toBe("full:{kind}/{id}/{mime}");
+    expect(config.labels.fullPreviewMetaDetailsTemplate).toBe("{size}/{hashShort}{pinnedSuffix}");
     expect(config.labels.fullPreviewBottomTitleTemplate).toBe("{id}:{start}-{end}/{total}{separator}{back}");
+    expect(config.labels.previewTextGutterTemplate).toBe("L{line}");
     expect(config.labels.imagePreviewFallbackSeparator).toBe(" -> ");
     expect(config.labels.splitImagePreviewFallbackPrefix).toBe("split-img");
     expect(config.labels.splitImagePreviewFallbackSeparator).toBe(" <- ");
@@ -1544,8 +1887,19 @@ describe("tui config", () => {
     expect(config.labels.imagePreviewSourceTemplate).toBe("SRC {source}");
     expect(config.labels.splitImagePreviewSourceTemplate).toBe("SPLIT {source}");
     expect(config.labels.fullImagePreviewSourceTemplate).toBe("FULL {source}");
+    expect(config.labels.imagePreviewBlocksSource).toBe("ansi blocks");
+    expect(config.labels.imagePreviewKittyFallbackSource).toBe("kitty ansi fallback");
+    expect(config.labels.imagePreviewSixelFallbackSource).toBe("sixel ansi fallback");
+    expect(config.labels.imagePreviewKittyProtocolName).toBe("KITTY");
+    expect(config.labels.imagePreviewSixelProtocolName).toBe("SIXEL");
     expect(config.labels.errorPasteBackFailed).toBe("paste transport failed");
+    expect(config.labels.errorUnknownStatus).toBe("unknown backend exit");
+    expect(config.labels.errorProcessTemplate).toBe("process {method}: {message}");
+    expect(config.labels.errorRpcTemplate).toBe("rpc {method}: {message}");
     expect(config.labels.statusPinnedView).toBe("SAVED");
+    expect(config.labels.statusPinnedPrefix).toBe("saved");
+    expect(config.labels.statusUnpinnedPrefix).toBe("unsaved");
+    expect(config.labels.statusPinTemplate).toBe("{prefix}:{entryIdPrefix}{id}");
     expect(config.labels.statusClearedTemplate).toBe("{prefix}: {count} ({pinned})");
     expect(config.labels.statusEntriesTemplate).toBe("{entries}: {count}");
     expect(config.labels.imagePreviewUnsupportedMime).toBe("cannot draw {mime}");
@@ -1643,6 +1997,8 @@ describe("tui config", () => {
       splitMetaDetails: "border",
       fullBorder: "image",
       fullMeta: "favorite",
+      fullMetaHeader: "accent",
+      fullMetaDetails: "secondary",
       fullEmptyTitle: "warning",
       fullEmptyHelp: "secondary",
       fullImageFallbackPrefix: "accent",
@@ -1677,6 +2033,21 @@ describe("tui config", () => {
     expect(resolveTuiConfig({ filterOrder: ["bad", "worse"] }).filterOrder).toEqual(["all", "text", "images", "favorites", "today"]);
   });
 
+  test("keeps legacy full-preview metadata template and tone overrides as fallbacks", () => {
+    const config = resolveTuiConfig({
+      labels: {
+        fullPreviewMetaTemplate: "legacy-meta-{id}",
+      },
+      previewContentTones: {
+        fullMeta: "favorite",
+      },
+    });
+
+    expect(config.labels.fullPreviewMetaHeaderTemplate).toBe("legacy-meta-{id}");
+    expect(config.previewContentTones.fullMetaHeader).toBe("favorite");
+    expect(config.previewContentTones.fullMetaDetails).toBe("favorite");
+  });
+
   test("falls back to default help order when configured help actions are unusable", () => {
     const config = resolveTuiConfig({ helpOrder: ["bad", "worse"] });
 
@@ -1693,6 +2064,115 @@ describe("tui config", () => {
     const config = resolveTuiConfig({ layout: { imagePreviewBackground: "blue" } });
 
     expect(config.layout.imagePreviewBackground).toBe("auto");
+  });
+
+  test("falls back to inherited image preview alignment when configured values are unusable", () => {
+    const inherited = resolveTuiConfig({ layout: { emptyStateContentAlign: "center" } });
+    expect(inherited.layout.emptyStateTitleAlign).toBe("center");
+    expect(inherited.layout.emptyStateHelpAlign).toBe("center");
+
+    const previewInherited = resolveTuiConfig({ layout: { previewContentAlign: "center", fullPreviewContentAlign: "right" } });
+    expect(previewInherited.layout.fullPreviewContentAlign).toBe("right");
+    expect(previewInherited.layout.previewMetaContentAlign).toBe("center");
+    expect(previewInherited.layout.fullPreviewMetaContentAlign).toBe("right");
+
+    const previewMetaInherited = resolveTuiConfig({ layout: { previewMetaVerticalAlign: "center" } });
+    expect(previewMetaInherited.layout.previewMetaVerticalAlign).toBe("center");
+    expect(previewMetaInherited.layout.fullPreviewMetaVerticalAlign).toBe("center");
+
+    const previewBodyInherited = resolveTuiConfig({ layout: { previewBodyVerticalAlign: "bottom" } });
+    expect(previewBodyInherited.layout.previewBodyVerticalAlign).toBe("bottom");
+    expect(previewBodyInherited.layout.fullPreviewBodyVerticalAlign).toBe("bottom");
+
+    const previewGutterInherited = resolveTuiConfig({ layout: { previewGutterAlign: "center" } });
+    expect(previewGutterInherited.layout.previewGutterAlign).toBe("center");
+    expect(previewGutterInherited.layout.fullPreviewGutterAlign).toBe("center");
+
+    const metaHashInherited = resolveTuiConfig({ layout: { previewMetaHashLength: 9 } });
+    expect(metaHashInherited.layout.previewMetaHashLength).toBe(9);
+    expect(metaHashInherited.layout.fullPreviewMetaHashLength).toBe(9);
+
+    const config = resolveTuiConfig({
+      layout: {
+        imagePreviewAlign: "middle" as never,
+        fullPreviewImageAlign: "bottom" as never,
+        previewGutterAlign: "middle" as never,
+        fullPreviewGutterAlign: "bottom" as never,
+        previewContentAlign: "middle" as never,
+        fullPreviewContentAlign: "bottom" as never,
+        previewBodyVerticalAlign: "left" as never,
+        fullPreviewBodyVerticalAlign: "right" as never,
+        previewMetaContentAlign: "start" as never,
+        fullPreviewMetaContentAlign: "end" as never,
+        previewMetaVerticalAlign: "left" as never,
+        fullPreviewMetaVerticalAlign: "right" as never,
+        scrollbarPlacement: "middle" as never,
+        scrollbarAlign: "middle" as never,
+        rowContentAlign: "middle" as never,
+        rowMetadataAlign: "start" as never,
+        rowPreviewAlign: "end" as never,
+        rowAgeAlign: "start" as never,
+        rowSizeAlign: "middle" as never,
+        rowPinnedAlign: "end" as never,
+        rowMarkerAlign: "middle" as never,
+        headerContentAlign: "start" as never,
+        statusContentAlign: "end" as never,
+        headerVerticalAlign: "left" as never,
+        statusVerticalAlign: "right" as never,
+        overlayContentAlign: "middle" as never,
+        overlayVerticalAlign: "middle" as never,
+        searchOverlayContentAlign: "start" as never,
+        searchOverlayVerticalAlign: "under" as never,
+        dangerOverlayContentAlign: "end" as never,
+        dangerOverlayVerticalAlign: "over" as never,
+        helpOverlayContentAlign: "bottom" as never,
+        helpOverlayVerticalAlign: "left" as never,
+        emptyStateContentAlign: "middle" as never,
+        emptyStateTitleAlign: "end" as never,
+        emptyStateHelpAlign: "start" as never,
+        emptyStateVerticalAlign: "middle" as never,
+        helpKeyAlign: "middle" as never,
+      },
+    });
+
+    expect(config.layout.imagePreviewAlign).toBe("left");
+    expect(config.layout.fullPreviewImageAlign).toBe("left");
+    expect(config.layout.previewGutterAlign).toBe("right");
+    expect(config.layout.fullPreviewGutterAlign).toBe("right");
+    expect(config.layout.previewContentAlign).toBe("left");
+    expect(config.layout.fullPreviewContentAlign).toBe("left");
+    expect(config.layout.previewBodyVerticalAlign).toBe("top");
+    expect(config.layout.fullPreviewBodyVerticalAlign).toBe("top");
+    expect(config.layout.previewMetaContentAlign).toBe("left");
+    expect(config.layout.fullPreviewMetaContentAlign).toBe("left");
+    expect(config.layout.previewMetaVerticalAlign).toBe("top");
+    expect(config.layout.fullPreviewMetaVerticalAlign).toBe("top");
+    expect(config.layout.scrollbarPlacement).toBe("right");
+    expect(config.layout.scrollbarAlign).toBe("left");
+    expect(config.layout.rowContentAlign).toBe("left");
+    expect(config.layout.rowMetadataAlign).toBe("left");
+    expect(config.layout.rowPreviewAlign).toBe("left");
+    expect(config.layout.rowAgeAlign).toBe("right");
+    expect(config.layout.rowSizeAlign).toBe("right");
+    expect(config.layout.rowPinnedAlign).toBe("left");
+    expect(config.layout.rowMarkerAlign).toBe("left");
+    expect(config.layout.headerContentAlign).toBe("left");
+    expect(config.layout.statusContentAlign).toBe("left");
+    expect(config.layout.headerVerticalAlign).toBe("top");
+    expect(config.layout.statusVerticalAlign).toBe("top");
+    expect(config.layout.overlayContentAlign).toBe("left");
+    expect(config.layout.overlayVerticalAlign).toBe("top");
+    expect(config.layout.searchOverlayContentAlign).toBe("left");
+    expect(config.layout.searchOverlayVerticalAlign).toBe("top");
+    expect(config.layout.dangerOverlayContentAlign).toBe("left");
+    expect(config.layout.dangerOverlayVerticalAlign).toBe("top");
+    expect(config.layout.helpOverlayContentAlign).toBe("left");
+    expect(config.layout.helpOverlayVerticalAlign).toBe("top");
+    expect(config.layout.emptyStateContentAlign).toBe("left");
+    expect(config.layout.emptyStateTitleAlign).toBe("left");
+    expect(config.layout.emptyStateHelpAlign).toBe("left");
+    expect(config.layout.emptyStateVerticalAlign).toBe("top");
+    expect(config.layout.helpKeyAlign).toBe("left");
   });
 
   test("derives help rows from configured help order", () => {
@@ -1879,6 +2359,10 @@ describe("tui config", () => {
         DITOX_TUI_MOUSE: "false",
         DITOX_TUI_MOUSE_SCROLL_ROWS: "5",
         DITOX_TUI_SCROLLBAR_WIDTH: "2",
+        DITOX_TUI_SCROLLBAR_PLACEMENT: "left",
+        DITOX_TUI_SCROLLBAR_ALIGN: "right",
+        DITOX_TUI_SHELL_PADDING_X: "2",
+        DITOX_TUI_SHELL_PADDING_Y: "1",
         DITOX_TUI_IMAGE_PREVIEW: "metadata",
         DITOX_TUI_FULL_PREVIEW_IMAGE_MODE: "kitty",
         DITOX_TUI_IMAGE_PREVIEW_MAX_WIDTH: "24",
@@ -1887,18 +2371,72 @@ describe("tui config", () => {
         DITOX_TUI_FULL_PREVIEW_IMAGE_MAX_ROWS: "6",
         DITOX_TUI_IMAGE_RENDERER: "text",
         DITOX_TUI_FULL_PREVIEW_IMAGE_RENDERER: "opentui",
+        DITOX_TUI_IMAGE_ALIGN: "center",
+        DITOX_TUI_FULL_PREVIEW_IMAGE_ALIGN: "right",
         DITOX_TUI_IMAGE_BLOCK_GLYPH: "█",
         DITOX_TUI_FULL_PREVIEW_IMAGE_BLOCK_GLYPH: "▓",
         DITOX_TUI_IMAGE_BACKGROUND: "#223344",
         DITOX_TUI_FULL_PREVIEW_IMAGE_BACKGROUND: "#445566",
         DITOX_TUI_FULL_PREVIEW_IMAGE_NOTICE: "always",
+        DITOX_TUI_IMAGE_NOTICE_SPACING: "1",
+        DITOX_TUI_FULL_PREVIEW_IMAGE_NOTICE_SPACING: "2",
         DITOX_TUI_SPLIT_PANE_GAP: "3",
         DITOX_TUI_FULL_PREVIEW_TEXT_WIDTH_INSET: "5",
+        DITOX_TUI_PREVIEW_CONTENT_ALIGN: "center",
+        DITOX_TUI_FULL_PREVIEW_CONTENT_ALIGN: "right",
+        DITOX_TUI_PREVIEW_BODY_VERTICAL_ALIGN: "center",
+        DITOX_TUI_FULL_PREVIEW_BODY_VERTICAL_ALIGN: "bottom",
         DITOX_TUI_FULL_PREVIEW_IMAGE_ROW_INSET: "4",
         DITOX_TUI_FULL_PREVIEW_GUTTER_WIDTH: "2",
+        DITOX_TUI_PREVIEW_GUTTER_ALIGN: "center",
+        DITOX_TUI_FULL_PREVIEW_GUTTER_ALIGN: "left",
         DITOX_TUI_PREVIEW_META_HEIGHT: "1",
         DITOX_TUI_FULL_PREVIEW_META_HEIGHT: "2",
+        DITOX_TUI_PREVIEW_META_LINE_SPACING: "1",
+        DITOX_TUI_FULL_PREVIEW_META_LINE_SPACING: "2",
+        DITOX_TUI_PREVIEW_META_HASH_LENGTH: "9",
+        DITOX_TUI_FULL_PREVIEW_META_HASH_LENGTH: "10",
         DITOX_TUI_FULL_PREVIEW_META_PADDING_X: "2",
+        DITOX_TUI_PREVIEW_META_CONTENT_ALIGN: "right",
+        DITOX_TUI_FULL_PREVIEW_META_CONTENT_ALIGN: "center",
+        DITOX_TUI_PREVIEW_META_VERTICAL_ALIGN: "center",
+        DITOX_TUI_FULL_PREVIEW_META_VERTICAL_ALIGN: "bottom",
+        DITOX_TUI_HEADER_CONTENT_ALIGN: "center",
+        DITOX_TUI_STATUS_CONTENT_ALIGN: "right",
+        DITOX_TUI_HEADER_VERTICAL_ALIGN: "bottom",
+        DITOX_TUI_STATUS_VERTICAL_ALIGN: "center",
+        DITOX_TUI_STATUS_SEPARATOR_PADDING: "1",
+        DITOX_TUI_STATUS_SEPARATOR_PADDING_LEFT: "2",
+        DITOX_TUI_STATUS_SEPARATOR_PADDING_RIGHT: "3",
+        DITOX_TUI_TITLE_PADDING: "1",
+        DITOX_TUI_TITLE_PADDING_LEFT: "2",
+        DITOX_TUI_TITLE_PADDING_RIGHT: "3",
+        DITOX_TUI_OVERLAY_CONTENT_ALIGN: "center",
+        DITOX_TUI_OVERLAY_VERTICAL_ALIGN: "center",
+        DITOX_TUI_OVERLAY_LINE_SPACING: "1",
+        DITOX_TUI_SEARCH_OVERLAY_CONTENT_ALIGN: "right",
+        DITOX_TUI_SEARCH_OVERLAY_VERTICAL_ALIGN: "bottom",
+        DITOX_TUI_SEARCH_OVERLAY_LINE_SPACING: "2",
+        DITOX_TUI_DANGER_OVERLAY_CONTENT_ALIGN: "left",
+        DITOX_TUI_DANGER_OVERLAY_VERTICAL_ALIGN: "top",
+        DITOX_TUI_DANGER_OVERLAY_LINE_SPACING: "3",
+        DITOX_TUI_HELP_OVERLAY_CONTENT_ALIGN: "center",
+        DITOX_TUI_HELP_OVERLAY_VERTICAL_ALIGN: "bottom",
+        DITOX_TUI_HELP_OVERLAY_LINE_SPACING: "2",
+        DITOX_TUI_HELP_KEY_ALIGN: "right",
+        DITOX_TUI_EMPTY_STATE_ALIGN: "center",
+        DITOX_TUI_EMPTY_STATE_TITLE_ALIGN: "right",
+        DITOX_TUI_EMPTY_STATE_HELP_ALIGN: "left",
+        DITOX_TUI_EMPTY_STATE_VERTICAL_ALIGN: "bottom",
+        DITOX_TUI_EMPTY_STATE_LINE_SPACING: "2",
+        DITOX_TUI_ROW_CONTENT_ALIGN: "center",
+        DITOX_TUI_ROW_METADATA_ALIGN: "right",
+        DITOX_TUI_ROW_PREVIEW_ALIGN: "center",
+        DITOX_TUI_ROW_AGE_ALIGN: "left",
+        DITOX_TUI_ROW_SIZE_ALIGN: "center",
+        DITOX_TUI_ROW_PINNED_ALIGN: "right",
+        DITOX_TUI_ROW_MARKER_WIDTH: "4",
+        DITOX_TUI_ROW_MARKER_ALIGN: "right",
         DITOX_TUI_HEADER: "false",
         DITOX_TUI_STATUS_LINE: "false",
         DITOX_TUI_ROW_METADATA: "false",
@@ -1934,22 +2472,80 @@ describe("tui config", () => {
     expect(config.layout.fullPreviewImageMaxRows).toBe(6);
     expect(config.layout.imagePreviewRenderer).toBe("text");
     expect(config.layout.fullPreviewImageRenderer).toBe("opentui");
+    expect(config.layout.imagePreviewAlign).toBe("center");
+    expect(config.layout.fullPreviewImageAlign).toBe("right");
     expect(config.layout.imagePreviewBlockGlyph).toBe("█");
     expect(config.layout.fullPreviewImageBlockGlyph).toBe("▓");
     expect(config.layout.imagePreviewBackground).toBe("#223344");
     expect(config.layout.fullPreviewImageBackground).toBe("#445566");
     expect(config.layout.fullPreviewImageNoticeVisibility).toBe("always");
+    expect(config.layout.imagePreviewNoticeSpacing).toBe(1);
+    expect(config.layout.fullPreviewImageNoticeSpacing).toBe(2);
     expect(config.layout.splitPaneGap).toBe(3);
     expect(config.layout.fullPreviewTextWidthInset).toBe(5);
+    expect(config.layout.previewContentAlign).toBe("center");
+    expect(config.layout.fullPreviewContentAlign).toBe("right");
+    expect(config.layout.previewBodyVerticalAlign).toBe("center");
+    expect(config.layout.fullPreviewBodyVerticalAlign).toBe("bottom");
     expect(config.layout.fullPreviewImageRowInset).toBe(4);
     expect(config.layout.fullPreviewGutterWidth).toBe(2);
+    expect(config.layout.previewGutterAlign).toBe("center");
+    expect(config.layout.fullPreviewGutterAlign).toBe("left");
     expect(config.layout.previewMetaHeight).toBe(1);
     expect(config.layout.fullPreviewMetaHeight).toBe(2);
+    expect(config.layout.previewMetaLineSpacing).toBe(1);
+    expect(config.layout.fullPreviewMetaLineSpacing).toBe(2);
+    expect(config.layout.previewMetaHashLength).toBe(9);
+    expect(config.layout.fullPreviewMetaHashLength).toBe(10);
     expect(config.layout.fullPreviewMetaPaddingX).toBe(2);
+    expect(config.layout.previewMetaContentAlign).toBe("right");
+    expect(config.layout.fullPreviewMetaContentAlign).toBe("center");
+    expect(config.layout.previewMetaVerticalAlign).toBe("center");
+    expect(config.layout.fullPreviewMetaVerticalAlign).toBe("bottom");
+    expect(config.layout.headerContentAlign).toBe("center");
+    expect(config.layout.statusContentAlign).toBe("right");
+    expect(config.layout.headerVerticalAlign).toBe("bottom");
+    expect(config.layout.statusVerticalAlign).toBe("center");
+    expect(config.layout.statusSeparatorPadding).toBe(1);
+    expect(config.layout.statusSeparatorPaddingLeft).toBe(2);
+    expect(config.layout.statusSeparatorPaddingRight).toBe(3);
+    expect(config.layout.frameTitlePadding).toBe(1);
+    expect(config.layout.frameTitlePaddingLeft).toBe(2);
+    expect(config.layout.frameTitlePaddingRight).toBe(3);
+    expect(config.layout.overlayContentAlign).toBe("center");
+    expect(config.layout.overlayVerticalAlign).toBe("center");
+    expect(config.layout.overlayLineSpacing).toBe(1);
+    expect(config.layout.searchOverlayContentAlign).toBe("right");
+    expect(config.layout.searchOverlayVerticalAlign).toBe("bottom");
+    expect(config.layout.searchOverlayLineSpacing).toBe(2);
+    expect(config.layout.dangerOverlayContentAlign).toBe("left");
+    expect(config.layout.dangerOverlayVerticalAlign).toBe("top");
+    expect(config.layout.dangerOverlayLineSpacing).toBe(3);
+    expect(config.layout.helpOverlayContentAlign).toBe("center");
+    expect(config.layout.helpOverlayVerticalAlign).toBe("bottom");
+    expect(config.layout.helpOverlayLineSpacing).toBe(2);
+    expect(config.layout.helpKeyAlign).toBe("right");
+    expect(config.layout.emptyStateContentAlign).toBe("center");
+    expect(config.layout.emptyStateTitleAlign).toBe("right");
+    expect(config.layout.emptyStateHelpAlign).toBe("left");
+    expect(config.layout.emptyStateVerticalAlign).toBe("bottom");
+    expect(config.layout.emptyStateLineSpacing).toBe(2);
+    expect(config.layout.rowContentAlign).toBe("center");
+    expect(config.layout.rowMetadataAlign).toBe("right");
+    expect(config.layout.rowPreviewAlign).toBe("center");
+    expect(config.layout.rowAgeAlign).toBe("left");
+    expect(config.layout.rowSizeAlign).toBe("center");
+    expect(config.layout.rowPinnedAlign).toBe("right");
+    expect(config.layout.rowMarkerWidth).toBe(4);
+    expect(config.layout.rowMarkerAlign).toBe("right");
     expect(config.layout.refreshIntervalMs).toBe(0);
     expect(config.layout.mouseEnabled).toBe(false);
     expect(config.layout.mouseScrollRows).toBe(5);
     expect(config.layout.scrollbarWidth).toBe(2);
+    expect(config.layout.scrollbarPlacement).toBe("left");
+    expect(config.layout.scrollbarAlign).toBe("right");
+    expect(config.layout.shellPaddingX).toBe(2);
+    expect(config.layout.shellPaddingY).toBe(1);
     expect(config.layout.showScrollbar).toBe(false);
     expect(config.layout.showHeader).toBe(false);
     expect(config.layout.showStatusLine).toBe(false);

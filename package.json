@@ -3,10 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun run build:backend && bun run build:tui",
+    "build": "bun run build:tui && bun run build:backend",
     "build:backend": "nix develop -c zig build",
     "build:tui": "bun run --cwd tui contracts && bun run --cwd tui build",
-    "check": "bun run test:backend && bun run build:backend && bun run test:cli && bun run --cwd tui contracts && bun run --cwd tui typecheck && bun run test:tui && bun run build:tui",
+    "check": "bun run test:backend && bun run build:tui && bun run build:backend && bun run test:cli && bun run --cwd tui typecheck && bun run test:tui",
     "dev:backend": "nix develop -c zig build",
     "dev:tui": "bun run --cwd tui start",
     "dev:watcher": "nix develop -c zig build && ./zig-out/bin/ditoxd watch",

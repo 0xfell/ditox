@@ -8,6 +8,7 @@ import {
 } from "../image-preview";
 import { entryAccent, previewMetaTemplateValues, previewModel, truncateText } from "../presentation";
 import { visiblePreviewLineCapacity } from "../state";
+import type { ContentAlign, VerticalAlign } from "../ui-config";
 import {
   formatTemplate,
   paddedTitle,
@@ -87,11 +88,13 @@ export function PreviewPane(props: {
   };
   const imageNoticeText = () => imagePreviewNotice(props.config, blockPreview());
   const imageFallbackVisible = () => props.entry?.kind === "image" && blockPreview().kind === "fallback" && layout().imagePreviewMode !== "metadata";
+  const imageNoticeSpacingRows = () =>
+    props.entry?.kind === "image" && blockPreview().kind === "rendered" && imageNoticeText() ? layout().imagePreviewNoticeSpacing : 0;
   const imagePreviewRows = () => {
     if (props.entry?.kind !== "image") return 0;
     const preview = blockPreview();
     const renderedRows = preview.kind === "rendered" ? preview.native.cellRows : 0;
-    return renderedRows + (imageNoticeText() ? 1 : 0) + (imageFallbackVisible() ? 1 : 0);
+    return renderedRows + imageNoticeSpacingRows() + (imageNoticeText() ? 1 : 0) + (imageFallbackVisible() ? 1 : 0);
   };
   const metadataRows = () => (layout().showMetadata && props.entry ? layout().previewMetaHeight : 0);
   const visibleTextRows = () =>
@@ -112,11 +115,15 @@ export function PreviewPane(props: {
       backgroundColor={style().bg}
       paddingX={layout().previewPaddingX}
       paddingY={layout().previewPaddingY}
-      title={props.config.chrome.previewBorder && props.config.chrome.showPreviewTitle ? paddedTitle(labels().previewTitle, layout().frameTitlePadding) : undefined}
+      title={
+        props.config.chrome.previewBorder && props.config.chrome.showPreviewTitle
+          ? paddedTitle(labels().previewTitle, layout().frameTitlePaddingLeft, layout().frameTitlePaddingRight)
+          : undefined
+      }
       titleAlignment={props.config.chrome.previewTitleAlignment}
       bottomTitle={
         props.config.chrome.previewBorder && props.config.chrome.showPreviewEntryTitle && props.entry
-          ? paddedTitle(previewEntryTitle(props.config, props.entry), layout().frameTitlePadding)
+          ? paddedTitle(previewEntryTitle(props.config, props.entry), layout().frameTitlePaddingLeft, layout().frameTitlePaddingRight)
           : undefined
       }
       bottomTitleAlignment={props.config.chrome.previewBottomTitleAlignment}
@@ -124,51 +131,66 @@ export function PreviewPane(props: {
       <Show when={layout().showMetadata ? props.entry : undefined}>
         {(entry) => <PreviewMeta config={props.config} entry={entry()} />}
       </Show>
-      <Show when={props.entry?.kind === "image" && blockPreview().kind === "rendered"}>
-        <ImagePreviewRows preview={blockPreview()} renderer={layout().imagePreviewRenderer} blockGlyph={layout().imagePreviewBlockGlyph} />
-      </Show>
-      <Show when={imageNoticeText()}>
-        {(notice) => (
-          <box height={1} flexDirection="row" backgroundColor={style().bg}>
-            <text style={textStyle(style(), splitContentColor(props.config, style(), "splitImageNotice", style().muted))}>{notice()}</text>
-          </box>
-        )}
-      </Show>
-      <Show when={imageFallbackVisible()}>
-        <text style={textStyle(style())}>
-          <span style={textStyle(style(), splitContentColor(props.config, style(), "splitImageFallbackPrefix", style().muted))}>
-            {labels().splitImagePreviewFallbackPrefix}
-          </span>
-          <span style={textStyle(style(), splitContentColor(props.config, style(), "splitImageFallbackSeparator", style().muted))}>
-            {labels().splitImagePreviewFallbackSeparator}
-          </span>
-          <span style={textStyle(style(), splitContentColor(props.config, style(), "splitImageFallbackReason", style().muted))}>
-            {(blockPreview() as Extract<ImageBlockPreviewModel, { kind: "fallback" }>).reason}
-          </span>
-        </text>
-      </Show>
-      <For each={lines()}>
-        {(line, index) => (
-          <>
-            <box height={1} flexDirection="row" backgroundColor={style().bg}>
-              <Show when={layout().showPreviewGutter}>
-                <text style={textStyle(gutterStyle(), splitContentColor(props.config, gutterStyle(), "splitGutter", gutterStyle().muted))}>
-                  {line.gutter.padStart(layout().previewGutterWidth, " ")}
-                </text>
-                <text style={textStyle(gutterStyle(), splitContentColor(props.config, gutterStyle(), "splitGutterSeparator", gutterStyle().muted))}>
-                  {labels().previewGutterSeparator}
-                </text>
-              </Show>
-              <text style={textStyle(style(), splitLineToneColor(props.config, style(), props.entry, line.tone, index()))}>
-                {truncateText(line.text, textWidth(), labels())}
-              </text>
+      <box width="100%" flexGrow={1} flexDirection="column" justifyContent={verticalJustify(layout().previewBodyVerticalAlign)}>
+        <Show when={props.entry?.kind === "image" && blockPreview().kind === "rendered"}>
+          <ImagePreviewRows
+            preview={blockPreview()}
+            renderer={layout().imagePreviewRenderer}
+            blockGlyph={layout().imagePreviewBlockGlyph}
+            align={layout().imagePreviewAlign}
+            width={textWidth()}
+          />
+        </Show>
+        <Show when={imageNoticeSpacingRows() > 0}>
+          <box width="100%" height={imageNoticeSpacingRows()} backgroundColor={spacerStyle().bg} />
+        </Show>
+        <Show when={imageNoticeText()}>
+          {(notice) => (
+            <box height={1} flexDirection="row" justifyContent={justifyContent(layout().previewContentAlign)} backgroundColor={style().bg}>
+              <text style={textStyle(style(), splitContentColor(props.config, style(), "splitImageNotice", style().muted))}>{notice()}</text>
             </box>
-            <Show when={layout().previewLineSpacing > 0 && index() < lines().length - 1}>
-              <box width="100%" height={layout().previewLineSpacing} backgroundColor={spacerStyle().bg} />
-            </Show>
-          </>
-        )}
-      </For>
+          )}
+        </Show>
+        <Show when={imageFallbackVisible()}>
+          <box height={1} flexDirection="row" justifyContent={justifyContent(layout().previewContentAlign)} backgroundColor={style().bg}>
+            <text style={textStyle(style())}>
+              <span style={textStyle(style(), splitContentColor(props.config, style(), "splitImageFallbackPrefix", style().muted))}>
+                {labels().splitImagePreviewFallbackPrefix}
+              </span>
+              <span style={textStyle(style(), splitContentColor(props.config, style(), "splitImageFallbackSeparator", style().muted))}>
+                {labels().splitImagePreviewFallbackSeparator}
+              </span>
+              <span style={textStyle(style(), splitContentColor(props.config, style(), "splitImageFallbackReason", style().muted))}>
+                {(blockPreview() as Extract<ImageBlockPreviewModel, { kind: "fallback" }>).reason}
+              </span>
+            </text>
+          </box>
+        </Show>
+        <For each={lines()}>
+          {(line, index) => (
+            <>
+              <box height={1} flexDirection="row" backgroundColor={style().bg}>
+                <Show when={layout().showPreviewGutter}>
+                  <text style={textStyle(gutterStyle(), splitContentColor(props.config, gutterStyle(), "splitGutter", gutterStyle().muted))}>
+                    {fitGutter(line.gutter, layout().previewGutterWidth, layout().previewGutterAlign)}
+                  </text>
+                  <text style={textStyle(gutterStyle(), splitContentColor(props.config, gutterStyle(), "splitGutterSeparator", gutterStyle().muted))}>
+                    {labels().previewGutterSeparator}
+                  </text>
+                </Show>
+                <box flexGrow={1} flexDirection="row" justifyContent={justifyContent(layout().previewContentAlign)}>
+                  <text style={textStyle(style(), splitLineToneColor(props.config, style(), props.entry, line.tone, index()))}>
+                    {truncateText(line.text, textWidth(), labels())}
+                  </text>
+                </box>
+              </box>
+              <Show when={layout().previewLineSpacing > 0 && index() < lines().length - 1}>
+                <box width="100%" height={layout().previewLineSpacing} backgroundColor={spacerStyle().bg} />
+              </Show>
+            </>
+          )}
+        </For>
+      </box>
     </box>
   );
 }
@@ -195,6 +217,7 @@ function PreviewMeta(props: { config: ResolvedTuiConfig; entry: Entry }) {
     formatTemplate(labels().previewMetaHeaderTemplate, values());
   const details = () =>
     formatTemplate(labels().previewMetaDetailsTemplate, values());
+  const detailsVisible = () => props.config.layout.previewMetaHeight >= 2 + props.config.layout.previewMetaLineSpacing;
   return (
     <box
       height={props.config.layout.previewMetaHeight}
@@ -203,12 +226,47 @@ function PreviewMeta(props: { config: ResolvedTuiConfig; entry: Entry }) {
       paddingX={props.config.layout.previewMetaPaddingX}
       paddingY={props.config.layout.previewMetaPaddingY}
     >
-      <text style={textStyle(style(), splitContentColor(props.config, style(), "splitMetaHeader", style().accent))}>{header()}</text>
-      <Show when={props.config.layout.previewMetaHeight >= 2}>
-        <text style={textStyle(style(), splitContentColor(props.config, style(), "splitMetaDetails", style().fg))}>{details()}</text>
-      </Show>
+      <box width="100%" flexGrow={1} flexDirection="column" justifyContent={verticalJustify(props.config.layout.previewMetaVerticalAlign)}>
+        <box width="100%" flexDirection="row" justifyContent={justifyContent(props.config.layout.previewMetaContentAlign)}>
+          <text style={textStyle(style(), splitContentColor(props.config, style(), "splitMetaHeader", style().accent))}>{header()}</text>
+        </box>
+        <Show when={detailsVisible() && props.config.layout.previewMetaLineSpacing > 0}>
+          <box width="100%" height={props.config.layout.previewMetaLineSpacing} backgroundColor={style().bg} />
+        </Show>
+        <Show when={detailsVisible()}>
+          <box width="100%" flexDirection="row" justifyContent={justifyContent(props.config.layout.previewMetaContentAlign)}>
+            <text style={textStyle(style(), splitContentColor(props.config, style(), "splitMetaDetails", style().fg))}>{details()}</text>
+          </box>
+        </Show>
+      </box>
     </box>
   );
+}
+
+function justifyContent(align: ContentAlign): "flex-start" | "center" | "flex-end" {
+  if (align === "right") return "flex-end";
+  if (align === "center") return "center";
+  return "flex-start";
+}
+
+function verticalJustify(align: VerticalAlign): "flex-start" | "center" | "flex-end" {
+  if (align === "bottom") return "flex-end";
+  if (align === "center") return "center";
+  return "flex-start";
+}
+
+function fitGutter(value: string, width: number, align: ContentAlign): string {
+  const target = Math.max(1, Math.floor(width));
+  const trimmed = value.trim();
+  const raw = trimmed.length > 0 ? trimmed : value;
+  const clipped = Array.from(raw).slice(0, target).join("");
+  const extra = Math.max(0, target - Array.from(clipped).length);
+  if (align === "right") return `${" ".repeat(extra)}${clipped}`;
+  if (align === "center") {
+    const left = Math.floor(extra / 2);
+    return `${" ".repeat(left)}${clipped}${" ".repeat(extra - left)}`;
+  }
+  return `${clipped}${" ".repeat(extra)}`;
 }
 
 function previewEntryTitle(config: ResolvedTuiConfig, entry: Entry): string {

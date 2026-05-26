@@ -1,4 +1,5 @@
 const std = @import("std");
+const root = @import("root.zig");
 const app = @import("app.zig");
 
 const Request = struct {
@@ -40,7 +41,7 @@ fn dispatch(allocator: std.mem.Allocator, init: std.process.Init, id_value: std.
         return successResponseOwned(allocator, id_value, app.Health{
             .ok = true,
             .name = "ditoxd",
-            .version = "0.1.0",
+            .version = root.version,
             .storage = "sqlite",
         });
     }

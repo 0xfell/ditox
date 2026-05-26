@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import { entryAccent, entryMeta, entryPreviewSegments, fitRowMeta, scrollbarCells } from "../presentation";
 import { visibleEntries, visibleEntryCapacity } from "../state";
+import type { ContentAlign, VerticalAlign } from "../ui-config";
 import {
   formatTemplate,
   paddedTitle,
@@ -40,11 +41,19 @@ export function EntryList(props: {
       backgroundColor={style().bg}
       paddingX={layout().listPaddingX}
       paddingY={layout().listPaddingY}
-      title={chrome().listBorder && chrome().showListTitle ? paddedTitle(props.config.labels.historyTitle, layout().frameTitlePadding) : undefined}
+      title={
+        chrome().listBorder && chrome().showListTitle
+          ? paddedTitle(props.config.labels.historyTitle, layout().frameTitlePaddingLeft, layout().frameTitlePaddingRight)
+          : undefined
+      }
       titleAlignment={chrome().listTitleAlignment}
       bottomTitle={
         chrome().listBorder && chrome().showListPositionTitle && props.entries.length > visibleCount()
-          ? paddedTitle(listPositionTitle(props.config, props.selectedIndex, props.entries.length), layout().frameTitlePadding)
+          ? paddedTitle(
+              listPositionTitle(props.config, props.selectedIndex, props.entries.length),
+              layout().frameTitlePaddingLeft,
+              layout().frameTitlePaddingRight,
+            )
           : undefined
       }
       bottomTitleAlignment={chrome().listBottomTitleAlignment}
@@ -60,6 +69,9 @@ export function EntryList(props: {
         fallback={<EmptyList config={props.config} query={props.query} />}
       >
         <box flexDirection="row" width="100%" height="100%">
+          <Show when={layout().showScrollbar && layout().scrollbarPlacement === "left"}>
+            <Scrollbar config={props.config} total={props.entries.length} selectedIndex={props.selectedIndex} rows={props.rows} />
+          </Show>
           <box flexDirection="column" flexGrow={1}>
             <For each={visible()}>
               {(row, index) => (
@@ -73,9 +85,10 @@ export function EntryList(props: {
                     selected={row.index === props.selectedIndex}
                     marked={props.selectedIds.has(row.entry.id)}
                     onMouseDown={(event: any) => {
-                      if (event.button !== 0) return;
+                      const options = entryMouseSelectionOptions(event);
+                      if (!options) return;
                       event.preventDefault();
-                      props.onSelectEntry(row.index, { extend: Boolean(event.modifiers?.shift), toggle: Boolean(event.modifiers?.ctrl) });
+                      props.onSelectEntry(row.index, options);
                     }}
                   />
                   <Show when={layout().rowSpacing > 0 && index() < visible().length - 1}>
@@ -85,7 +98,7 @@ export function EntryList(props: {
               )}
             </For>
           </box>
-          <Show when={layout().showScrollbar}>
+          <Show when={layout().showScrollbar && layout().scrollbarPlacement === "right"}>
             <Scrollbar config={props.config} total={props.entries.length} selectedIndex={props.selectedIndex} rows={props.rows} />
           </Show>
         </box>
@@ -121,7 +134,11 @@ function EntryRow(props: {
           ? props.config.chrome.markedMarker
           : props.config.chrome.normalMarker;
   const layout = () => props.config.layout;
-  const rowPrefixWidth = () => marker().length + layout().rowMarkerGap;
+  const markerCellWidth = () => {
+    const configured = Math.max(0, Math.floor(layout().rowMarkerWidth));
+    return configured > 0 ? configured : Array.from(marker()).length;
+  };
+  const rowPrefixWidth = () => markerCellWidth() + layout().rowMarkerGap;
   const reservedRowMetaWidth = () => Math.max(rowPrefixWidth() + layout().rowMetaPreviewGap, layout().rowPreviewReservedWidth);
   const metadataWidth = () => Math.max(0, reservedRowMetaWidth() - rowPrefixWidth() - layout().rowMetaPreviewGap);
   const availablePreviewWidth = () => Math.max(1, props.width - (layout().showRowMetadata ? reservedRowMetaWidth() : rowPrefixWidth()));
@@ -130,18 +147,23 @@ function EntryRow(props: {
     const maxWidth = layout().rowPreviewMaxWidth;
     return maxWidth > 0 ? Math.min(availablePreviewWidth(), maxWidth) : availablePreviewWidth();
   };
+  const previewSegments = () => entryPreviewSegments(props.entry, previewWidth(), highlightQuery(), props.config.labels);
+  const previewPadding = () => alignmentPadding(layout().rowPreviewAlign, previewWidth(), previewSegments().reduce((length, segment) => length + segment.text.length, 0));
   return (
-    <box height={1} backgroundColor={bg()} onMouseDown={props.onMouseDown}>
+    <box height={1} width="100%" flexDirection="row" justifyContent={justifyContent(layout().rowContentAlign)} backgroundColor={bg()} onMouseDown={props.onMouseDown}>
       <text style={textStyle(rowStyle(), listContentColor(props.config, rowStyle(), props.entry, "preview"))}>
-        <span style={textStyle(rowStyle(), listContentColor(props.config, rowStyle(), props.entry, "marker"))}>{marker()}</span>
+        <span style={textStyle(rowStyle(), listContentColor(props.config, rowStyle(), props.entry, "marker"))}>
+          {fitCell(marker(), markerCellWidth(), layout().rowMarkerAlign)}
+        </span>
         <span style={textStyle(rowStyle(), listContentColor(props.config, rowStyle(), props.entry, "markerGap"))}>{" ".repeat(layout().rowMarkerGap)}</span>
         <Show when={layout().showRowMetadata}>
           <span style={textStyle(rowStyle(), listContentColor(props.config, rowStyle(), props.entry, "metadata"))}>
-            {fitRowMeta(entryMeta(props.entry, Date.now(), props.config.labels, layout()), metadataWidth(), props.config.labels)}
+            {fitRowMeta(entryMeta(props.entry, Date.now(), props.config.labels, layout()), metadataWidth(), props.config.labels, layout().rowMetadataAlign)}
           </span>
           <span style={textStyle(rowStyle(), listContentColor(props.config, rowStyle(), props.entry, "metadataGap"))}>{" ".repeat(layout().rowMetaPreviewGap)}</span>
         </Show>
-        <For each={entryPreviewSegments(props.entry, previewWidth(), highlightQuery(), props.config.labels)}>
+        <span style={textStyle(rowStyle(), listContentColor(props.config, rowStyle(), props.entry, "preview"))}>{" ".repeat(previewPadding())}</span>
+        <For each={previewSegments()}>
           {(segment) => (
             <span style={textStyle(rowStyle(), listContentColor(props.config, rowStyle(), props.entry, segment.match ? "searchMatch" : "preview"))}>
               {segment.text}
@@ -168,6 +190,22 @@ function scrollDirection(event: any): -1 | 1 | null {
   return null;
 }
 
+export function entryMouseSelectionOptions(event: any): { extend: boolean; toggle: boolean } | null {
+  const button = mouseButton(event?.button);
+  if (button !== 0 && button !== 2) return null;
+  return {
+    extend: button === 0 && Boolean(event?.modifiers?.shift),
+    toggle: button === 2 || Boolean(event?.modifiers?.ctrl),
+  };
+}
+
+function mouseButton(value: unknown): number | null {
+  if (typeof value === "number") return value;
+  if (value === "left") return 0;
+  if (value === "right") return 2;
+  return null;
+}
+
 function Scrollbar(props: { config: ResolvedTuiConfig; total: number; selectedIndex: number; rows: number }) {
   const style = () => surface(props.config, "scrollbar");
   const width = () => props.config.layout.scrollbarWidth;
@@ -176,7 +214,7 @@ function Scrollbar(props: { config: ResolvedTuiConfig; total: number; selectedIn
       <For each={scrollbarCells(props.total, props.selectedIndex, props.rows, props.config.chrome.scrollbarThumb, props.config.chrome.scrollbarTrack)}>
         {(cell) => (
           <text style={textStyle(style(), listContentColor(props.config, style(), null, cell === props.config.chrome.scrollbarThumb ? "scrollbarThumb" : "scrollbarTrack"))}>
-            {scrollbarCell(cell, width())}
+            {scrollbarCell(cell, width(), props.config.layout.scrollbarAlign)}
           </text>
         )}
       </For>
@@ -184,25 +222,72 @@ function Scrollbar(props: { config: ResolvedTuiConfig; total: number; selectedIn
   );
 }
 
-function scrollbarCell(value: string, width: number): string {
+function scrollbarCell(value: string, width: number, align: ContentAlign): string {
+  return fitCell(value, width, align);
+}
+
+function fitCell(value: string, width: number, align: ContentAlign): string {
   const chars = Array.from(value);
   if (chars.length >= width) return chars.slice(0, width).join("");
-  return `${value}${" ".repeat(width - chars.length)}`;
+  const padding = width - chars.length;
+  if (align === "right") return `${" ".repeat(padding)}${value}`;
+  if (align === "center") {
+    const left = Math.floor(padding / 2);
+    return `${" ".repeat(left)}${value}${" ".repeat(padding - left)}`;
+  }
+  return `${value}${" ".repeat(padding)}`;
 }
 
 function EmptyList(props: { config: ResolvedTuiConfig; query: string }) {
   const style = () => surface(props.config, "emptyState");
   const labels = () => props.config.labels;
+  const layout = () => props.config.layout;
   return (
-    <box flexDirection="column" paddingX={props.config.layout.emptyStatePaddingX} paddingY={props.config.layout.emptyStatePaddingY} backgroundColor={style().bg}>
-      <text style={textStyle(style(), listContentColor(props.config, style(), null, "emptyTitle"))}>{props.query ? labels().noMatchesTitle : labels().noHistoryTitle}</text>
-      <Show when={props.config.layout.showEmptyStateHelp}>
-        <text style={textStyle(style(), listContentColor(props.config, style(), null, "emptyHelp"))}>
-          {props.query ? labels().noMatchesHelp : labels().noHistoryHelp}
-        </text>
+    <box
+      width="100%"
+      height="100%"
+      flexDirection="column"
+      justifyContent={verticalJustify(layout().emptyStateVerticalAlign)}
+      paddingX={layout().emptyStatePaddingX}
+      paddingY={layout().emptyStatePaddingY}
+      backgroundColor={style().bg}
+    >
+      <box width="100%" flexDirection="row" justifyContent={justifyContent(layout().emptyStateTitleAlign)}>
+        <text style={textStyle(style(), listContentColor(props.config, style(), null, "emptyTitle"))}>{props.query ? labels().noMatchesTitle : labels().noHistoryTitle}</text>
+      </box>
+      <Show when={layout().showEmptyStateHelp}>
+        <>
+          <Show when={layout().emptyStateLineSpacing > 0}>
+            <box width="100%" height={layout().emptyStateLineSpacing} backgroundColor={style().bg} />
+          </Show>
+          <box width="100%" flexDirection="row" justifyContent={justifyContent(layout().emptyStateHelpAlign)}>
+            <text style={textStyle(style(), listContentColor(props.config, style(), null, "emptyHelp"))}>
+              {props.query ? labels().noMatchesHelp : labels().noHistoryHelp}
+            </text>
+          </box>
+        </>
       </Show>
     </box>
   );
+}
+
+function justifyContent(align: ContentAlign): "flex-start" | "center" | "flex-end" {
+  if (align === "right") return "flex-end";
+  if (align === "center") return "center";
+  return "flex-start";
+}
+
+function verticalJustify(align: VerticalAlign): "flex-start" | "center" | "flex-end" {
+  if (align === "bottom") return "flex-end";
+  if (align === "center") return "center";
+  return "flex-start";
+}
+
+function alignmentPadding(align: ContentAlign, width: number, contentWidth: number): number {
+  const extra = Math.max(0, Math.floor(width) - contentWidth);
+  if (align === "right") return extra;
+  if (align === "center") return Math.floor(extra / 2);
+  return 0;
 }
 
 function listContentColor(config: ResolvedTuiConfig, style: TuiSurfaceStyle, entry: Entry | null, part: TuiListContentPartName): string {

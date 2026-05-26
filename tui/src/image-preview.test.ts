@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import * as jpeg from "jpeg-js";
 import {
@@ -111,10 +114,45 @@ describe("image preview", () => {
         "sixel",
         { sixel: false },
         {
+          imagePreviewSixelProtocolName: "SIXEL",
           imagePreviewProtocolUnsupported: "{protocol} unavailable",
         },
       ),
-    ).toBe("Sixel unavailable");
+    ).toBe("SIXEL unavailable");
+  });
+
+  test("uses configured source labels for high-level block previews", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ditox-image-preview-source-"));
+    try {
+      const imagePath = join(dir, "preview.png");
+      const bytes = rgbaPng(2, 2, [
+        [255, 0, 0, 255],
+        [0, 255, 0, 255],
+        [0, 0, 255, 255],
+        [255, 255, 255, 255],
+      ]);
+      writeFileSync(imagePath, bytes);
+      const entry = imageEntry({ blob_path: imagePath });
+      const labels = {
+        imagePreviewBlocksSource: "text block source",
+        imagePreviewKittyFallbackSource: "kitty text fallback source",
+        imagePreviewSixelFallbackSource: "sixel text fallback source",
+      };
+
+      const blocks = imageBlockPreview(entry, 2, 1, "#000000", "blocks", labels);
+      const kitty = imageBlockPreview(entry, 2, 1, "#000000", "kitty", labels);
+      const sixel = imageBlockPreview(entry, 2, 1, "#000000", "sixel", labels);
+
+      expect(blocks.kind).toBe("rendered");
+      expect(kitty.kind).toBe("rendered");
+      expect(sixel.kind).toBe("rendered");
+      if (blocks.kind !== "rendered" || kitty.kind !== "rendered" || sixel.kind !== "rendered") return;
+      expect(blocks.source).toBe("text block source 2x1");
+      expect(kitty.source).toBe("kitty text fallback source 2x1");
+      expect(sixel.source).toBe("sixel text fallback source 2x1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("decodes uncompressed BMP files for block previews", () => {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
@@ -208,6 +208,10 @@ describe("ditox CLI smoke", () => {
   });
 
   test("accepts Clipse-style CLI aliases for supported operations", () => {
+    expect(run(["-v"])).toBe("ditox 0.1.0");
+    expect(run(["--version"])).toBe("ditox 0.1.0");
+    expect(run(["version"])).toBe("ditox 0.1.0");
+
     expect(run(["-a", "alias first"])).toBe("1");
     expect(run(["-a", "alias second"])).toBe("2");
 
@@ -357,6 +361,65 @@ describe("ditox CLI smoke", () => {
     expect(status.config.auto_paste_enabled).toBe(true);
     expect(status.config.auto_paste_keybind).toBe("ctrl+shift+v");
     expect(status.config.auto_paste_buffer_ms).toBe(0);
+  });
+
+  test("runs bundled TUI from an install layout outside the repo checkout", () => {
+    expect(existsSync(join(repoRoot, "zig-out", "share", "ditox", "tui", "dist", "index.js"))).toBe(true);
+    expect(existsSync(join(repoRoot, "zig-out", "share", "ditox", "tui", "tui-config.schema.json"))).toBe(true);
+    expect(existsSync(join(repoRoot, "zig-out", "share", "ditox", "tui", "tui-config.example.json"))).toBe(true);
+
+    const installRoot = join(tempDir, "install");
+    const installBin = join(installRoot, "bin");
+    const tuiDist = join(installRoot, "share", "ditox", "tui", "dist");
+    const fakeBin = join(tempDir, "fake-bin");
+    const bunArgs = join(tempDir, "bun-args.txt");
+    const bunEnv = join(tempDir, "bun-env.txt");
+    mkdirSync(installBin, { recursive: true });
+    mkdirSync(tuiDist, { recursive: true });
+    mkdirSync(fakeBin, { recursive: true });
+
+    const installedDitox = join(installBin, "ditox");
+    copyFileSync(ditox, installedDitox);
+    chmodSync(installedDitox, 0o755);
+    writeFileSync(join(tuiDist, "index.js"), "console.log('bundled tui placeholder');\n");
+    writeFileSync(
+      join(fakeBin, "bun"),
+      [
+        "#!/usr/bin/env sh",
+        "printf '%s\\n' \"$*\" > \"$DITOX_BUN_ARGS\"",
+        "printf '%s|%s\\n' \"$DITOX_TARGET_WINDOW\" \"$DITOX_TUI_REFRESH_MS\" > \"$DITOX_BUN_ENV\"",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(fakeBin, "hyprctl"),
+      [
+        "#!/usr/bin/env sh",
+        "if [ \"$1\" = \"-j\" ] && [ \"$2\" = \"activewindow\" ]; then",
+        "  printf '{\"address\":\"0xinstalled\",\"class\":\"fake-app\",\"title\":\"fake-title\"}'",
+        "fi",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(join(fakeBin, "bun"), 0o755);
+    chmodSync(join(fakeBin, "hyprctl"), 0o755);
+
+    const proc = Bun.spawnSync({
+      cmd: [installedDitox, "tui", "--enable-real-time"],
+      env: {
+        ...process.env,
+        ...env,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        DITOX_BUN_ARGS: bunArgs,
+        DITOX_BUN_ENV: bunEnv,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(proc.exitCode).toBe(0);
+    expect(readFileSync(bunArgs, "utf8").trim()).toBe(join(tuiDist, "index.js"));
+    expect(readFileSync(bunEnv, "utf8").trim()).toBe("0xinstalled|250");
   });
 
   test("kills the stored watcher process through the Clipse kill alias", async () => {

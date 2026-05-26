@@ -30,6 +30,11 @@ pub fn main(init: std.process.Init) !void {
         try stdout.flush();
         return;
     }
+    if (std.mem.eql(u8, args[1], "-v") or std.mem.eql(u8, args[1], "--version") or std.mem.eql(u8, args[1], "version")) {
+        try stdout.print("ditox {s}\n", .{core.version});
+        try stdout.flush();
+        return;
+    }
 
     const command = args[1];
     var opened = try core.app.openStore(allocator, init);
@@ -155,6 +160,7 @@ pub fn main(init: std.process.Init) !void {
 fn printHelp(stdout: *Io.Writer) !void {
     try stdout.writeAll(
         \\ditox commands:
+        \\  -v|--version|version       print version
         \\  add [text]                 add text or stdin to history
         \\  -a [text]                  Clipse alias for add
         \\  -c [text]                  copy text or stdin directly to clipboard
@@ -474,7 +480,8 @@ fn launchTui(allocator: std.mem.Allocator, init: std.process.Init, command: []co
 fn defaultTuiCommand(allocator: std.mem.Allocator, init: std.process.Init) ![]const u8 {
     const env = init.environ_map.*;
     if (env.get("DITOX_TUI_COMMAND")) |command| return allocator.dupe(u8, command);
-    if (env.get("DITOX_TUI_DIR")) |dir| return std.fmt.allocPrint(allocator, "bun run --cwd {s} start", .{dir});
+    if (env.get("DITOX_TUI_DIR")) |dir| return sourceTuiCommand(allocator, dir);
+    if (try installedTuiCommand(allocator, init)) |command| return command;
 
     const source_dir = std.fs.path.dirname(@src().file) orelse ".";
     const backend_dir = std.fs.path.dirname(source_dir) orelse source_dir;
@@ -484,7 +491,56 @@ fn defaultTuiCommand(allocator: std.mem.Allocator, init: std.process.Init) ![]co
     const bundled_entry = try std.fs.path.join(allocator, &.{ tui_dir, "dist", "index.js" });
     defer allocator.free(bundled_entry);
     if (std.Io.Dir.cwd().access(init.io, bundled_entry, .{})) {
-        return std.fmt.allocPrint(allocator, "bun {s}", .{bundled_entry});
+        return bundledTuiCommand(allocator, bundled_entry);
     } else |_| {}
-    return std.fmt.allocPrint(allocator, "bun run --cwd {s} start", .{tui_dir});
+    return sourceTuiCommand(allocator, tui_dir);
+}
+
+fn installedTuiCommand(allocator: std.mem.Allocator, init: std.process.Init) !?[]const u8 {
+    const exe_dir = std.process.executableDirPathAlloc(init.io, allocator) catch return null;
+    defer allocator.free(exe_dir);
+
+    const candidates = [_][]const u8{
+        "../share/ditox/tui/dist/index.js",
+        "../share/ditox/tui/index.js",
+        "tui/dist/index.js",
+        "dist/index.js",
+    };
+
+    for (candidates) |candidate| {
+        const entry = try std.fs.path.resolve(allocator, &.{ exe_dir, candidate });
+        defer allocator.free(entry);
+        if (std.Io.Dir.cwd().access(init.io, entry, .{})) {
+            return @as(?[]const u8, try bundledTuiCommand(allocator, entry));
+        } else |_| {}
+    }
+
+    return null;
+}
+
+fn bundledTuiCommand(allocator: std.mem.Allocator, entry: []const u8) ![]const u8 {
+    const quoted = try shellQuote(allocator, entry);
+    defer allocator.free(quoted);
+    return std.fmt.allocPrint(allocator, "bun {s}", .{quoted});
+}
+
+fn sourceTuiCommand(allocator: std.mem.Allocator, dir: []const u8) ![]const u8 {
+    const quoted = try shellQuote(allocator, dir);
+    defer allocator.free(quoted);
+    return std.fmt.allocPrint(allocator, "bun run --cwd {s} start", .{quoted});
+}
+
+fn shellQuote(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    var out = std.Io.Writer.Allocating.init(allocator);
+    errdefer out.deinit();
+    try out.writer.writeByte('\'');
+    for (value) |byte| {
+        if (byte == '\'') {
+            try out.writer.writeAll("'\\''");
+        } else {
+            try out.writer.writeByte(byte);
+        }
+    }
+    try out.writer.writeByte('\'');
+    return out.toOwnedSlice();
 }

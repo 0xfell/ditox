@@ -1,6 +1,8 @@
 import { For } from "solid-js";
 import { statusTone, truncateText, watcherStatusView } from "../presentation";
+import type { ContentAlign, VerticalAlign } from "../ui-config";
 import {
+  paddedTitle,
   statusHint,
   surface,
   templateSegments,
@@ -18,45 +20,88 @@ export function StatusLine(props: { config: ResolvedTuiConfig; status: string; w
   const operationTone = () => statusTone(props.status, props.config.labels, props.config.statusTones);
   const watcherTone = () => watcher().tone;
   const operationText = () => props.status || props.config.labels.ready;
-  const separatorText = () => `${" ".repeat(props.config.layout.statusSeparatorPadding)}${props.config.chrome.statusSeparator}${" ".repeat(props.config.layout.statusSeparatorPadding)}`;
-  const fixedTemplateWidth = () =>
-    templateSegments(props.config.labels.statusLineTemplate, {
-      hint: "",
-      separator: separatorText(),
-      watcher: watcher().text,
-      operation: operationText(),
-    }).reduce((width, part) => width + part.text.length, 0);
-  const hint = () => {
-    return truncateText(
-      statusHint(props.config, props.mode ?? "browse"),
-      Math.max(0, props.width - fixedTemplateWidth() - props.config.layout.statusPaddingX * 2),
-      props.config.labels,
+  const separatorText = () =>
+    `${" ".repeat(props.config.layout.statusSeparatorPaddingLeft)}${props.config.chrome.statusSeparator}${" ".repeat(props.config.layout.statusSeparatorPaddingRight)}`;
+  const lineValues = () =>
+    fittedStatusLineValues(
+      props.config,
+      {
+        hint: statusHint(props.config, props.mode ?? "browse"),
+        separator: separatorText(),
+        watcher: watcher().text,
+        operation: operationText(),
+      },
+      Math.max(0, props.width - props.config.layout.statusPaddingX * 2),
     );
-  };
-  const lineParts = () =>
-    templateSegments(props.config.labels.statusLineTemplate, {
-      hint: hint(),
-      separator: separatorText(),
-      watcher: watcher().text,
-      operation: operationText(),
-    });
+  const lineParts = () => templateSegments(props.config.labels.statusLineTemplate, lineValues());
   return (
     <box
       height={props.config.layout.statusHeight}
+      border={props.config.chrome.statusBorder ? true : undefined}
+      borderStyle={props.config.chrome.statusBorder ? props.config.chrome.statusBorderStyle : undefined}
+      borderColor={props.config.chrome.statusBorder ? style().border : undefined}
       backgroundColor={style().bg}
       paddingX={props.config.layout.statusPaddingX}
       paddingY={props.config.layout.statusPaddingY}
+      title={
+        props.config.chrome.statusBorder && props.config.chrome.showStatusTitle
+          ? paddedTitle(props.config.labels.statusTitle, props.config.layout.frameTitlePaddingLeft, props.config.layout.frameTitlePaddingRight)
+          : undefined
+      }
+      titleAlignment={props.config.chrome.statusTitleAlignment}
     >
-      <text style={textStyle(style(), style().muted)}>
-        <For each={lineParts()}>
-          {(part) => <span style={textStyle(style(), statusPartColor(props.config, part.key, watcherTone(), operationTone()))}>{part.text}</span>}
-        </For>
-      </text>
+      <box width="100%" flexGrow={1} flexDirection="column" justifyContent={verticalJustify(props.config.layout.statusVerticalAlign)}>
+        <box width="100%" flexDirection="row" justifyContent={justifyContent(props.config.layout.statusContentAlign)}>
+          <text style={textStyle(style(), style().muted)}>
+            <For each={lineParts()}>
+              {(part) => <span style={textStyle(style(), statusPartColor(props.config, part.key, watcherTone(), operationTone()))}>{part.text}</span>}
+            </For>
+          </text>
+        </box>
+      </box>
     </box>
   );
 }
 
 type StatusTone = "muted" | "error" | "success" | "warning";
+type StatusLineValues = Record<"hint" | "separator" | "watcher" | "operation", string>;
+
+function fittedStatusLineValues(config: ResolvedTuiConfig, values: StatusLineValues, width: number): StatusLineValues {
+  const fitted = {
+    ...values,
+    operation: configuredMax(values.operation, config.layout.statusOperationMaxWidth, config),
+    watcher: configuredMax(values.watcher, config.layout.statusWatcherMaxWidth, config),
+    hint: configuredMax(values.hint, config.layout.statusHintMaxWidth, config),
+  };
+  const shrinkOrder: Array<keyof StatusLineValues> = ["hint", "watcher", "operation"];
+  for (const key of shrinkOrder) {
+    const overflow = templateWidth(config, fitted) - width;
+    if (overflow <= 0) break;
+    if (fitted[key].length === 0) continue;
+    fitted[key] = truncateText(fitted[key], Math.max(0, fitted[key].length - overflow), config.labels);
+  }
+  return fitted;
+}
+
+function configuredMax(value: string, maxWidth: number, config: ResolvedTuiConfig): string {
+  return truncateText(value, maxWidth > 0 ? maxWidth : value.length, config.labels);
+}
+
+function templateWidth(config: ResolvedTuiConfig, values: StatusLineValues): number {
+  return templateSegments(config.labels.statusLineTemplate, values).reduce((width, part) => width + part.text.length, 0);
+}
+
+function justifyContent(align: ContentAlign): "flex-start" | "center" | "flex-end" {
+  if (align === "right") return "flex-end";
+  if (align === "center") return "center";
+  return "flex-start";
+}
+
+function verticalJustify(align: VerticalAlign): "flex-start" | "center" | "flex-end" {
+  if (align === "bottom") return "flex-end";
+  if (align === "center") return "center";
+  return "flex-start";
+}
 
 function statusPartColor(config: ResolvedTuiConfig, key: string | null, watcher: StatusTone, operation: StatusTone): string {
   const style = surface(config, "status");

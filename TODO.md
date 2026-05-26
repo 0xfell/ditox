@@ -17,6 +17,8 @@ Implemented with fake-tool smoke coverage:
 - `ditox -kill` terminates the watcher PID recorded in storage.
 - `ditox -clean` aliases the storage repair/cleanup path, sanitizes stored text rows, and removes image rows whose blob file is missing.
 - `ditox -pause <duration>` accepts Clipse-style `ms`, `s`, `m`, and `h` durations.
+- `ditox tui` resolves a bundled TUI from an install layout next to the executable (`share/ditox/tui/dist/index.js`) before falling back to the source checkout path, so installed binaries do not depend on the current working directory.
+- `bun run build` builds the TUI bundle before the Zig install step, and `zig build` installs available TUI bundle/config assets under `zig-out/share/ditox/tui/`.
 - Backend config accepts TOML and JSON files, including Clipse-style `configuration.json` top-level aliases for `maxHistory`, `deleteAfter`, `allowDuplicates`, `pollInterval`, `maxEntryLength`, `historyFile`, `tempDir`, `excludedApps`, `excludedWindows`, and `autoPaste`; relative storage paths resolve from the config file's directory, with home/XDG prefixes expanded.
 - The smoke suite verifies:
   - Ditox writes selected text/image bytes with `wl-copy`.
@@ -44,20 +46,20 @@ Initial visual polish is implemented:
 - Pager-style UI configuration for compact mode, dense spacing defaults, panel sizing, metadata, preview length, and scrollbar visibility.
 - Structured OpenTUI components for shell, header, history list, preview pane, status line, and overlays.
 - Improved layout sizing, list scrolling, row truncation, preview behavior, and empty states.
-- Semantic status colors and clearer runtime error messages for `ditoxd`, `wl-copy`, `hyprctl`, and paste failures.
+- Semantic status colors and clearer runtime error templates for `ditoxd`, `wl-copy`, `hyprctl`, paste failures, unknown backend exit status, and generic backend/RPC failures.
 - `@opentui/keymap` is the default key handling layer.
 - Search, help, delete, and clear confirmations now share overlay structure while each overlay mode can override its own surface styling.
 - Presentation helpers have direct Bun test coverage.
 - File-backed TUI customization is implemented through `DITOX_TUI_CONFIG` or `~/.config/ditox/tui.json`.
 - `tui/tui-config.schema.json` documents the file-backed TUI config contract, including supported label keys, is linked from the example config for editor completion, and is covered by schema drift tests.
-- Theme presets (`ditoxDark`, `ditoxLight`, `groknight`, `grokday`, `tokyonight`, `rosepine`), terminal alt-screen/screen-mode/background/title/cursor behavior, theme tokens, labels, filter names, search/query prompts/templates/cursor, clear-kind names, delete/clear/confirm prompt templates, header selection templates, header/status line templates, header-line and status-line placeholder tone routing, row pinned markers, row metadata templates/placeholders/visibility, row metadata hash length, bounded row metadata slots for long templates, entry ID prefixes, preview/list title templates, preview metadata/gutters/separators/templates/placeholders, image metadata preview field ordering/visibility, header separators, key display separators, row field widths/gaps/vertical spacing, row/list/preview/full-preview/split-pane spacer surfaces, compact-mode dense layout defaults, alternate-row striping, selected+marked row styling, history load limit, search-match highlighting, empty-state helper visibility, structural header/status/overlay heights/placement and visibility, header/status/overlay vertical padding, independent list/split-preview/full-preview panel padding, independent search/danger/help overlay padding with legacy global fallbacks, pane width minima/insets, split-pane gap, split preview visibility, split/full preview metadata and gutter visibility, split/full preview text width insets, split/full image mode/renderer/block glyph/background/notice/max sizing/row insets/source notices/fallback prefixes and separators/line spacing, split/full preview metadata heights and horizontal/vertical padding, scrollbar width/glyphs, text truncation markers, whitespace replacement, title padding, help key width, byte and age units, image fallback/protocol notice reasons, watcher error separators, status hint templates, operation/view/entry-count status copy/templates, runtime error copy, per-surface semantic tone colors and text attributes, independent header/list/split-preview/full-preview/search/danger/help border visibility/title visibility/border style/title alignment with legacy global fallbacks, list-position and preview bottom-title visibility and alignment, row markers, scrollbar glyphs, status separator including empty glyph values, layout, and keybindings are configurable.
+- Theme presets (`ditoxDark`, `ditoxLight`, `groknight`, `grokday`, `tokyonight`, `rosepine`), terminal alt-screen/screen-mode/background/title/cursor behavior, theme tokens, labels, filter names, search/query prompts/templates/cursor, clear-kind names, delete/clear/confirm prompt templates, header selection templates, header/status line templates, header/status horizontal/vertical body alignment, header-line and status-line placeholder tone routing, row pinned markers, row metadata templates/placeholders/visibility, row content/metadata/preview alignment, row metadata marker/age/size/pinned slot alignment, row metadata hash length, bounded row metadata slots for long templates, entry ID prefixes, preview/list title templates, preview metadata/gutters/separators/templates/placeholders, text preview gutter templates, image metadata preview field ordering/visibility, header separators, key display separators, row field widths/gaps/vertical spacing, row/list/preview/full-preview/split-pane spacer surfaces, compact-mode dense layout defaults, alternate-row striping, selected+marked row styling, history load limit, search-match highlighting, empty-state helper visibility/title alignment/help alignment/vertical alignment/line spacing, shell padding, structural header/status/overlay heights/placement and visibility, header/status/overlay vertical padding, independent list/split-preview/full-preview panel padding, independent search/danger/help overlay padding, overlay row spacing, and horizontal/vertical body alignment with legacy global fallbacks, pane width minima/insets, split-pane gap, split preview visibility, split/full preview metadata and gutter visibility, split/full preview gutter alignment, split/full preview text width insets and horizontal/vertical body alignment, split/full image mode/renderer/alignment/block glyph/background/notice/max sizing/row insets/source notices/source labels/fallback prefixes and separators/notice spacing/line spacing, split/full preview metadata heights, header/detail line spacing, horizontal/vertical padding, horizontal/vertical body alignment, and hash lengths, scrollbar width/placement/glyphs/alignment, text truncation markers, whitespace replacement, symmetric/asymmetric title padding, help key width/alignment, byte and age units, image fallback/protocol notice reasons and display names, watcher error separators/status templates, status hint templates, header brand/filter/query/mode width caps, overlay prompt/hint/action width caps, status operation/watcher/hint width caps, operation/view/pin/entry-count status copy/templates, runtime error templates including unknown exit-status text, per-surface semantic tone colors and text attributes, independent header/list/split-preview/full-preview/status/search/danger/help border visibility/title visibility/border style/title alignment with legacy global fallbacks, list-position and preview bottom-title visibility and alignment, row markers including marker slot width/alignment, scrollbar glyphs/alignment, status separator including empty glyph values, layout, and keybindings are configurable.
 - Search mode has a Clipse-style configurable `searchCopyMatches` / `ctrl+s` yank action for copying every current match.
 - Search mode refreshes results live by default with configurable debounce, and file/env behavior controls whether opening search clears the current query and whether cancelling restores the previous query.
 - Visible literal and fuzzy-subsequence search matches are highlighted in row previews with the configured list/selected-row search color, and highlighting can be disabled without disabling search.
 - Filter cycling order is configurable with `filterOrder`, so users can reorder or omit filters from the cycle.
 - Startup filter, pinned-only mode, and initial query are configurable through the `startup` block and env overrides.
 - Paste/choose exits the TUI by default like Clipse, with file/env behavior toggles for keeping paste, copy, bulk-copy, or search-copy actions open after success.
-- Clipse-style CLI aliases are available for supported operations: `-a`, `-c`, `-p`, `--wl-store`, `--auto-paste`, `-clear`, `-clear-all`, `-clear-text`, `-clear-images`, `--output-all`, `-clean`, `-kill`, `-pause`, `-listen`, `-listen-shell`, and `-enable-real-time`; platform-specific `-listen-x11` / `-listen-darwin` aliases are recognized with explicit unsupported messages; no-argument `ditox` launches the TUI like Clipse, and `ditox keep` / `ditox launch --keep` launch it without exiting after paste.
+- Clipse-style CLI aliases are available for supported operations: `-v`, `--version`, `version`, `-a`, `-c`, `-p`, `--wl-store`, `--auto-paste`, `-clear`, `-clear-all`, `-clear-text`, `-clear-images`, `--output-all`, `-clean`, `-kill`, `-pause`, `-listen`, `-listen-shell`, and `-enable-real-time`; platform-specific `-listen-x11` / `-listen-darwin` aliases are recognized with explicit unsupported messages; no-argument `ditox` launches the TUI like Clipse, and `ditox keep` / `ditox launch --keep` launch it without exiting after paste.
 - TUI history load limit is configurable through `historyLimit` / `DITOX_TUI_HISTORY_LIMIT`.
 - File config accepts common Clipse keybinding aliases such as `choose`, `filter`, `clearSelected`, `togglePin`, `togglePinned`, and `yankFilter`; `clearSelected` clears marked rows instead of deleting entries.
 - Key display labels are configurable separately from keybindings, so help/status hints can rename keys such as space, escape, enter, and arrows.
@@ -69,7 +71,7 @@ Initial visual polish is implemented:
 - Overlay border colors are configurable with `overlayBorderTones`, so search, danger, and help overlay chrome can use explicit overlay surface tones.
 - Overlay content colors are configurable with `overlayContentTones`, so search prompt/query/cursor text, delete/clear prompts, confirmation hints, and help key/action text can use explicit overlay surface tones.
 - List content colors are configurable with `listContentTones`, so row markers, metadata, preview text, search matches, empty-state copy, and scrollbar cells can use explicit semantic tones.
-- Preview content colors are configurable with `previewContentTones`, so split/full preview borders, empty states, image fallback/notice text, gutters, semantic content lines, and metadata can use explicit semantic tones.
+- Preview content colors are configurable with `previewContentTones`, so split/full preview borders, empty states, image fallback/notice text, gutters, semantic content lines, and split/full metadata header/detail rows can use explicit semantic tones.
 - File config accepts common Clipse top-level TUI aliases for `maxEntryLength`, `pollInterval`, `enableMouse`, `enableDescription`, and `imageDisplay.type`; `maxEntryLength` caps row preview text, Clipse `imageDisplay.scaleX` / `scaleY` / `heightCut` map to block preview sizing hints, and Kitty/Sixel aliases are preserved as explicit modes that render through capability-aware labeled block fallbacks until OpenTUI exposes a stable protocol renderer path.
 - File config accepts Clipse-style `themeFile` values and maps `custom_theme.json` colors onto Ditox theme tokens and surface styles, while native Ditox style overrides keep precedence.
 - Per-surface styles are configurable for shell, header, list, alternate rows, selected row, selected+marked row, marked row, row spacers, empty states, preview, preview gutter, preview metadata, preview spacers, full preview, full preview gutter, full preview metadata, full-preview spacers, base/search/danger/help overlays, status line, scrollbar, and split-pane gap, including per-surface secondary/success/warning/error/search/favorite/image tones and standard terminal attributes.
@@ -79,19 +81,28 @@ Initial visual polish is implemented:
 - Pinned-only view is available from the keymap.
 - Scrollable full-preview mode is available from the keymap and supports copy/paste.
 - Row metadata visibility is configurable for content-first list layouts.
+- Row content, metadata, and preview text alignment are configurable independently.
+- Row marker, metadata age, size, and pinned slots can align independently inside their configured widths.
 - Header and status line visibility are configurable for minimal picker layouts.
+- Header/status line horizontal/vertical body alignment and overlay horizontal/vertical body alignment plus row spacing are configurable independently from their border titles.
+- Header brand, filter, query, and mode segments are bounded in narrow terminals, with optional per-segment width caps.
+- Help-overlay key column width and alignment are configurable.
 - Panel/overlay titles, list-position titles, and preview bottom titles are independently configurable and aligned.
+- Shell padding is configurable for inset terminal layouts.
 - Search/help/confirm overlays can be placed below the header or at the bottom with `overlayPlacement`.
 - Row markers, scrollbar glyphs, and status separators can be empty strings for quiet layouts.
-- Scrollbar width is configurable for wider theme glyphs.
+- Status separator spacing supports shared or independent left/right padding.
+- Status operation, watcher, and key-hint segments are bounded in narrow terminals, with optional per-segment width caps.
+- Scrollbar width, left/right placement, and glyph alignment are configurable for wider theme glyphs and layouts that keep the scroll affordance near the list edge.
 - Full-preview metadata visibility is configurable independently for cleaner reader layouts.
-- Full-preview metadata styling is configurable independently from full-preview content.
-- Split/full preview metadata height and horizontal/vertical padding are configurable for compact one-line or roomier metadata rows.
-- Split/full preview gutter visibility, width, and separator text are configurable for cleaner reader layouts.
+- Full-preview metadata styling is configurable independently from full-preview content, including independent header/detail templates and tone routing with legacy `fullPreviewMetaTemplate` / `fullMeta` fallback.
+- Split/full preview metadata height, header/detail line spacing, horizontal/vertical padding, horizontal/vertical body alignment, and hash lengths are configurable for compact one-line or roomier metadata rows.
+- Split/full preview body horizontal alignment and vertical placement are configurable separately from metadata alignment, so sparse preview content can sit left/center/right and top/center/bottom independently.
+- Split/full preview gutter visibility, width, alignment, and separator text are configurable for cleaner reader layouts.
 - Empty-state helper copy visibility is configurable for quieter empty/search-miss views.
 - The split preview pane can be hidden from config for list-only picker layouts.
 - Realtime TUI polling is configurable through `refreshIntervalMs` / `DITOX_TUI_REFRESH_MS`.
-- Mouse row selection, Ctrl-click marking, Shift-click range selection, and wheel scrolling are available.
+- Mouse row selection, right-click marking, Ctrl-click marking, Shift-click range selection, and wheel scrolling are available.
 - Terminal mouse capture can be disabled through `mouseEnabled` / `DITOX_TUI_MOUSE`.
 - Terminal alternate-screen behavior is configurable through `terminal.altScreen`
   or Grok-style `terminal.alt_screen`, with `DITOX_TUI_ALT_SCREEN` and
@@ -101,20 +112,22 @@ Initial visual polish is implemented:
   Kitty keyboard protocol, renderer FPS, render debounce, and stdin parser
   buffer limits are configurable too.
 - TUI clear actions preserve pinned entries by default, with an explicit clear-everything binding.
-- Watcher live/paused/stale/stopped state is visible in the TUI status line.
+- Watcher live/paused/stale/stopped state is visible in the TUI status line, with file-configurable status composition templates.
 - Refreshed-history entry-count status text is template-configurable.
-- PNG, JPEG, GIF first frames, WebP, and uncompressed BMP image entries can render as OpenTUI-supersampled or text-span block previews with metadata fallback; Kitty/Sixel requests keep their configured mode and currently use capability-aware labeled block fallbacks.
-- Image preview rows, protocol/source notices, and fallback rows reserve space before text metadata is windowed, so image-heavy panes stay bounded instead of crowding later preview lines.
-- The image preview renderer is configurable (`auto`, `opentui`, `text`); custom text block glyphs and transparent-pixel background colors remain configurable for terminals or themes that render alternate block cells more cleanly.
+- Pin/unpin actions keep configurable success status text after the history refresh.
+- PNG, JPEG, GIF first frames, WebP, and uncompressed BMP image entries can render as OpenTUI-supersampled or text-span block previews with configurable source labels, source-notice spacing, and metadata fallback; Kitty/Sixel requests keep their configured mode and currently use capability-aware labeled block fallbacks with configurable protocol display names.
+- Image preview rows, protocol/source notices, notice spacing, and fallback rows reserve space before text metadata is windowed, so image-heavy panes stay bounded instead of crowding later preview lines.
+- The image preview renderer is configurable (`auto`, `opentui`, `text`); split/full preview image alignment, custom text block glyphs, and transparent-pixel background colors remain configurable for terminals or themes that render alternate block cells more cleanly.
 - Image copy/paste restores the stored blob to the clipboard with its MIME type instead of copying the storage hash as text.
 - TUI smoke tests now verify the real OpenTUI render path outputs image block cells, including the OpenTUI supersampled renderer.
 - TUI smoke tests now verify file-based visual/key-hint customization in the real OpenTUI render path.
 - CLI smoke tests verify image entries are copied as image bytes through `wl-copy --type`.
-- CLI smoke tests verify Clipse-style aliases for add, copy-input, print-clipboard, wl-store text/image capture, auto-paste, output-all, clean, kill, pause durations, unsupported platform listener messages, no-argument launch, keep-open launch, realtime launch, and clear flows.
+- CLI smoke tests verify Clipse-style aliases for version, add, copy-input, print-clipboard, wl-store text/image capture, auto-paste, output-all, clean, kill, pause durations, unsupported platform listener messages, no-argument launch, keep-open launch, realtime launch, and clear flows.
 - OpenTUI component frame snapshots cover the main shell/list/preview/status composition, search/delete/clear/help overlays, full preview, empty states, image block preview rendering, compact light-theme terminal bounds, and a wide/narrow/full-preview viewport matrix with custom styles.
 - Persisted golden text-frame snapshots cover representative shell, help-overlay, and full-preview states under `tui/src/__goldens__`.
 - TUI review artifacts can be exported with `DITOX_TUI_ARTIFACTS=1`, producing ignored text-frame, OpenTUI span JSON, SVG visual, and PNG bitmap files under `tui/artifacts/frames/` or `DITOX_TUI_ARTIFACT_DIR`.
-- TUI tests cover custom compact pinned markers, markerless rows, alternate-row styling, selected+marked row styling/markers, row metadata templates/placeholders/hash length/bounded fitting, terminal title/cursor config, entry ID prefixes, header selection templates, header/status line templates, header-line and status-line placeholder tone routing, overlay border/content tone routing including search prompt/query/cursor tones, overlay placement, independent panel/overlay padding, independent panel/overlay chrome and title alignment, list content tone routing, preview content tone routing, header/status visibility, title chrome visibility/alignment, empty-state helper visibility/styling, configurable filter cycle order, default and opt-in help row ordering/visibility, search-match row highlighting/toggling, per-surface text attributes, search/delete/clear/confirm prompt templates, mode-specific overlay surface styling, preview/list title templates, split/full preview gutter visibility/styling/widths/separators, preview line spacing, spacer surface styling, preview metadata height/placeholders/padding, image metadata field ordering/visibility, full-preview metadata styling and metadata padding, split/full image mode/rendering/max sizing/source and fallback copy, image preview row budgeting, preview renderer/block glyphs/background/protocol notices, preview separators, header/preview metadata separators/templates, key display labels/separators, row field widths/spacing, scrollbar width/glyphs, size/age units, image fallback separators, watcher error separators, extended and mode-aware status hint templates, operation/entry-count status templates, and status tone matchers.
+- TUI tests cover mouse row gesture mapping, custom compact pinned markers, markerless rows, row marker slot width/alignment, alternate-row styling, selected+marked row styling/markers, row metadata templates/placeholders/hash length/bounded fitting/alignment, row metadata age/size/pinned slot alignment, row content and preview alignment, terminal title/cursor config, entry ID prefixes, header selection templates, header/status line templates/horizontal/vertical body alignment, header-line and status-line placeholder tone routing, overlay border/content tone routing including search prompt/query/cursor tones, overlay placement/horizontal/vertical body alignment/row spacing, shell padding, independent panel/overlay padding, independent panel/overlay chrome, status-line chrome, title alignment, narrow header segment fitting, narrow status segment fitting, and narrow overlay text fitting, list content tone routing, preview content tone routing, header/status visibility, title chrome visibility/alignment and optional status-line chrome, empty-state helper visibility/styling/horizontal/vertical alignment/line spacing, configurable filter cycle order, default and opt-in help row ordering/visibility/key-column alignment, search-match row highlighting/toggling, per-surface text attributes, search/delete/clear/confirm prompt templates, mode-specific overlay surface styling, preview/list title templates, text preview gutter templates, split/full preview gutter visibility/styling/widths/alignment/separators, preview horizontal/vertical body alignment, preview line spacing, spacer surface styling, preview metadata height/placeholders/hash length/padding/line spacing/horizontal/vertical alignment, image metadata field ordering/visibility, full-preview metadata header/detail templates, styling, legacy fallbacks, and metadata hash length/padding/line spacing/alignment, split/full image mode/rendering/alignment/max sizing/source labels/source and fallback copy/notice spacing, image preview row budgeting, preview renderer/block glyphs/background/protocol notices and display names, preview separators, header/preview metadata separators/templates, key display labels/separators, row field widths/spacing, scrollbar width/placement/glyphs/alignment, size/age units, image fallback separators, watcher error separators/status templates, extended and mode-aware status hint templates, operation/pin/entry-count status templates, and status tone matchers.
+- TUI tests include split/full preview body vertical placement, independent from preview text alignment and metadata placement.
 - Delete-after TTL cleanup removes old non-pinned entries and prunes expired image blobs.
 - Storage repair/clean sanitizes persisted text content, recomputes previews/hashes/byte lengths, removes image rows with missing blob files, and drains pending blob-prune records.
 - Search uses SQLite FTS plus escaped literal substring fallback and relevance-tiered ordering so exact and prefix matches beat incidental matches.
@@ -184,7 +197,7 @@ First implementation should remain metadata-first.
 - Bulk copy/output selected entries.
 - Pinned-only toggle view.
 - Scrollable full preview mode.
-- Better pin/favorite workflow.
+- Pin/favorite workflow with configurable pin/unpin status feedback after refresh.
 - Clear text, clear images, and clear all from the TUI with confirmation.
 - Pinned-safe clear text/images/all from the TUI, plus explicit clear everything.
 - Add operational CLI parity:
@@ -207,17 +220,16 @@ First implementation should remain metadata-first.
 
 ## 7. Packaging And Dev Ergonomics
 
-- Make `ditox tui` work outside the repo checkout.
-- Decide TUI shipping format:
-  - Bun source executed by `bun`.
-  - bundled JS.
-  - compiled Bun executable.
-- Add a single check command that runs:
+- Keep bundled JavaScript as the normal TUI shipping format for now.
+- Revisit a compiled Bun executable once OpenTUI and the native addon surface settle.
+- Keep the single check command running:
   - `zig build test`.
+  - TUI build.
+  - `zig build` with the bundled TUI assets installed.
+  - CLI smoke tests.
   - TypeScript typecheck.
   - Bun tests.
-  - TUI build.
-- Add install/dev scripts.
+- Keep package scripts for build, dev TUI, dev watcher, and local install.
 - Keep `.envrc` + Nix dev shell working as the primary local development path.
 - Keep native commands usable for contributors who do not use Nix.
 

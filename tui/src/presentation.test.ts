@@ -12,6 +12,7 @@ import {
   formatDeletedStatus,
   formatEntriesStatus,
   formatFilter,
+  formatPinStatus,
   formatViewStatus,
   previewModel,
   previewMetaTemplateValues,
@@ -75,6 +76,21 @@ describe("presentation", () => {
         { rowAgeWidth: 1, rowSizeWidth: 3, rowPinnedWidth: 0 },
       ),
     ).toBe("TXT|1m|11 B|[-]");
+    expect(
+      entryMeta(
+        { ...entry, favorite: true },
+        66_000,
+        { rowMetaTemplate: "{age}|{size}|{pinned}", rowPinnedLabel: "P" },
+        {
+          rowAgeWidth: 5,
+          rowAgeAlign: "left",
+          rowSizeWidth: 6,
+          rowSizeAlign: "center",
+          rowPinnedWidth: 3,
+          rowPinnedAlign: "right",
+        },
+      ),
+    ).toBe("1m   | 11 B |  P");
   });
 
   test("builds rich row metadata template values", () => {
@@ -104,6 +120,8 @@ describe("presentation", () => {
   test("fits custom row metadata into its reserved slot", () => {
     expect(fitRowMeta("SRC:very-long-browser-name", 12)).toBe("SRC:very-...");
     expect(fitRowMeta("TXT", 6)).toBe("TXT   ");
+    expect(fitRowMeta("TXT", 7, {}, "center")).toBe("  TXT  ");
+    expect(fitRowMeta("TXT", 6, {}, "right")).toBe("   TXT");
     expect(fitRowMeta("abcdef", 4, { textTruncationMarker: "~" })).toBe("abc~");
     expect(fitRowMeta("hidden", 0)).toBe("");
   });
@@ -134,6 +152,14 @@ describe("presentation", () => {
     expect(formatEntriesStatus(7, { statusEntries: "clips", statusEntriesTemplate: "{entries}: {count}" })).toBe("clips: 7");
     expect(formatDeletedStatus(3, { statusDeletedTemplate: "{count} gone" })).toBe("3 gone");
     expect(formatClearedStatus(4, true)).toBe("cleared 4; kept pinned");
+    expect(formatPinStatus(entry, true)).toBe("pinned #7");
+    expect(
+      formatPinStatus(entry, false, {
+        entryIdPrefix: "clip:",
+        statusUnpinnedPrefix: "removed",
+        statusPinTemplate: "{prefix}:{entryIdPrefix}{id}",
+      }),
+    ).toBe("removed:clip:7");
     expect(
       formatClearedStatus(5, false, {
         statusClearedPrefix: "wiped",
@@ -255,13 +281,33 @@ describe("presentation", () => {
     expect(previewWindow(rows, 1, 2).map((row) => row.text)).toEqual(["b", "c"]);
     expect(previewWindow(rows, 99, 2).map((row) => row.text)).toEqual(["d"]);
     expect(previewModel({ ...entry, content: "a\nb" }, 10, {}, 1).map((row) => row.gutter)).toEqual(["1", "2"]);
+    expect(
+      previewModel(
+        { ...entry, content: "a\nb" },
+        10,
+        { previewTextGutterTemplate: "L{line}" },
+        { previewLineNumberWidth: 2 },
+      ).map((row) => row.gutter),
+    ).toEqual(["L1", "L2"]);
+    expect(
+      previewModel(
+        { ...entry, content: "a" },
+        10,
+        { previewTextGutterTemplate: "{linePadded}/{lineNumberPadded}" },
+        { previewLineNumberWidth: 2 },
+      )[0]?.gutter,
+    ).toBe(" 1/ 1");
   });
 
   test("maps status text to semantic tones", () => {
     expect(statusTone("copied 2")).toBe("success");
     expect(statusTone("stored 2", { statusCopiedCountPrefix: "stored" })).toBe("success");
+    expect(statusTone("pinned #7")).toBe("success");
+    expect(statusTone("removed:clip:7", { statusUnpinnedPrefix: "removed" })).toBe("success");
     expect(statusTone("PasteBackFailed")).toBe("error");
     expect(statusTone("paste transport failed", { errorPasteBackFailed: "paste transport failed" })).toBe("error");
+    expect(statusTone("process watcher.status: boom", { errorProcessTemplate: "process {method}: {message}" })).toBe("error");
+    expect(statusTone("rpc watcher.status: StrangeError", { errorRpcTemplate: "rpc {method}: {message}" })).toBe("error");
     expect(statusTone("paused watcher")).toBe("warning");
     expect(statusTone("archived 2", {}, { success: ["archived"], warning: ["holding"], error: ["broken"] })).toBe("success");
     expect(statusTone("holding refresh", {}, { success: ["archived"], warning: ["holding"], error: ["broken"] })).toBe("warning");
@@ -295,5 +341,18 @@ describe("presentation", () => {
         3_000,
       ).text,
     ).toBe("watcher live 2sec");
+    expect(
+      watcherStatusView(
+        { running: true, paused: false, backend: "wl-clipboard", poll_interval_ms: 500, last_seen_ms: 1_000, last_error: null },
+        { ...labels, watcherRunningTemplate: "{age} since {status}" },
+        3_000,
+      ).text,
+    ).toBe("2s since watcher live");
+    expect(
+      watcherStatusView(
+        { running: false, paused: false, backend: "wl-clipboard", poll_interval_ms: 500, last_seen_ms: null, last_error: "boom" },
+        { ...labels, watcherErrorTemplate: "{error} <- {status}" },
+      ).text,
+    ).toBe("boom <- watcher stopped");
   });
 });

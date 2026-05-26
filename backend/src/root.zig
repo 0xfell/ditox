@@ -1,3 +1,5 @@
+pub const version = "0.1.0";
+
 pub const app = @import("app.zig");
 pub const clipboard = @import("clipboard.zig");
 pub const config = @import("config.zig");
@@ -15,4 +17,3 @@ test {
     _ = storage;
     _ = util;
 }
-

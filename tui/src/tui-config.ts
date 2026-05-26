@@ -3,7 +3,18 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createTextAttributes } from "@opentui/core";
 import { themeNames, themes, type ThemeName, type TuiTheme } from "./theme";
-import type { ImagePreviewMode, ImagePreviewNoticeVisibility, ImagePreviewRenderer, OverlayPlacement, PreviewImageField, UiConfig } from "./ui-config";
+import type {
+  ContentAlign,
+  ImagePreviewAlign,
+  ImagePreviewMode,
+  ImagePreviewNoticeVisibility,
+  ImagePreviewRenderer,
+  OverlayPlacement,
+  PreviewImageField,
+  ScrollbarPlacement,
+  UiConfig,
+  VerticalAlign,
+} from "./ui-config";
 import type { EntryFilter } from "./types";
 
 export type BorderStyle = "single" | "double" | "rounded" | "heavy";
@@ -11,6 +22,9 @@ export const titleAlignmentNames = ["left", "center", "right"] as const;
 export type TitleAlignment = (typeof titleAlignmentNames)[number];
 export const imagePreviewNoticeVisibilityNames = ["never", "protocol", "always"] as const;
 export const imagePreviewRendererNames = ["auto", "opentui", "text"] as const;
+export const imagePreviewAlignNames = ["left", "center", "right"] as const;
+export const verticalAlignNames = ["top", "center", "bottom"] as const;
+export const scrollbarPlacementNames = ["left", "right"] as const;
 export const overlayPlacementNames = ["bottom", "top"] as const;
 export type ThemeColors = Omit<TuiTheme, "name">;
 
@@ -87,6 +101,7 @@ export type TuiChromeConfig = {
   listBorder: boolean;
   previewBorder: boolean;
   fullPreviewBorder: boolean;
+  statusBorder: boolean;
   searchOverlayBorder: boolean;
   dangerOverlayBorder: boolean;
   helpOverlayBorder: boolean;
@@ -96,6 +111,7 @@ export type TuiChromeConfig = {
   showListTitle: boolean;
   showPreviewTitle: boolean;
   showFullPreviewTitle: boolean;
+  showStatusTitle: boolean;
   showSearchOverlayTitle: boolean;
   showDangerOverlayTitle: boolean;
   showHelpOverlayTitle: boolean;
@@ -108,6 +124,7 @@ export type TuiChromeConfig = {
   listBorderStyle: BorderStyle;
   previewBorderStyle: BorderStyle;
   fullPreviewBorderStyle: BorderStyle;
+  statusBorderStyle: BorderStyle;
   searchOverlayBorderStyle: BorderStyle;
   dangerOverlayBorderStyle: BorderStyle;
   helpOverlayBorderStyle: BorderStyle;
@@ -118,6 +135,7 @@ export type TuiChromeConfig = {
   listTitleAlignment: TitleAlignment;
   previewTitleAlignment: TitleAlignment;
   fullPreviewTitleAlignment: TitleAlignment;
+  statusTitleAlignment: TitleAlignment;
   listBottomTitleAlignment: TitleAlignment;
   previewBottomTitleAlignment: TitleAlignment;
   fullPreviewBottomTitleAlignment: TitleAlignment;
@@ -287,6 +305,8 @@ export const previewContentPartNames = [
   "splitMetaDetails",
   "fullBorder",
   "fullMeta",
+  "fullMetaHeader",
+  "fullMetaDetails",
   "fullEmptyTitle",
   "fullEmptyHelp",
   "fullImageFallbackPrefix",
@@ -335,6 +355,7 @@ export type TuiLabels = {
   brand: string;
   historyTitle: string;
   previewTitle: string;
+  statusTitle: string;
   headerSectionSeparator: string;
   headerLabelSeparator: string;
   headerLineTemplate: string;
@@ -382,9 +403,12 @@ export type TuiLabels = {
   previewMetaHeaderTemplate: string;
   previewMetaDetailsTemplate: string;
   fullPreviewMetaTemplate: string;
+  fullPreviewMetaHeaderTemplate: string;
+  fullPreviewMetaDetailsTemplate: string;
   fullPreviewBottomTitleTemplate: string;
   previewGutterSeparator: string;
   fullPreviewGutterSeparator: string;
+  previewTextGutterTemplate: string;
   sizeBytesUnit: string;
   sizeKibUnit: string;
   sizeMibUnit: string;
@@ -410,6 +434,11 @@ export type TuiLabels = {
   imagePreviewSourceTemplate: string;
   splitImagePreviewSourceTemplate: string;
   fullImagePreviewSourceTemplate: string;
+  imagePreviewBlocksSource: string;
+  imagePreviewKittyFallbackSource: string;
+  imagePreviewSixelFallbackSource: string;
+  imagePreviewKittyProtocolName: string;
+  imagePreviewSixelProtocolName: string;
   imagePreviewProtocolUnknown: string;
   imagePreviewProtocolUnsupported: string;
   imagePreviewProtocolRendererUnavailable: string;
@@ -441,6 +470,11 @@ export type TuiLabels = {
   watcherStale: string;
   watcherStopped: string;
   watcherErrorSeparator: string;
+  watcherRunningTemplate: string;
+  watcherPausedTemplate: string;
+  watcherStaleTemplate: string;
+  watcherStoppedTemplate: string;
+  watcherErrorTemplate: string;
   keyAlternativeSeparator: string;
   keyGroupSeparator: string;
   statusHintSeparator: string;
@@ -476,6 +510,9 @@ export type TuiLabels = {
   statusDeletedTemplate: string;
   statusClearedPrefix: string;
   statusClearedTemplate: string;
+  statusPinnedPrefix: string;
+  statusUnpinnedPrefix: string;
+  statusPinTemplate: string;
   statusEntries: string;
   statusEntriesTemplate: string;
   statusKeptPinned: string;
@@ -489,6 +526,9 @@ export type TuiLabels = {
   errorClipboardWriteFailed: string;
   errorPasteBackFailed: string;
   errorDitoxdExited: string;
+  errorUnknownStatus: string;
+  errorProcessTemplate: string;
+  errorRpcTemplate: string;
   pinnedViewTitle: string;
   allViewTitle: string;
   previewModeTitle: string;
@@ -685,6 +725,7 @@ const defaultChrome: TuiChromeConfig = {
   listBorder: true,
   previewBorder: true,
   fullPreviewBorder: true,
+  statusBorder: false,
   searchOverlayBorder: true,
   dangerOverlayBorder: true,
   helpOverlayBorder: true,
@@ -694,6 +735,7 @@ const defaultChrome: TuiChromeConfig = {
   showListTitle: true,
   showPreviewTitle: true,
   showFullPreviewTitle: true,
+  showStatusTitle: false,
   showSearchOverlayTitle: true,
   showDangerOverlayTitle: true,
   showHelpOverlayTitle: true,
@@ -706,6 +748,7 @@ const defaultChrome: TuiChromeConfig = {
   listBorderStyle: "rounded",
   previewBorderStyle: "rounded",
   fullPreviewBorderStyle: "rounded",
+  statusBorderStyle: "rounded",
   searchOverlayBorderStyle: "rounded",
   dangerOverlayBorderStyle: "rounded",
   helpOverlayBorderStyle: "rounded",
@@ -716,6 +759,7 @@ const defaultChrome: TuiChromeConfig = {
   listTitleAlignment: "left",
   previewTitleAlignment: "left",
   fullPreviewTitleAlignment: "left",
+  statusTitleAlignment: "left",
   listBottomTitleAlignment: "left",
   previewBottomTitleAlignment: "left",
   fullPreviewBottomTitleAlignment: "left",
@@ -774,7 +818,7 @@ const defaultKeyLabels: KeyDisplayLabels = {
 
 const defaultStatusTones: TuiStatusToneMatchers = {
   error: ["error", "failed", "not found", "exited", "unavailable"],
-  success: ["copied", "pasted", "cleared"],
+  success: ["copied", "pasted", "cleared", "pinned", "unpinned"],
   warning: ["paused"],
 };
 
@@ -851,6 +895,8 @@ const defaultPreviewContentTones: TuiPreviewContentTones = {
   splitMetaDetails: "fg",
   fullBorder: "auto",
   fullMeta: "auto",
+  fullMetaHeader: "auto",
+  fullMetaDetails: "fg",
   fullEmptyTitle: "muted",
   fullEmptyHelp: "secondary",
   fullImageFallbackPrefix: "muted",
@@ -872,6 +918,7 @@ const defaultLabels: TuiLabels = {
   brand: "DITOX",
   historyTitle: "history",
   previewTitle: "preview",
+  statusTitle: "status",
   headerSectionSeparator: "  ",
   headerLabelSeparator: " ",
   headerLineTemplate:
@@ -920,9 +967,12 @@ const defaultLabels: TuiLabels = {
   previewMetaHeaderTemplate: "{kind} {entryIdPrefix}{id}{separator}{hashLabel}{hashLabelSeparator}{hash}",
   previewMetaDetailsTemplate: "{mime}{separator}{size}{pinnedSuffix}",
   fullPreviewMetaTemplate: "{kind} {entryIdPrefix}{id}{separator}{mime}{pinnedSuffix}",
+  fullPreviewMetaHeaderTemplate: "{kind} {entryIdPrefix}{id}{separator}{mime}{pinnedSuffix}",
+  fullPreviewMetaDetailsTemplate: "{size}{separator}{hashLabel}{hashLabelSeparator}{hash}",
   fullPreviewBottomTitleTemplate: "{entryIdPrefix}{id} {start}-{end}/{total}{separator}{back}",
   previewGutterSeparator: "  ",
   fullPreviewGutterSeparator: "  ",
+  previewTextGutterTemplate: "{linePadded}",
   sizeBytesUnit: "B",
   sizeKibUnit: "KiB",
   sizeMibUnit: "MiB",
@@ -948,6 +998,11 @@ const defaultLabels: TuiLabels = {
   imagePreviewSourceTemplate: "{source}",
   splitImagePreviewSourceTemplate: "{source}",
   fullImagePreviewSourceTemplate: "{source}",
+  imagePreviewBlocksSource: "image blocks",
+  imagePreviewKittyFallbackSource: "kitty fallback blocks",
+  imagePreviewSixelFallbackSource: "sixel fallback blocks",
+  imagePreviewKittyProtocolName: "Kitty",
+  imagePreviewSixelProtocolName: "Sixel",
   imagePreviewProtocolUnknown: "{protocol} support unknown; showing block fallback",
   imagePreviewProtocolUnsupported: "{protocol} not detected; showing block fallback",
   imagePreviewProtocolRendererUnavailable: "{protocol} detected; native renderer unavailable; showing block fallback",
@@ -979,6 +1034,11 @@ const defaultLabels: TuiLabels = {
   watcherStale: "watcher stale",
   watcherStopped: "watcher stopped",
   watcherErrorSeparator: ": ",
+  watcherRunningTemplate: "{status} {age}",
+  watcherPausedTemplate: "{status}",
+  watcherStaleTemplate: "{status} {age}",
+  watcherStoppedTemplate: "{status}",
+  watcherErrorTemplate: "{status}{separator}{error}",
   keyAlternativeSeparator: " / ",
   keyGroupSeparator: " ",
   statusHintSeparator: "  ",
@@ -1017,6 +1077,9 @@ const defaultLabels: TuiLabels = {
   statusDeletedTemplate: "{prefix} {count}",
   statusClearedPrefix: "cleared",
   statusClearedTemplate: "{prefix} {count}; {pinned}",
+  statusPinnedPrefix: "pinned",
+  statusUnpinnedPrefix: "unpinned",
+  statusPinTemplate: "{prefix} {entryIdPrefix}{id}",
   statusEntries: "entries",
   statusEntriesTemplate: "{count} {entries}",
   statusKeptPinned: "kept pinned",
@@ -1030,6 +1093,9 @@ const defaultLabels: TuiLabels = {
   errorClipboardWriteFailed: "failed to write the clipboard with wl-copy",
   errorPasteBackFailed: "failed to paste through Hyprland",
   errorDitoxdExited: "ditoxd exited with {status}",
+  errorUnknownStatus: "unknown status",
+  errorProcessTemplate: "{message}",
+  errorRpcTemplate: "{message}",
   pinnedViewTitle: "PINNED",
   allViewTitle: "ALL",
   previewModeTitle: "full preview",
@@ -1160,12 +1226,16 @@ const defaultLayout: UiConfig = {
   fullPreviewImageMaxRows: 16,
   imagePreviewRenderer: "auto",
   fullPreviewImageRenderer: "auto",
+  imagePreviewAlign: "left",
+  fullPreviewImageAlign: "left",
   imagePreviewBlockGlyph: "▀",
   fullPreviewImageBlockGlyph: "▀",
   imagePreviewBackground: "auto",
   fullPreviewImageBackground: "auto",
   imagePreviewNoticeVisibility: "protocol",
   fullPreviewImageNoticeVisibility: "protocol",
+  imagePreviewNoticeSpacing: 0,
+  fullPreviewImageNoticeSpacing: 0,
   headerHeight: 3,
   statusHeight: 1,
   showHeader: true,
@@ -1182,32 +1252,76 @@ const defaultLayout: UiConfig = {
   fullPreviewWidthInset: 4,
   previewTextWidthInset: 8,
   fullPreviewTextWidthInset: 8,
+  previewContentAlign: "left",
+  fullPreviewContentAlign: "left",
+  previewBodyVerticalAlign: "top",
+  fullPreviewBodyVerticalAlign: "top",
   imagePreviewRowInset: 6,
   fullPreviewImageRowInset: 6,
   fullPreviewScrollInsetRows: 2,
   previewLineNumberWidth: 3,
   previewGutterWidth: 4,
   fullPreviewGutterWidth: 4,
+  previewGutterAlign: "right",
+  fullPreviewGutterAlign: "right",
   previewLineSpacing: 0,
   fullPreviewLineSpacing: 0,
   previewMetaHeight: 3,
   fullPreviewMetaHeight: 1,
+  previewMetaLineSpacing: 0,
+  fullPreviewMetaLineSpacing: 0,
   previewMetaHashLength: 12,
+  fullPreviewMetaHashLength: 12,
   previewImageFields: [...defaultPreviewImageFields],
+  headerBrandMaxWidth: 0,
+  headerFilterMaxWidth: 0,
+  headerQueryMaxWidth: 0,
+  headerModeMaxWidth: 0,
   statusSeparatorPadding: 2,
+  statusSeparatorPaddingLeft: 2,
+  statusSeparatorPaddingRight: 2,
+  statusOperationMaxWidth: 0,
+  statusWatcherMaxWidth: 0,
+  statusHintMaxWidth: 0,
+  searchOverlayPromptMaxWidth: 0,
+  searchOverlayQueryMaxWidth: 0,
+  searchOverlayCursorMaxWidth: 0,
+  dangerOverlayPromptMaxWidth: 0,
+  dangerOverlayHintMaxWidth: 0,
+  helpOverlayActionMaxWidth: 0,
   frameTitlePadding: 1,
+  frameTitlePaddingLeft: 1,
+  frameTitlePaddingRight: 1,
+  shellPaddingX: 0,
+  shellPaddingY: 0,
   headerPaddingX: 1,
   headerPaddingY: 0,
   statusPaddingX: 1,
   statusPaddingY: 0,
+  headerContentAlign: "left",
+  statusContentAlign: "left",
+  headerVerticalAlign: "top",
+  statusVerticalAlign: "top",
   overlayPaddingX: 1,
   overlayPaddingY: 0,
+  overlayContentAlign: "left",
+  overlayVerticalAlign: "top",
+  overlayLineSpacing: 0,
   searchOverlayPaddingX: 1,
   searchOverlayPaddingY: 0,
+  searchOverlayContentAlign: "left",
+  searchOverlayVerticalAlign: "top",
+  searchOverlayLineSpacing: 0,
   dangerOverlayPaddingX: 1,
   dangerOverlayPaddingY: 0,
+  dangerOverlayContentAlign: "left",
+  dangerOverlayVerticalAlign: "top",
+  dangerOverlayLineSpacing: 0,
   helpOverlayPaddingX: 1,
   helpOverlayPaddingY: 0,
+  helpOverlayContentAlign: "left",
+  helpOverlayVerticalAlign: "top",
+  helpOverlayLineSpacing: 0,
   listPaddingX: 1,
   listPaddingY: 0,
   previewPaddingX: 1,
@@ -1218,14 +1332,32 @@ const defaultLayout: UiConfig = {
   previewMetaPaddingY: 0,
   fullPreviewMetaPaddingX: 0,
   fullPreviewMetaPaddingY: 0,
+  previewMetaContentAlign: "left",
+  fullPreviewMetaContentAlign: "left",
+  previewMetaVerticalAlign: "top",
+  fullPreviewMetaVerticalAlign: "top",
   emptyStatePaddingX: 1,
   emptyStatePaddingY: 1,
+  emptyStateContentAlign: "left",
+  emptyStateTitleAlign: "left",
+  emptyStateHelpAlign: "left",
+  emptyStateVerticalAlign: "top",
+  emptyStateLineSpacing: 0,
   helpKeyWidth: 24,
+  helpKeyAlign: "left",
   confirmHintIndent: 2,
+  rowContentAlign: "left",
+  rowMetadataAlign: "left",
+  rowPreviewAlign: "left",
   rowAgeWidth: 2,
+  rowAgeAlign: "right",
   rowSizeWidth: 6,
+  rowSizeAlign: "right",
   rowPinnedWidth: 3,
+  rowPinnedAlign: "left",
   rowMetaHashLength: 8,
+  rowMarkerWidth: 0,
+  rowMarkerAlign: "left",
   rowMarkerGap: 1,
   rowMetaPreviewGap: 2,
   rowPreviewReservedWidth: 28,
@@ -1237,6 +1369,8 @@ const defaultLayout: UiConfig = {
   mouseScrollRows: 3,
   showScrollbar: true,
   scrollbarWidth: 1,
+  scrollbarPlacement: "right",
+  scrollbarAlign: "left",
   showMetadata: true,
   showRowMetadata: true,
   showPreviewPane: true,
@@ -1265,8 +1399,30 @@ const compactLayoutDefaults: Partial<UiConfig> = {
   fullPreviewGutterWidth: 3,
   previewMetaHeight: 2,
   fullPreviewMetaHeight: 1,
+  previewMetaLineSpacing: 0,
+  fullPreviewMetaLineSpacing: 0,
+  fullPreviewMetaHashLength: 12,
+  headerBrandMaxWidth: 0,
+  headerFilterMaxWidth: 0,
+  headerQueryMaxWidth: 0,
+  headerModeMaxWidth: 0,
+  imagePreviewNoticeSpacing: 0,
+  fullPreviewImageNoticeSpacing: 0,
   statusSeparatorPadding: 1,
+  statusSeparatorPaddingLeft: 1,
+  statusSeparatorPaddingRight: 1,
+  statusOperationMaxWidth: 0,
+  statusWatcherMaxWidth: 0,
+  statusHintMaxWidth: 0,
+  searchOverlayPromptMaxWidth: 0,
+  searchOverlayQueryMaxWidth: 0,
+  searchOverlayCursorMaxWidth: 0,
+  dangerOverlayPromptMaxWidth: 0,
+  dangerOverlayHintMaxWidth: 0,
+  helpOverlayActionMaxWidth: 0,
   frameTitlePadding: 0,
+  frameTitlePaddingLeft: 0,
+  frameTitlePaddingRight: 0,
   overlayPaddingX: 0,
   searchOverlayPaddingX: 0,
   dangerOverlayPaddingX: 0,
@@ -1280,8 +1436,10 @@ const compactLayoutDefaults: Partial<UiConfig> = {
   fullPreviewMetaPaddingY: 0,
   emptyStatePaddingX: 0,
   emptyStatePaddingY: 0,
+  emptyStateLineSpacing: 0,
   helpKeyWidth: 18,
   rowSizeWidth: 5,
+  rowMarkerWidth: 0,
   rowMetaPreviewGap: 1,
   rowPreviewReservedWidth: 20,
   showEmptyStateHelp: false,
@@ -1323,8 +1481,107 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
   const panelPaddingY = clampNumber(numberValue(fileConfig.layout?.panelPaddingY, defaultLayout.panelPaddingY), 0, 2);
   const overlayPaddingX = clampNumber(numberValue(fileConfig.layout?.overlayPaddingX, compactFallback("overlayPaddingX")), 0, 4);
   const overlayPaddingY = clampNumber(numberValue(fileConfig.layout?.overlayPaddingY, defaultLayout.overlayPaddingY), 0, 3);
+  const overlayContentAlign = contentAlignValue(env.DITOX_TUI_OVERLAY_CONTENT_ALIGN ?? fileConfig.layout?.overlayContentAlign, defaultLayout.overlayContentAlign);
+  const overlayVerticalAlign = verticalAlignValue(
+    env.DITOX_TUI_OVERLAY_VERTICAL_ALIGN ?? fileConfig.layout?.overlayVerticalAlign,
+    defaultLayout.overlayVerticalAlign,
+  );
+  const overlayLineSpacing = clampNumber(
+    envNumber(env, "DITOX_TUI_OVERLAY_LINE_SPACING", numberValue(fileConfig.layout?.overlayLineSpacing, defaultLayout.overlayLineSpacing)),
+    0,
+    3,
+  );
+  const emptyStateContentAlign = contentAlignValue(
+    env.DITOX_TUI_EMPTY_STATE_ALIGN ?? fileConfig.layout?.emptyStateContentAlign,
+    defaultLayout.emptyStateContentAlign,
+  );
   const previewGutterWidth = clampNumber(numberValue(fileConfig.layout?.previewGutterWidth, compactFallback("previewGutterWidth")), 1, 12);
+  const previewGutterAlign = contentAlignValue(env.DITOX_TUI_PREVIEW_GUTTER_ALIGN ?? fileConfig.layout?.previewGutterAlign, defaultLayout.previewGutterAlign);
   const previewTextWidthInset = clampNumber(numberValue(fileConfig.layout?.previewTextWidthInset, compactFallback("previewTextWidthInset")), 0, 24);
+  const previewContentAlign = contentAlignValue(env.DITOX_TUI_PREVIEW_CONTENT_ALIGN ?? fileConfig.layout?.previewContentAlign, defaultLayout.previewContentAlign);
+  const statusSeparatorPadding = clampNumber(
+    envNumber(env, "DITOX_TUI_STATUS_SEPARATOR_PADDING", numberValue(fileConfig.layout?.statusSeparatorPadding, compactFallback("statusSeparatorPadding"))),
+    0,
+    6,
+  );
+  const statusSeparatorPaddingLeft = clampNumber(
+    envNumber(env, "DITOX_TUI_STATUS_SEPARATOR_PADDING_LEFT", numberValue(fileConfig.layout?.statusSeparatorPaddingLeft, statusSeparatorPadding)),
+    0,
+    6,
+  );
+  const statusSeparatorPaddingRight = clampNumber(
+    envNumber(env, "DITOX_TUI_STATUS_SEPARATOR_PADDING_RIGHT", numberValue(fileConfig.layout?.statusSeparatorPaddingRight, statusSeparatorPadding)),
+    0,
+    6,
+  );
+  const previewMetaLineSpacing = clampNumber(
+    envNumber(
+      env,
+      "DITOX_TUI_PREVIEW_META_LINE_SPACING",
+      numberValue(fileConfig.layout?.previewMetaLineSpacing, defaultLayout.previewMetaLineSpacing),
+    ),
+    0,
+    2,
+  );
+  const fullPreviewMetaLineSpacing = clampNumber(
+    envNumber(
+      env,
+      "DITOX_TUI_FULL_PREVIEW_META_LINE_SPACING",
+      numberValue(fileConfig.layout?.fullPreviewMetaLineSpacing, previewMetaLineSpacing),
+    ),
+    0,
+    2,
+  );
+  const previewMetaHashLength = clampNumber(
+    envNumber(
+      env,
+      "DITOX_TUI_PREVIEW_META_HASH_LENGTH",
+      numberValue(fileConfig.layout?.previewMetaHashLength, defaultLayout.previewMetaHashLength),
+    ),
+    6,
+    64,
+  );
+  const fullPreviewMetaHashLength = clampNumber(
+    envNumber(
+      env,
+      "DITOX_TUI_FULL_PREVIEW_META_HASH_LENGTH",
+      numberValue(fileConfig.layout?.fullPreviewMetaHashLength, previewMetaHashLength),
+    ),
+    6,
+    64,
+  );
+  const frameTitlePadding = clampNumber(
+    envNumber(env, "DITOX_TUI_TITLE_PADDING", numberValue(fileConfig.layout?.frameTitlePadding, compactFallback("frameTitlePadding"))),
+    0,
+    4,
+  );
+  const frameTitlePaddingLeft = clampNumber(
+    envNumber(env, "DITOX_TUI_TITLE_PADDING_LEFT", numberValue(fileConfig.layout?.frameTitlePaddingLeft, frameTitlePadding)),
+    0,
+    4,
+  );
+  const frameTitlePaddingRight = clampNumber(
+    envNumber(env, "DITOX_TUI_TITLE_PADDING_RIGHT", numberValue(fileConfig.layout?.frameTitlePaddingRight, frameTitlePadding)),
+    0,
+    4,
+  );
+  const fullPreviewTextWidthInset = clampNumber(
+    envNumber(
+      env,
+      "DITOX_TUI_FULL_PREVIEW_TEXT_WIDTH_INSET",
+      numberValue(fileConfig.layout?.fullPreviewTextWidthInset, numberValue(fileConfig.layout?.previewTextWidthInset, compactFallback("fullPreviewTextWidthInset"))),
+    ),
+    0,
+    24,
+  );
+  const fullPreviewContentAlign = contentAlignValue(
+    env.DITOX_TUI_FULL_PREVIEW_CONTENT_ALIGN ?? fileConfig.layout?.fullPreviewContentAlign,
+    previewContentAlign,
+  );
+  const previewBodyVerticalAlign = verticalAlignValue(
+    env.DITOX_TUI_PREVIEW_BODY_VERTICAL_ALIGN ?? fileConfig.layout?.previewBodyVerticalAlign,
+    defaultLayout.previewBodyVerticalAlign,
+  );
   const imagePreviewRowInset = clampNumber(numberValue(fileConfig.layout?.imagePreviewRowInset, compactFallback("imagePreviewRowInset")), 0, 20);
   const imagePreviewMode = imagePreviewModeValue(
     env.DITOX_TUI_IMAGE_PREVIEW,
@@ -1353,11 +1610,21 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
     env.DITOX_TUI_IMAGE_RENDERER ?? fileConfig.layout?.imagePreviewRenderer,
     defaultLayout.imagePreviewRenderer,
   );
+  const imagePreviewAlign = imagePreviewAlignValue(env.DITOX_TUI_IMAGE_ALIGN ?? fileConfig.layout?.imagePreviewAlign, defaultLayout.imagePreviewAlign);
   const imagePreviewBlockGlyph = glyphValue(env.DITOX_TUI_IMAGE_BLOCK_GLYPH ?? fileConfig.layout?.imagePreviewBlockGlyph, defaultLayout.imagePreviewBlockGlyph);
   const imagePreviewBackground = imagePreviewBackgroundValue(env.DITOX_TUI_IMAGE_BACKGROUND ?? fileConfig.layout?.imagePreviewBackground, defaultLayout.imagePreviewBackground);
   const imagePreviewNoticeVisibility = imagePreviewNoticeVisibilityValue(
     env.DITOX_TUI_IMAGE_NOTICE ?? fileConfig.layout?.imagePreviewNoticeVisibility,
     defaultLayout.imagePreviewNoticeVisibility,
+  );
+  const imagePreviewNoticeSpacing = clampNumber(
+    envNumber(
+      env,
+      "DITOX_TUI_IMAGE_NOTICE_SPACING",
+      numberValue(fileConfig.layout?.imagePreviewNoticeSpacing, compactFallback("imagePreviewNoticeSpacing")),
+    ),
+    0,
+    4,
   );
   const layout: UiConfig = {
     compactMode,
@@ -1402,6 +1669,8 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
     ),
     imagePreviewRenderer,
     fullPreviewImageRenderer: imagePreviewRendererValue(env.DITOX_TUI_FULL_PREVIEW_IMAGE_RENDERER ?? fileConfig.layout?.fullPreviewImageRenderer, imagePreviewRenderer),
+    imagePreviewAlign,
+    fullPreviewImageAlign: imagePreviewAlignValue(env.DITOX_TUI_FULL_PREVIEW_IMAGE_ALIGN ?? fileConfig.layout?.fullPreviewImageAlign, imagePreviewAlign),
     imagePreviewBlockGlyph,
     fullPreviewImageBlockGlyph: glyphValue(env.DITOX_TUI_FULL_PREVIEW_IMAGE_BLOCK_GLYPH ?? fileConfig.layout?.fullPreviewImageBlockGlyph, imagePreviewBlockGlyph),
     imagePreviewBackground,
@@ -1410,6 +1679,16 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
     fullPreviewImageNoticeVisibility: imagePreviewNoticeVisibilityValue(
       env.DITOX_TUI_FULL_PREVIEW_IMAGE_NOTICE ?? fileConfig.layout?.fullPreviewImageNoticeVisibility,
       imagePreviewNoticeVisibility,
+    ),
+    imagePreviewNoticeSpacing,
+    fullPreviewImageNoticeSpacing: clampNumber(
+      envNumber(
+        env,
+        "DITOX_TUI_FULL_PREVIEW_IMAGE_NOTICE_SPACING",
+        numberValue(fileConfig.layout?.fullPreviewImageNoticeSpacing, imagePreviewNoticeSpacing),
+      ),
+      0,
+      4,
     ),
     headerHeight: clampNumber(numberValue(fileConfig.layout?.headerHeight, defaultLayout.headerHeight), 1, 6),
     statusHeight: clampNumber(numberValue(fileConfig.layout?.statusHeight, defaultLayout.statusHeight), 1, 3),
@@ -1426,14 +1705,13 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
     splitPaneWidthInset: clampNumber(numberValue(fileConfig.layout?.splitPaneWidthInset, compactFallback("splitPaneWidthInset")), 0, 20),
     fullPreviewWidthInset: clampNumber(numberValue(fileConfig.layout?.fullPreviewWidthInset, compactFallback("fullPreviewWidthInset")), 0, 20),
     previewTextWidthInset,
-    fullPreviewTextWidthInset: clampNumber(
-      envNumber(
-        env,
-        "DITOX_TUI_FULL_PREVIEW_TEXT_WIDTH_INSET",
-        numberValue(fileConfig.layout?.fullPreviewTextWidthInset, numberValue(fileConfig.layout?.previewTextWidthInset, compactFallback("fullPreviewTextWidthInset"))),
-      ),
-      0,
-      24,
+    fullPreviewTextWidthInset,
+    previewContentAlign,
+    fullPreviewContentAlign,
+    previewBodyVerticalAlign,
+    fullPreviewBodyVerticalAlign: verticalAlignValue(
+      env.DITOX_TUI_FULL_PREVIEW_BODY_VERTICAL_ALIGN ?? fileConfig.layout?.fullPreviewBodyVerticalAlign,
+      previewBodyVerticalAlign,
     ),
     imagePreviewRowInset,
     fullPreviewImageRowInset: clampNumber(
@@ -1457,6 +1735,11 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
       1,
       12,
     ),
+    previewGutterAlign,
+    fullPreviewGutterAlign: contentAlignValue(
+      env.DITOX_TUI_FULL_PREVIEW_GUTTER_ALIGN ?? fileConfig.layout?.fullPreviewGutterAlign,
+      previewGutterAlign,
+    ),
     previewLineSpacing: clampNumber(numberValue(fileConfig.layout?.previewLineSpacing, defaultLayout.previewLineSpacing), 0, 3),
     fullPreviewLineSpacing: clampNumber(numberValue(fileConfig.layout?.fullPreviewLineSpacing, defaultLayout.fullPreviewLineSpacing), 0, 3),
     previewMetaHeight: clampNumber(
@@ -1469,22 +1752,169 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
       1,
       4,
     ),
-    previewMetaHashLength: clampNumber(numberValue(fileConfig.layout?.previewMetaHashLength, defaultLayout.previewMetaHashLength), 6, 64),
+    previewMetaLineSpacing,
+    fullPreviewMetaLineSpacing,
+    previewMetaHashLength,
+    fullPreviewMetaHashLength,
     previewImageFields: previewImageFieldsValue(fileConfig.layout?.previewImageFields),
-    statusSeparatorPadding: clampNumber(numberValue(fileConfig.layout?.statusSeparatorPadding, compactFallback("statusSeparatorPadding")), 0, 6),
-    frameTitlePadding: clampNumber(numberValue(fileConfig.layout?.frameTitlePadding, compactFallback("frameTitlePadding")), 0, 4),
+    headerBrandMaxWidth: clampNumber(
+      envNumber(env, "DITOX_TUI_HEADER_BRAND_MAX_WIDTH", numberValue(fileConfig.layout?.headerBrandMaxWidth, defaultLayout.headerBrandMaxWidth)),
+      0,
+      200,
+    ),
+    headerFilterMaxWidth: clampNumber(
+      envNumber(env, "DITOX_TUI_HEADER_FILTER_MAX_WIDTH", numberValue(fileConfig.layout?.headerFilterMaxWidth, defaultLayout.headerFilterMaxWidth)),
+      0,
+      200,
+    ),
+    headerQueryMaxWidth: clampNumber(
+      envNumber(env, "DITOX_TUI_HEADER_QUERY_MAX_WIDTH", numberValue(fileConfig.layout?.headerQueryMaxWidth, defaultLayout.headerQueryMaxWidth)),
+      0,
+      200,
+    ),
+    headerModeMaxWidth: clampNumber(
+      envNumber(env, "DITOX_TUI_HEADER_MODE_MAX_WIDTH", numberValue(fileConfig.layout?.headerModeMaxWidth, defaultLayout.headerModeMaxWidth)),
+      0,
+      200,
+    ),
+    statusSeparatorPadding,
+    statusSeparatorPaddingLeft,
+    statusSeparatorPaddingRight,
+    statusOperationMaxWidth: clampNumber(
+      envNumber(env, "DITOX_TUI_STATUS_OPERATION_MAX_WIDTH", numberValue(fileConfig.layout?.statusOperationMaxWidth, defaultLayout.statusOperationMaxWidth)),
+      0,
+      200,
+    ),
+    statusWatcherMaxWidth: clampNumber(
+      envNumber(env, "DITOX_TUI_STATUS_WATCHER_MAX_WIDTH", numberValue(fileConfig.layout?.statusWatcherMaxWidth, defaultLayout.statusWatcherMaxWidth)),
+      0,
+      200,
+    ),
+    statusHintMaxWidth: clampNumber(
+      envNumber(env, "DITOX_TUI_STATUS_HINT_MAX_WIDTH", numberValue(fileConfig.layout?.statusHintMaxWidth, defaultLayout.statusHintMaxWidth)),
+      0,
+      200,
+    ),
+    searchOverlayPromptMaxWidth: clampNumber(
+      envNumber(
+        env,
+        "DITOX_TUI_SEARCH_OVERLAY_PROMPT_MAX_WIDTH",
+        numberValue(fileConfig.layout?.searchOverlayPromptMaxWidth, defaultLayout.searchOverlayPromptMaxWidth),
+      ),
+      0,
+      200,
+    ),
+    searchOverlayQueryMaxWidth: clampNumber(
+      envNumber(
+        env,
+        "DITOX_TUI_SEARCH_OVERLAY_QUERY_MAX_WIDTH",
+        numberValue(fileConfig.layout?.searchOverlayQueryMaxWidth, defaultLayout.searchOverlayQueryMaxWidth),
+      ),
+      0,
+      200,
+    ),
+    searchOverlayCursorMaxWidth: clampNumber(
+      envNumber(
+        env,
+        "DITOX_TUI_SEARCH_OVERLAY_CURSOR_MAX_WIDTH",
+        numberValue(fileConfig.layout?.searchOverlayCursorMaxWidth, defaultLayout.searchOverlayCursorMaxWidth),
+      ),
+      0,
+      200,
+    ),
+    dangerOverlayPromptMaxWidth: clampNumber(
+      envNumber(
+        env,
+        "DITOX_TUI_DANGER_OVERLAY_PROMPT_MAX_WIDTH",
+        numberValue(fileConfig.layout?.dangerOverlayPromptMaxWidth, defaultLayout.dangerOverlayPromptMaxWidth),
+      ),
+      0,
+      200,
+    ),
+    dangerOverlayHintMaxWidth: clampNumber(
+      envNumber(
+        env,
+        "DITOX_TUI_DANGER_OVERLAY_HINT_MAX_WIDTH",
+        numberValue(fileConfig.layout?.dangerOverlayHintMaxWidth, defaultLayout.dangerOverlayHintMaxWidth),
+      ),
+      0,
+      200,
+    ),
+    helpOverlayActionMaxWidth: clampNumber(
+      envNumber(
+        env,
+        "DITOX_TUI_HELP_OVERLAY_ACTION_MAX_WIDTH",
+        numberValue(fileConfig.layout?.helpOverlayActionMaxWidth, defaultLayout.helpOverlayActionMaxWidth),
+      ),
+      0,
+      200,
+    ),
+    frameTitlePadding,
+    frameTitlePaddingLeft,
+    frameTitlePaddingRight,
+    shellPaddingX: clampNumber(envNumber(env, "DITOX_TUI_SHELL_PADDING_X", numberValue(fileConfig.layout?.shellPaddingX, defaultLayout.shellPaddingX)), 0, 6),
+    shellPaddingY: clampNumber(envNumber(env, "DITOX_TUI_SHELL_PADDING_Y", numberValue(fileConfig.layout?.shellPaddingY, defaultLayout.shellPaddingY)), 0, 4),
     headerPaddingX: clampNumber(numberValue(fileConfig.layout?.headerPaddingX, defaultLayout.headerPaddingX), 0, 4),
     headerPaddingY: clampNumber(numberValue(fileConfig.layout?.headerPaddingY, defaultLayout.headerPaddingY), 0, 3),
     statusPaddingX: clampNumber(numberValue(fileConfig.layout?.statusPaddingX, defaultLayout.statusPaddingX), 0, 4),
     statusPaddingY: clampNumber(numberValue(fileConfig.layout?.statusPaddingY, defaultLayout.statusPaddingY), 0, 3),
+    headerContentAlign: contentAlignValue(env.DITOX_TUI_HEADER_CONTENT_ALIGN ?? fileConfig.layout?.headerContentAlign, defaultLayout.headerContentAlign),
+    statusContentAlign: contentAlignValue(env.DITOX_TUI_STATUS_CONTENT_ALIGN ?? fileConfig.layout?.statusContentAlign, defaultLayout.statusContentAlign),
+    headerVerticalAlign: verticalAlignValue(env.DITOX_TUI_HEADER_VERTICAL_ALIGN ?? fileConfig.layout?.headerVerticalAlign, defaultLayout.headerVerticalAlign),
+    statusVerticalAlign: verticalAlignValue(env.DITOX_TUI_STATUS_VERTICAL_ALIGN ?? fileConfig.layout?.statusVerticalAlign, defaultLayout.statusVerticalAlign),
     overlayPaddingX,
     overlayPaddingY,
+    overlayContentAlign,
+    overlayVerticalAlign,
+    overlayLineSpacing,
     searchOverlayPaddingX: clampNumber(numberValue(fileConfig.layout?.searchOverlayPaddingX, overlayPaddingX), 0, 4),
     searchOverlayPaddingY: clampNumber(numberValue(fileConfig.layout?.searchOverlayPaddingY, overlayPaddingY), 0, 3),
+    searchOverlayContentAlign: contentAlignValue(env.DITOX_TUI_SEARCH_OVERLAY_CONTENT_ALIGN ?? fileConfig.layout?.searchOverlayContentAlign, overlayContentAlign),
+    searchOverlayVerticalAlign: verticalAlignValue(
+      env.DITOX_TUI_SEARCH_OVERLAY_VERTICAL_ALIGN ?? fileConfig.layout?.searchOverlayVerticalAlign,
+      overlayVerticalAlign,
+    ),
+    searchOverlayLineSpacing: clampNumber(
+      envNumber(
+        env,
+        "DITOX_TUI_SEARCH_OVERLAY_LINE_SPACING",
+        numberValue(fileConfig.layout?.searchOverlayLineSpacing, overlayLineSpacing),
+      ),
+      0,
+      3,
+    ),
     dangerOverlayPaddingX: clampNumber(numberValue(fileConfig.layout?.dangerOverlayPaddingX, overlayPaddingX), 0, 4),
     dangerOverlayPaddingY: clampNumber(numberValue(fileConfig.layout?.dangerOverlayPaddingY, overlayPaddingY), 0, 3),
+    dangerOverlayContentAlign: contentAlignValue(env.DITOX_TUI_DANGER_OVERLAY_CONTENT_ALIGN ?? fileConfig.layout?.dangerOverlayContentAlign, overlayContentAlign),
+    dangerOverlayVerticalAlign: verticalAlignValue(
+      env.DITOX_TUI_DANGER_OVERLAY_VERTICAL_ALIGN ?? fileConfig.layout?.dangerOverlayVerticalAlign,
+      overlayVerticalAlign,
+    ),
+    dangerOverlayLineSpacing: clampNumber(
+      envNumber(
+        env,
+        "DITOX_TUI_DANGER_OVERLAY_LINE_SPACING",
+        numberValue(fileConfig.layout?.dangerOverlayLineSpacing, overlayLineSpacing),
+      ),
+      0,
+      3,
+    ),
     helpOverlayPaddingX: clampNumber(numberValue(fileConfig.layout?.helpOverlayPaddingX, overlayPaddingX), 0, 4),
     helpOverlayPaddingY: clampNumber(numberValue(fileConfig.layout?.helpOverlayPaddingY, overlayPaddingY), 0, 3),
+    helpOverlayContentAlign: contentAlignValue(env.DITOX_TUI_HELP_OVERLAY_CONTENT_ALIGN ?? fileConfig.layout?.helpOverlayContentAlign, overlayContentAlign),
+    helpOverlayVerticalAlign: verticalAlignValue(
+      env.DITOX_TUI_HELP_OVERLAY_VERTICAL_ALIGN ?? fileConfig.layout?.helpOverlayVerticalAlign,
+      overlayVerticalAlign,
+    ),
+    helpOverlayLineSpacing: clampNumber(
+      envNumber(
+        env,
+        "DITOX_TUI_HELP_OVERLAY_LINE_SPACING",
+        numberValue(fileConfig.layout?.helpOverlayLineSpacing, overlayLineSpacing),
+      ),
+      0,
+      3,
+    ),
     listPaddingX: clampNumber(numberValue(fileConfig.layout?.listPaddingX, panelPaddingX), 0, 4),
     listPaddingY: clampNumber(numberValue(fileConfig.layout?.listPaddingY, panelPaddingY), 0, 2),
     previewPaddingX: clampNumber(numberValue(fileConfig.layout?.previewPaddingX, panelPaddingX), 0, 4),
@@ -1499,14 +1929,64 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
       4,
     ),
     fullPreviewMetaPaddingY: clampNumber(numberValue(fileConfig.layout?.fullPreviewMetaPaddingY, compactFallback("fullPreviewMetaPaddingY")), 0, 2),
+    previewMetaContentAlign: contentAlignValue(
+      env.DITOX_TUI_PREVIEW_META_CONTENT_ALIGN ?? fileConfig.layout?.previewMetaContentAlign,
+      previewContentAlign,
+    ),
+    fullPreviewMetaContentAlign: contentAlignValue(
+      env.DITOX_TUI_FULL_PREVIEW_META_CONTENT_ALIGN ?? fileConfig.layout?.fullPreviewMetaContentAlign,
+      fullPreviewContentAlign,
+    ),
+    previewMetaVerticalAlign: verticalAlignValue(
+      env.DITOX_TUI_PREVIEW_META_VERTICAL_ALIGN ?? fileConfig.layout?.previewMetaVerticalAlign,
+      defaultLayout.previewMetaVerticalAlign,
+    ),
+    fullPreviewMetaVerticalAlign: verticalAlignValue(
+      env.DITOX_TUI_FULL_PREVIEW_META_VERTICAL_ALIGN ?? fileConfig.layout?.fullPreviewMetaVerticalAlign,
+      verticalAlignValue(
+        env.DITOX_TUI_PREVIEW_META_VERTICAL_ALIGN ?? fileConfig.layout?.previewMetaVerticalAlign,
+        defaultLayout.previewMetaVerticalAlign,
+      ),
+    ),
     emptyStatePaddingX: clampNumber(numberValue(fileConfig.layout?.emptyStatePaddingX, compactFallback("emptyStatePaddingX")), 0, 4),
     emptyStatePaddingY: clampNumber(numberValue(fileConfig.layout?.emptyStatePaddingY, compactFallback("emptyStatePaddingY")), 0, 2),
+    emptyStateContentAlign,
+    emptyStateTitleAlign: contentAlignValue(
+      env.DITOX_TUI_EMPTY_STATE_TITLE_ALIGN ?? fileConfig.layout?.emptyStateTitleAlign,
+      emptyStateContentAlign,
+    ),
+    emptyStateHelpAlign: contentAlignValue(
+      env.DITOX_TUI_EMPTY_STATE_HELP_ALIGN ?? fileConfig.layout?.emptyStateHelpAlign,
+      emptyStateContentAlign,
+    ),
+    emptyStateVerticalAlign: verticalAlignValue(
+      env.DITOX_TUI_EMPTY_STATE_VERTICAL_ALIGN ?? fileConfig.layout?.emptyStateVerticalAlign,
+      defaultLayout.emptyStateVerticalAlign,
+    ),
+    emptyStateLineSpacing: clampNumber(
+      envNumber(env, "DITOX_TUI_EMPTY_STATE_LINE_SPACING", numberValue(fileConfig.layout?.emptyStateLineSpacing, defaultLayout.emptyStateLineSpacing)),
+      0,
+      4,
+    ),
     helpKeyWidth: clampNumber(numberValue(fileConfig.layout?.helpKeyWidth, compactFallback("helpKeyWidth")), 8, 48),
+    helpKeyAlign: contentAlignValue(env.DITOX_TUI_HELP_KEY_ALIGN ?? fileConfig.layout?.helpKeyAlign, defaultLayout.helpKeyAlign),
     confirmHintIndent: clampNumber(numberValue(fileConfig.layout?.confirmHintIndent, defaultLayout.confirmHintIndent), 0, 8),
+    rowContentAlign: contentAlignValue(env.DITOX_TUI_ROW_CONTENT_ALIGN ?? fileConfig.layout?.rowContentAlign, defaultLayout.rowContentAlign),
+    rowMetadataAlign: contentAlignValue(env.DITOX_TUI_ROW_METADATA_ALIGN ?? fileConfig.layout?.rowMetadataAlign, defaultLayout.rowMetadataAlign),
+    rowPreviewAlign: contentAlignValue(env.DITOX_TUI_ROW_PREVIEW_ALIGN ?? fileConfig.layout?.rowPreviewAlign, defaultLayout.rowPreviewAlign),
     rowAgeWidth: clampNumber(numberValue(fileConfig.layout?.rowAgeWidth, defaultLayout.rowAgeWidth), 0, 12),
+    rowAgeAlign: contentAlignValue(env.DITOX_TUI_ROW_AGE_ALIGN ?? fileConfig.layout?.rowAgeAlign, defaultLayout.rowAgeAlign),
     rowSizeWidth: clampNumber(numberValue(fileConfig.layout?.rowSizeWidth, compactFallback("rowSizeWidth")), 0, 16),
+    rowSizeAlign: contentAlignValue(env.DITOX_TUI_ROW_SIZE_ALIGN ?? fileConfig.layout?.rowSizeAlign, defaultLayout.rowSizeAlign),
     rowPinnedWidth: clampNumber(numberValue(fileConfig.layout?.rowPinnedWidth, defaultLayout.rowPinnedWidth), 0, 12),
+    rowPinnedAlign: contentAlignValue(env.DITOX_TUI_ROW_PINNED_ALIGN ?? fileConfig.layout?.rowPinnedAlign, defaultLayout.rowPinnedAlign),
     rowMetaHashLength: clampNumber(numberValue(fileConfig.layout?.rowMetaHashLength, defaultLayout.rowMetaHashLength), 4, 64),
+    rowMarkerWidth: clampNumber(
+      envNumber(env, "DITOX_TUI_ROW_MARKER_WIDTH", numberValue(fileConfig.layout?.rowMarkerWidth, defaultLayout.rowMarkerWidth)),
+      0,
+      12,
+    ),
+    rowMarkerAlign: contentAlignValue(env.DITOX_TUI_ROW_MARKER_ALIGN ?? fileConfig.layout?.rowMarkerAlign, defaultLayout.rowMarkerAlign),
     rowMarkerGap: clampNumber(numberValue(fileConfig.layout?.rowMarkerGap, defaultLayout.rowMarkerGap), 0, 4),
     rowMetaPreviewGap: clampNumber(numberValue(fileConfig.layout?.rowMetaPreviewGap, compactFallback("rowMetaPreviewGap")), 0, 8),
     rowPreviewReservedWidth: clampNumber(
@@ -1538,6 +2018,8 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
       1,
       4,
     ),
+    scrollbarPlacement: scrollbarPlacementValue(env.DITOX_TUI_SCROLLBAR_PLACEMENT ?? fileConfig.layout?.scrollbarPlacement, defaultLayout.scrollbarPlacement),
+    scrollbarAlign: contentAlignValue(env.DITOX_TUI_SCROLLBAR_ALIGN ?? fileConfig.layout?.scrollbarAlign, defaultLayout.scrollbarAlign),
     showMetadata,
     showRowMetadata: envBool(env, "DITOX_TUI_ROW_METADATA", boolValue(fileConfig.layout?.showRowMetadata, defaultLayout.showRowMetadata)),
     showPreviewPane: envBool(env, "DITOX_TUI_PREVIEW_PANE", boolValue(fileConfig.layout?.showPreviewPane, defaultLayout.showPreviewPane)),
@@ -1583,6 +2065,9 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
   }
   if (fileConfig.labels?.fullImagePreviewSourceTemplate === undefined && fileConfig.labels?.imagePreviewSourceTemplate !== undefined) {
     labels.fullImagePreviewSourceTemplate = labels.imagePreviewSourceTemplate;
+  }
+  if (fileConfig.labels?.fullPreviewMetaHeaderTemplate === undefined && fileConfig.labels?.fullPreviewMetaTemplate !== undefined) {
+    labels.fullPreviewMetaHeaderTemplate = labels.fullPreviewMetaTemplate;
   }
 
   return {
@@ -1636,9 +2121,10 @@ export function keyDisplay(keys: string[], labels: Pick<TuiLabels, "keyAlternati
   return keys.map((key) => displayKey(key, keyLabels)).join(labels.keyAlternativeSeparator);
 }
 
-export function paddedTitle(value: string, padding: number): string {
-  const pad = " ".repeat(Math.max(0, Math.floor(padding)));
-  return `${pad}${value}${pad}`;
+export function paddedTitle(value: string, paddingLeft: number, paddingRight = paddingLeft): string {
+  const left = " ".repeat(Math.max(0, Math.floor(paddingLeft)));
+  const right = " ".repeat(Math.max(0, Math.floor(paddingRight)));
+  return `${left}${value}${right}`;
 }
 
 export function helpRows(config: ResolvedTuiConfig): Array<{ keys: string; action: string }> {
@@ -2166,6 +2652,26 @@ function imagePreviewRendererValue(value: unknown, fallback: ImagePreviewRendere
   return fallback;
 }
 
+function imagePreviewAlignValue(value: unknown, fallback: ImagePreviewAlign): ImagePreviewAlign {
+  if ((imagePreviewAlignNames as readonly unknown[]).includes(value)) return value as ImagePreviewAlign;
+  return fallback;
+}
+
+function contentAlignValue(value: unknown, fallback: ContentAlign): ContentAlign {
+  if ((titleAlignmentNames as readonly unknown[]).includes(value)) return value as ContentAlign;
+  return fallback;
+}
+
+function verticalAlignValue(value: unknown, fallback: VerticalAlign): VerticalAlign {
+  if ((verticalAlignNames as readonly unknown[]).includes(value)) return value as VerticalAlign;
+  return fallback;
+}
+
+function scrollbarPlacementValue(value: unknown, fallback: ScrollbarPlacement): ScrollbarPlacement {
+  if ((scrollbarPlacementNames as readonly unknown[]).includes(value)) return value as ScrollbarPlacement;
+  return fallback;
+}
+
 function overlayPlacementValue(value: unknown, fallback: OverlayPlacement): OverlayPlacement {
   if ((overlayPlacementNames as readonly unknown[]).includes(value)) return value as OverlayPlacement;
   return fallback;
@@ -2227,6 +2733,7 @@ function mergeChrome(chrome: Partial<TuiChromeConfig> | undefined): TuiChromeCon
     listBorder: boolValue(chrome?.listBorder, panelBorder),
     previewBorder: boolValue(chrome?.previewBorder, panelBorder),
     fullPreviewBorder: boolValue(chrome?.fullPreviewBorder, panelBorder),
+    statusBorder: boolValue(chrome?.statusBorder, defaultChrome.statusBorder),
     searchOverlayBorder: boolValue(chrome?.searchOverlayBorder, overlayBorder),
     dangerOverlayBorder: boolValue(chrome?.dangerOverlayBorder, overlayBorder),
     helpOverlayBorder: boolValue(chrome?.helpOverlayBorder, overlayBorder),
@@ -2236,6 +2743,7 @@ function mergeChrome(chrome: Partial<TuiChromeConfig> | undefined): TuiChromeCon
     showListTitle: boolValue(chrome?.showListTitle, showPanelTitles),
     showPreviewTitle: boolValue(chrome?.showPreviewTitle, showPanelTitles),
     showFullPreviewTitle: boolValue(chrome?.showFullPreviewTitle, showPanelTitles),
+    showStatusTitle: boolValue(chrome?.showStatusTitle, defaultChrome.showStatusTitle),
     showSearchOverlayTitle: boolValue(chrome?.showSearchOverlayTitle, showOverlayTitles),
     showDangerOverlayTitle: boolValue(chrome?.showDangerOverlayTitle, showOverlayTitles),
     showHelpOverlayTitle: boolValue(chrome?.showHelpOverlayTitle, showOverlayTitles),
@@ -2248,6 +2756,7 @@ function mergeChrome(chrome: Partial<TuiChromeConfig> | undefined): TuiChromeCon
     listBorderStyle: borderStyle(chrome?.listBorderStyle, panelBorderStyle),
     previewBorderStyle: borderStyle(chrome?.previewBorderStyle, panelBorderStyle),
     fullPreviewBorderStyle: borderStyle(chrome?.fullPreviewBorderStyle, panelBorderStyle),
+    statusBorderStyle: borderStyle(chrome?.statusBorderStyle, defaultChrome.statusBorderStyle),
     searchOverlayBorderStyle: borderStyle(chrome?.searchOverlayBorderStyle, overlayBorderStyle),
     dangerOverlayBorderStyle: borderStyle(chrome?.dangerOverlayBorderStyle, overlayBorderStyle),
     helpOverlayBorderStyle: borderStyle(chrome?.helpOverlayBorderStyle, overlayBorderStyle),
@@ -2258,6 +2767,7 @@ function mergeChrome(chrome: Partial<TuiChromeConfig> | undefined): TuiChromeCon
     listTitleAlignment: titleAlignment(chrome?.listTitleAlignment, panelTitleAlignment),
     previewTitleAlignment: titleAlignment(chrome?.previewTitleAlignment, panelTitleAlignment),
     fullPreviewTitleAlignment: titleAlignment(chrome?.fullPreviewTitleAlignment, panelTitleAlignment),
+    statusTitleAlignment: titleAlignment(chrome?.statusTitleAlignment, defaultChrome.statusTitleAlignment),
     listBottomTitleAlignment: titleAlignment(chrome?.listBottomTitleAlignment, panelBottomTitleAlignment),
     previewBottomTitleAlignment: titleAlignment(chrome?.previewBottomTitleAlignment, panelBottomTitleAlignment),
     fullPreviewBottomTitleAlignment: titleAlignment(chrome?.fullPreviewBottomTitleAlignment, panelBottomTitleAlignment),
@@ -2448,6 +2958,10 @@ function mergePreviewContentTones(previewContentTones: TuiConfigFile["previewCon
   for (const part of previewContentPartNames) {
     const tone = previewContentTones[part];
     if (isStatusLineToneName(tone)) merged[part] = tone;
+  }
+  if (isStatusLineToneName(previewContentTones.fullMeta)) {
+    if (previewContentTones.fullMetaHeader === undefined) merged.fullMetaHeader = previewContentTones.fullMeta;
+    if (previewContentTones.fullMetaDetails === undefined) merged.fullMetaDetails = previewContentTones.fullMeta;
   }
   return merged;
 }

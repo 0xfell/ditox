@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
-import { EntryList } from "./components/EntryList";
+import { EntryList, entryMouseSelectionOptions } from "./components/EntryList";
 import { HeaderBar } from "./components/HeaderBar";
 import { PreviewPane } from "./components/PreviewPane";
 import { Shell } from "./components/Shell";
@@ -18,6 +18,15 @@ import { resolveTuiConfig, surface } from "./tui-config";
 import type { Entry } from "./types";
 
 describe("OpenTUI render snapshots", () => {
+  test("maps mouse row gestures to selection intents", () => {
+    expect(entryMouseSelectionOptions({ button: 0 })).toEqual({ extend: false, toggle: false });
+    expect(entryMouseSelectionOptions({ button: 0, modifiers: { shift: true } })).toEqual({ extend: true, toggle: false });
+    expect(entryMouseSelectionOptions({ button: 0, modifiers: { ctrl: true } })).toEqual({ extend: false, toggle: true });
+    expect(entryMouseSelectionOptions({ button: 2 })).toEqual({ extend: false, toggle: true });
+    expect(entryMouseSelectionOptions({ button: "right" })).toEqual({ extend: false, toggle: true });
+    expect(entryMouseSelectionOptions({ button: 1 })).toBeNull();
+  });
+
   test("renders the main shell with history, preview, and status surfaces", async () => {
     const config = resolveTuiConfig({
       labels: {
@@ -94,6 +103,125 @@ describe("OpenTUI render snapshots", () => {
     expect(frame).toContain("hello from ditox");
     expect(frame).toContain("watcher live");
     expect(frame).toContain("copied");
+  });
+
+  test("aligns header and status line content from layout config", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        brand: "HDR",
+        headerLineTemplate: "{brand}",
+        statusLineTemplate: "{operation}",
+      },
+      chrome: {
+        headerBorder: false,
+      },
+      layout: {
+        headerHeight: 1,
+        statusHeight: 1,
+        headerPaddingX: 0,
+        statusPaddingX: 0,
+        headerContentAlign: "center",
+        statusContentAlign: "right",
+      },
+    });
+    const state = initialState();
+    const frame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <HeaderBar config={config} state={state} selectedCount={0} />
+          <box flexGrow={1} />
+          <StatusLine config={config} status="STS" watcher={null} width={20} />
+        </Shell>
+      ),
+      20,
+      4,
+    );
+
+    expect(columnOf(frame, "HDR")).toBe(8);
+    expect(columnOf(frame, "STS")).toBe(17);
+  });
+
+  test("can vertically align taller header and status bars", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        brand: "HDR",
+        headerLineTemplate: "{brand}",
+        statusLineTemplate: "{operation}",
+      },
+      chrome: {
+        headerBorder: false,
+      },
+      layout: {
+        headerHeight: 3,
+        statusHeight: 3,
+        headerPaddingX: 0,
+        headerPaddingY: 0,
+        statusPaddingX: 0,
+        statusPaddingY: 0,
+        headerVerticalAlign: "bottom",
+        statusVerticalAlign: "center",
+      },
+    });
+    const state = initialState();
+    const frame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <HeaderBar config={config} state={state} selectedCount={0} />
+          <box flexGrow={1} />
+          <StatusLine config={config} status="STS" watcher={null} width={20} />
+        </Shell>
+      ),
+      20,
+      8,
+    );
+
+    expect(lineIndex(frame, "HDR")).toBe(2);
+    expect(lineIndex(frame, "STS")).toBe(6);
+  });
+
+  test("renders optional status line chrome", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        statusTitle: "STATE",
+        statusLineTemplate: "{operation}",
+      },
+      chrome: {
+        statusBorder: true,
+        showStatusTitle: true,
+        statusBorderStyle: "single",
+        statusTitleAlignment: "right",
+      },
+      layout: {
+        statusHeight: 3,
+        statusPaddingX: 1,
+        statusPaddingY: 0,
+      },
+      styles: {
+        status: { border: "#abcdef" },
+      },
+    });
+    const frame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <StatusLine config={config} status="READY" watcher={null} width={28} />
+        </Shell>
+      ),
+      32,
+      5,
+    );
+    const spans = await captureSpans(
+      () => (
+        <Shell config={config}>
+          <StatusLine config={config} status="READY" watcher={null} width={28} />
+        </Shell>
+      ),
+      32,
+      5,
+    );
+
+    expect(frame).toContain("STATE");
+    expect(frame).toContain("READY");
+    expect(colorHex(findSpan(spans, "STATE"))).toBe("#abcdef");
   });
 
   test("applies per-surface semantic color overrides in rendered spans", async () => {
@@ -208,7 +336,8 @@ describe("OpenTUI render snapshots", () => {
         statusSeparator: "/",
       },
       layout: {
-        statusSeparatorPadding: 0,
+        statusSeparatorPaddingLeft: 1,
+        statusSeparatorPaddingRight: 2,
       },
       styles: {
         header: { search: "#123456", favorite: "#654321" },
@@ -245,8 +374,8 @@ describe("OpenTUI render snapshots", () => {
     );
 
     expect(frame).toContain("needle <- DX [SAVED] selected 2");
-    expect(frame).toContain("copied/watcher live");
-    expect(frame).toContain("/:search");
+    expect(frame).toContain("copied /  watcher live");
+    expect(frame).toContain(" /  /:search");
 
     const spans = await captureSpans(
       () => (
@@ -261,6 +390,139 @@ describe("OpenTUI render snapshots", () => {
     expect(colorHex(findSpan(spans, "needle"))).toBe("#123456");
     expect(colorHex(findSpan(spans, "SAVED"))).toBe("#654321");
     expect(colorHex(findSpan(spans, "copied"))).toBe("#118855");
+  });
+
+  test("bounds header segments in narrow terminals", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        brand: "DITOX-BRAND-LONG",
+        headerLineTemplate: "{brand}|{filter}|{query}|{mode}",
+      },
+      chrome: {
+        headerBorder: false,
+      },
+      layout: {
+        headerHeight: 1,
+        headerPaddingX: 0,
+        headerBrandMaxWidth: 5,
+        headerFilterMaxWidth: 4,
+        headerQueryMaxWidth: 8,
+        headerModeMaxWidth: 6,
+      },
+    });
+    const state = {
+      ...initialState(),
+      filter: "images" as const,
+      query: "verylongsearchquery",
+    };
+
+    const frame = await captureFrame(
+      () => <HeaderBar config={config} state={state} selectedCount={3} width={24} />,
+      24,
+      1,
+    );
+
+    expect(frame).toContain("DI...|I...|ver...|sel...");
+    expect(frame).not.toContain("DITOX-BRAND-LONG");
+    expect(frame).not.toContain("verylongsearchquery");
+    expect(frame.split("\n")[0]?.length).toBe(24);
+  });
+
+  test("bounds status line segments in narrow terminals", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        statusHintTemplate: "{pasteKeys}:{paste}{separator}{copyKeys}:{copy}{separator}{searchKeys}:{search}",
+        statusLineTemplate: "{operation}{separator}{watcher}{separator}{hint}",
+      },
+      chrome: {
+        statusSeparator: "|",
+      },
+      layout: {
+        statusPaddingX: 0,
+        statusSeparatorPadding: 0,
+        statusOperationMaxWidth: 9,
+        statusWatcherMaxWidth: 8,
+        statusHintMaxWidth: 7,
+      },
+    });
+
+    const frame = await captureFrame(
+      () => <StatusLine config={config} status="operation-message-that-is-too-wide" watcher={null} width={28} />,
+      28,
+      1,
+    );
+
+    expect(frame).toContain("operat...");
+    expect(frame).toContain("watch...");
+    expect(frame).toContain("...");
+    expect(frame).not.toContain("operation-message-that-is-too-wide");
+    expect(frame).not.toContain("watcher stopped");
+    expect(frame.split("\n")[0]?.length).toBe(28);
+  });
+
+  test("bounds overlay copy in narrow terminals", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        searchInputTemplate: "{prompt}{query}{cursor}",
+        searchPrompt: "search-prompt:",
+        searchCursor: "cursor-long",
+        deleteOneTemplate: "{message}",
+        deleteOne: "delete prompt that cannot fit",
+        confirmHintTemplate: "{hint}",
+        confirmHint: "confirmation hint that cannot fit",
+        helpMoveSelection: "move selection action that cannot fit",
+      },
+      chrome: {
+        overlayBorder: false,
+      },
+      layout: {
+        searchOverlayHeight: 1,
+        confirmOverlayHeight: 2,
+        helpOverlayHeight: 8,
+        searchOverlayPaddingX: 0,
+        dangerOverlayPaddingX: 0,
+        helpOverlayPaddingX: 0,
+        searchOverlayPromptMaxWidth: 6,
+        searchOverlayQueryMaxWidth: 8,
+        searchOverlayCursorMaxWidth: 4,
+        dangerOverlayPromptMaxWidth: 10,
+        dangerOverlayHintMaxWidth: 9,
+        helpOverlayActionMaxWidth: 12,
+        helpKeyWidth: 8,
+      },
+    });
+
+    const searchFrame = await captureFrame(
+      () => <ModeOverlay config={config} state={{ ...initialState(), mode: "search" as const, query: "verylongquery" }} width={20} />,
+      20,
+      1,
+    );
+    expect(searchFrame).toContain("sea...");
+    expect(searchFrame).toContain("veryl...");
+    expect(searchFrame).toContain("c...");
+    expect(searchFrame).not.toContain("search-prompt");
+    expect(searchFrame).not.toContain("verylongquery");
+
+    const deleteFrame = await captureFrame(
+      () => <ModeOverlay config={config} state={{ ...initialState(), mode: "confirm-delete" as const }} width={20} />,
+      20,
+      2,
+    );
+    expect(deleteFrame).toContain("delete ...");
+    expect(deleteFrame).toContain("confir...");
+    expect(deleteFrame).not.toContain("delete prompt that cannot fit");
+    expect(deleteFrame).not.toContain("confirmation hint that cannot fit");
+
+    const helpFrame = await captureFrame(
+      () => <ModeOverlay config={config} state={{ ...initialState(), mode: "help" as const }} width={22} />,
+      22,
+      8,
+    );
+    expect(helpFrame).toContain("move sele...");
+    expect(helpFrame).not.toContain("move selection action that cannot fit");
+    expectFrameWithin(searchFrame, 20, 1);
+    expectFrameWithin(deleteFrame, 20, 2);
+    expectFrameWithin(helpFrame, 22, 8);
   });
 
   test("routes status line placeholder tones from config", async () => {
@@ -801,6 +1063,155 @@ describe("OpenTUI render snapshots", () => {
     expect(lineIndex(bottomFrame, "STATUS")).toBeLessThan(lineIndex(bottomFrame, "search"));
   });
 
+  test("renders shell padding as an outer TUI inset", async () => {
+    const config = resolveTuiConfig({ layout: { shellPaddingX: 2, shellPaddingY: 1 } });
+    const frame = await captureFrame(
+      () => (
+        <AppFrame
+          config={config}
+          content={
+            <box height={1}>
+              <text>PADDED</text>
+            </box>
+          }
+        />
+      ),
+      20,
+      5,
+    );
+
+    expect(lineIndex(frame, "PADDED")).toBe(1);
+    expect(columnOf(frame, "PADDED")).toBe(2);
+  });
+
+  test("aligns overlay content independently from overlay titles", async () => {
+    const config = resolveTuiConfig({
+      helpOrder: ["paste"],
+      labels: {
+        searchInputTemplate: "{query}",
+        deleteOneTemplate: "DANGER",
+        helpPaste: "HELP",
+      },
+      keyBindings: {
+        copyPaste: "h",
+      },
+      chrome: {
+        searchOverlayBorder: false,
+        dangerOverlayBorder: false,
+        helpOverlayBorder: false,
+      },
+      layout: {
+        searchOverlayHeight: 1,
+        confirmOverlayHeight: 1,
+        helpOverlayHeight: 1,
+        overlayPaddingX: 0,
+        searchOverlayContentAlign: "center",
+        dangerOverlayContentAlign: "right",
+        helpOverlayContentAlign: "right",
+        helpKeyWidth: 1,
+      },
+    });
+    const searchState = { ...initialState(), mode: "search" as const, query: "SEARCH" };
+
+    const searchFrame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <ModeOverlay config={config} state={searchState} />
+        </Shell>
+      ),
+      40,
+      3,
+    );
+    expect(columnOf(searchFrame, "SEARCH")).toBe(17);
+
+    const dangerFrame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <ModeOverlay config={config} state={{ ...initialState(), mode: "confirm-delete" as const }} />
+        </Shell>
+      ),
+      40,
+      3,
+    );
+    expect(columnOf(dangerFrame, "DANGER")).toBe(34);
+
+    const helpFrame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <ModeOverlay config={config} state={{ ...initialState(), mode: "help" as const }} />
+        </Shell>
+      ),
+      40,
+      3,
+    );
+    expect(columnOf(helpFrame, "HELP")).toBe(36);
+  });
+
+  test("can vertically align overlay body content", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        searchInputTemplate: "{query}",
+      },
+      chrome: {
+        searchOverlayBorder: false,
+      },
+      layout: {
+        searchOverlayHeight: 5,
+        searchOverlayPaddingX: 0,
+        searchOverlayPaddingY: 0,
+        searchOverlayVerticalAlign: "bottom",
+      },
+    });
+    const frame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <ModeOverlay config={config} state={{ ...initialState(), mode: "search" as const, query: "LOW" }} />
+        </Shell>
+      ),
+      24,
+      6,
+    );
+
+    expect(lineIndex(frame, "LOW")).toBe(4);
+    expect(columnOf(frame, "LOW")).toBe(0);
+  });
+
+  test("can space multi-line overlay body rows", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        clearPromptTemplate: "FIRST",
+        clearPinnedUnsafeHint: "SECOND",
+        confirmHintTemplate: "{hint}",
+        confirmHint: "THIRD",
+      },
+      chrome: {
+        dangerOverlayBorder: false,
+      },
+      layout: {
+        clearOverlayHeight: 5,
+        dangerOverlayPaddingX: 0,
+        dangerOverlayPaddingY: 0,
+        dangerOverlayLineSpacing: 1,
+      },
+    });
+    const frame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <ModeOverlay
+            config={config}
+            state={{ ...initialState(), mode: "confirm-clear" as const, clearKind: "all", clearPreserveFavorites: false }}
+          />
+        </Shell>
+      ),
+      24,
+      6,
+    );
+
+    expect(lineIndex(frame, "FIRST")).toBe(0);
+    expect(lineIndex(frame, "SECOND")).toBe(2);
+    expect(lineIndex(frame, "THIRD")).toBe(4);
+  });
+
   test("renders independently configured panel and overlay padding", async () => {
     const entries = [textEntry(1, "PADDED-ROW", false)];
     const state = { ...initialState(), entries, selectedIndex: 0, query: "PADDED-QUERY", mode: "search" as const };
@@ -1287,6 +1698,183 @@ describe("OpenTUI render snapshots", () => {
     expect(lineIndex(fullFrame, "full padded body") - lineIndex(fullFrame, "FULL-META")).toBe(2);
   });
 
+  test("can space split and full preview metadata rows", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        previewMetaHeaderTemplate: "SPLIT-META",
+        previewMetaDetailsTemplate: "SPLIT-DETAIL",
+        fullPreviewMetaHeaderTemplate: "FULL-META",
+        fullPreviewMetaDetailsTemplate: "FULL-DETAIL",
+      },
+      chrome: {
+        previewBorder: false,
+        fullPreviewBorder: false,
+      },
+      layout: {
+        previewMetaHeight: 3,
+        fullPreviewMetaHeight: 3,
+        previewMetaLineSpacing: 1,
+        fullPreviewMetaLineSpacing: 1,
+        showPreviewGutter: false,
+        showFullPreviewGutter: false,
+        fullPreviewScrollInsetRows: 0,
+      },
+    });
+    const entry = textEntry(93, "metadata spacing body", false);
+
+    const splitFrame = await captureFrame(
+      () => <PreviewPane config={config} entry={entry} rows={5} width={44} widthPercent={100} />,
+      44,
+      5,
+    );
+    expect(lineIndex(splitFrame, "SPLIT-DETAIL") - lineIndex(splitFrame, "SPLIT-META")).toBe(2);
+    expect(lineIndex(splitFrame, "metadata spacing body") - lineIndex(splitFrame, "SPLIT-DETAIL")).toBe(1);
+
+    const fullFrame = await captureFrame(
+      () => <FullPreview config={config} entry={entry} rows={5} width={44} offset={0} onScroll={() => {}} />,
+      44,
+      5,
+    );
+    expect(lineIndex(fullFrame, "FULL-DETAIL") - lineIndex(fullFrame, "FULL-META")).toBe(2);
+    expect(lineIndex(fullFrame, "metadata spacing body") - lineIndex(fullFrame, "FULL-DETAIL")).toBe(1);
+  });
+
+  test("aligns split and full preview content and metadata independently", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        previewMetaHeaderTemplate: "META",
+        previewMetaDetailsTemplate: "DETAIL",
+        fullPreviewMetaHeaderTemplate: "FMETA",
+        fullPreviewMetaDetailsTemplate: "FDETAIL",
+      },
+      chrome: {
+        previewBorder: false,
+        fullPreviewBorder: false,
+      },
+      layout: {
+        showPreviewGutter: false,
+        showFullPreviewGutter: false,
+        previewPaddingX: 0,
+        fullPreviewPaddingX: 0,
+        previewMetaPaddingX: 0,
+        fullPreviewMetaPaddingX: 0,
+        previewMetaHeight: 2,
+        fullPreviewMetaHeight: 1,
+        fullPreviewScrollInsetRows: 0,
+        previewContentAlign: "center",
+        fullPreviewContentAlign: "right",
+        previewMetaContentAlign: "right",
+        fullPreviewMetaContentAlign: "center",
+      },
+    });
+    const entry = textEntry(72, "BODY", false);
+
+    const splitFrame = await captureFrame(
+      () => <PreviewPane config={config} entry={entry} rows={4} width={40} widthPercent={100} />,
+      40,
+      4,
+    );
+    expect(columnOf(splitFrame, "META")).toBe(36);
+    expect(columnOf(splitFrame, "DETAIL")).toBe(34);
+    expect(columnOf(splitFrame, "BODY")).toBe(18);
+
+    const fullFrame = await captureFrame(
+      () => <FullPreview config={config} entry={entry} rows={3} width={40} offset={0} onScroll={() => {}} />,
+      40,
+      3,
+    );
+    expect(columnOf(fullFrame, "FMETA")).toBe(17);
+    expect(columnOf(fullFrame, "BODY")).toBe(36);
+  });
+
+  test("can vertically align split and full preview metadata", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        previewMetaHeaderTemplate: "META",
+        previewMetaDetailsTemplate: "DETAIL",
+        fullPreviewMetaHeaderTemplate: "FMETA",
+        fullPreviewMetaDetailsTemplate: "FDETAIL",
+      },
+      chrome: {
+        previewBorder: false,
+        fullPreviewBorder: false,
+      },
+      layout: {
+        showPreviewGutter: false,
+        showFullPreviewGutter: false,
+        previewMetaPaddingX: 0,
+        previewMetaPaddingY: 0,
+        fullPreviewMetaPaddingX: 0,
+        fullPreviewMetaPaddingY: 0,
+        previewMetaHeight: 4,
+        fullPreviewMetaHeight: 3,
+        previewMetaVerticalAlign: "bottom",
+        fullPreviewMetaVerticalAlign: "bottom",
+        fullPreviewScrollInsetRows: 0,
+      },
+    });
+    const entry = textEntry(73, "BODY", false);
+
+    const splitFrame = await captureFrame(
+      () => <PreviewPane config={config} entry={entry} rows={5} width={32} widthPercent={100} />,
+      32,
+      5,
+    );
+    expect(lineIndex(splitFrame, "META")).toBe(2);
+    expect(lineIndex(splitFrame, "DETAIL")).toBe(3);
+    expect(lineIndex(splitFrame, "BODY")).toBe(4);
+
+    const fullFrame = await captureFrame(
+      () => <FullPreview config={config} entry={entry} rows={4} width={32} offset={0} onScroll={() => {}} />,
+      32,
+      4,
+    );
+    expect(lineIndex(fullFrame, "FMETA")).toBe(1);
+    expect(lineIndex(fullFrame, "FDETAIL")).toBe(2);
+    expect(lineIndex(fullFrame, "BODY")).toBe(3);
+  });
+
+  test("can vertically align split and full preview body content", async () => {
+    const config = resolveTuiConfig({
+      chrome: {
+        previewBorder: false,
+        fullPreviewBorder: false,
+      },
+      layout: {
+        showMetadata: false,
+        showFullPreviewMetadata: false,
+        showPreviewGutter: false,
+        showFullPreviewGutter: false,
+        previewPaddingX: 0,
+        previewPaddingY: 0,
+        fullPreviewPaddingX: 0,
+        fullPreviewPaddingY: 0,
+        previewBodyVerticalAlign: "bottom",
+        fullPreviewBodyVerticalAlign: "bottom",
+        fullPreviewScrollInsetRows: 0,
+      },
+    });
+    const entry = textEntry(74, "BODY", false);
+
+    const splitFrame = await captureFrame(
+      () => (
+        <box height={5} flexDirection="row">
+          <PreviewPane config={config} entry={entry} rows={5} width={32} widthPercent={100} />
+        </box>
+      ),
+      32,
+      5,
+    );
+    expect(lineIndex(splitFrame, "BODY")).toBe(4);
+
+    const fullFrame = await captureFrame(
+      () => <FullPreview config={config} entry={entry} rows={5} width={32} offset={0} onScroll={() => {}} />,
+      32,
+      5,
+    );
+    expect(lineIndex(fullFrame, "BODY")).toBe(4);
+  });
+
   test("styles empty state and preview gutters independently", async () => {
     const config = resolveTuiConfig({
       labels: {
@@ -1381,6 +1969,44 @@ describe("OpenTUI render snapshots", () => {
       7,
     );
     expect(fullPreviewFrame).toContain("  1FGfull gutter content");
+  });
+
+  test("renders configurable text preview gutter templates", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        previewTextGutterTemplate: "L{line}",
+        previewGutterSeparator: "|",
+        fullPreviewGutterSeparator: ":",
+      },
+      layout: {
+        showMetadata: false,
+        showFullPreviewMetadata: false,
+        previewGutterWidth: 2,
+        fullPreviewGutterWidth: 2,
+      },
+    });
+
+    const splitFrame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <PreviewPane config={config} entry={textEntry(21, "alpha", false)} rows={4} width={36} />
+        </Shell>
+      ),
+      42,
+      6,
+    );
+    expect(splitFrame).toContain("L1|alpha");
+
+    const fullFrame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <FullPreview config={config} entry={textEntry(22, "alpha", false)} rows={4} width={36} offset={0} onScroll={() => {}} />
+        </Shell>
+      ),
+      42,
+      6,
+    );
+    expect(fullFrame).toContain("L1:alpha");
   });
 
   test("routes split preview content tones from config", async () => {
@@ -1480,7 +2106,8 @@ describe("OpenTUI render snapshots", () => {
     const config = resolveTuiConfig({
       labels: {
         previewModeTitle: "FULL-PREVIEW",
-        fullPreviewMetaTemplate: "FULL-META",
+        fullPreviewMetaHeaderTemplate: "FULL-META-H",
+        fullPreviewMetaDetailsTemplate: "FULL-META-D",
         previewGutterSeparator: "FULL-GAP",
         noEntryTitle: "FULL-EMPTY-TITLE",
         noEntryHelp: "FULL-EMPTY-HELP",
@@ -1492,6 +2119,7 @@ describe("OpenTUI render snapshots", () => {
         previewLineNumberWidth: 1,
         previewGutterWidth: 1,
         imagePreviewMode: "blocks",
+        fullPreviewMetaHeight: 2,
       },
       styles: {
         fullPreview: {
@@ -1507,11 +2135,13 @@ describe("OpenTUI render snapshots", () => {
         },
         fullPreviewMeta: {
           favorite: "#ffee66",
+          secondary: "#88ccff",
         },
       },
       previewContentTones: {
         fullBorder: "success",
-        fullMeta: "favorite",
+        fullMetaHeader: "favorite",
+        fullMetaDetails: "secondary",
         fullPrimary: "secondary",
         fullEmptyTitle: "warning",
         fullEmptyHelp: "success",
@@ -1533,7 +2163,8 @@ describe("OpenTUI render snapshots", () => {
       9,
     );
     expect(colorHex(findSpan(textSpans, "FULL-PREVIEW"))).toBe("#11aa66");
-    expect(colorHex(findSpan(textSpans, "FULL-META"))).toBe("#ffee66");
+    expect(colorHex(findSpan(textSpans, "FULL-META-H"))).toBe("#ffee66");
+    expect(colorHex(findSpan(textSpans, "FULL-META-D"))).toBe("#88ccff");
     expect(colorHex(findSpan(textSpans, "1"))).toBe("#aa66ff");
     expect(colorHex(findSpan(textSpans, "FULL-GAP"))).toBe("#f2c14e");
     expect(colorHex(findSpan(textSpans, "full body"))).toBe("#6699cc");
@@ -1640,6 +2271,7 @@ describe("OpenTUI render snapshots", () => {
       layout: {
         imagePreviewMode: "metadata",
         previewMetaHashLength: 6,
+        fullPreviewMetaHashLength: 10,
       },
     });
     const entry = {
@@ -1670,7 +2302,7 @@ describe("OpenTUI render snapshots", () => {
       78,
       8,
     );
-    expect(findSpan(fullSpans, "PIC|12|browser|1.5 KiB|abcdef|saved")).toBeDefined();
+    expect(findSpan(fullSpans, "PIC|12|browser|1.5 KiB|abcdef1234|saved")).toBeDefined();
   });
 
   test("renders extended row metadata template placeholders", async () => {
@@ -1810,6 +2442,54 @@ describe("OpenTUI render snapshots", () => {
     expect(lines[firstRow + 2]).toContain("two");
     expect(frame).toContain("three");
     expect(frame).not.toContain("four");
+  });
+
+  test("aligns row content, metadata, and preview text independently", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        rowMetaTemplate: "M",
+      },
+      chrome: {
+        listBorder: false,
+        selectedMarker: "",
+        normalMarker: "",
+      },
+      layout: {
+        listPaddingX: 0,
+        showScrollbar: false,
+        rowContentAlign: "right",
+        rowMetadataAlign: "right",
+        rowPreviewAlign: "center",
+        rowMarkerGap: 0,
+        rowMetaPreviewGap: 1,
+        rowPreviewReservedWidth: 12,
+        rowPreviewMaxWidth: 10,
+      },
+    });
+
+    const frame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <EntryList
+            config={config}
+            entries={[textEntry(81, "abc", false)]}
+            selectedIndex={0}
+            selectedIds={new Set()}
+            rows={2}
+            width={40}
+            widthPercent={100}
+            query=""
+            onSelectEntry={() => {}}
+            onScroll={() => {}}
+          />
+        </Shell>
+      ),
+      40,
+      3,
+    );
+
+    expect(columnOf(frame, "M")).toBe(32);
+    expect(columnOf(frame, "abc")).toBe(37);
   });
 
   test("renders configurable split and full preview line spacing", async () => {
@@ -1975,6 +2655,45 @@ describe("OpenTUI render snapshots", () => {
     expect(fullFrame).not.toContain("abcdefg");
   });
 
+  test("can align split and full preview gutters independently", async () => {
+    const entry = textEntry(93, "AB", false);
+    const config = resolveTuiConfig({
+      labels: {
+        previewGutterSeparator: "|",
+        fullPreviewGutterSeparator: ">",
+      },
+      chrome: {
+        previewBorder: false,
+        fullPreviewBorder: false,
+      },
+      layout: {
+        showMetadata: false,
+        showFullPreviewMetadata: false,
+        previewPaddingX: 0,
+        fullPreviewPaddingX: 0,
+        previewGutterWidth: 4,
+        fullPreviewGutterWidth: 4,
+        previewGutterAlign: "left",
+        fullPreviewGutterAlign: "center",
+        fullPreviewScrollInsetRows: 0,
+      },
+    });
+
+    const splitFrame = await captureFrame(
+      () => <PreviewPane config={config} entry={entry} rows={2} width={16} widthPercent={100} />,
+      16,
+      2,
+    );
+    expect(lineContaining(splitFrame, "AB").startsWith("1   |AB")).toBe(true);
+
+    const fullFrame = await captureFrame(
+      () => <FullPreview config={config} entry={entry} rows={2} width={16} offset={0} onScroll={() => {}} />,
+      16,
+      2,
+    );
+    expect(lineContaining(fullFrame, "AB").startsWith(" 1  >AB")).toBe(true);
+  });
+
   test("can hide split and full preview gutters for clean reader layouts", async () => {
     const config = resolveTuiConfig({
       labels: {
@@ -2118,6 +2837,38 @@ describe("OpenTUI render snapshots", () => {
     expect(helpFrame).toContain("enter");
     expect(helpFrame).not.toContain("move selection");
     expect(helpFrame).not.toContain("open preview");
+  });
+
+  test("can align help overlay key labels inside the key column", async () => {
+    const config = resolveTuiConfig({
+      chrome: {
+        helpOverlayBorder: false,
+      },
+      layout: {
+        helpOverlayHeight: 3,
+        helpOverlayPaddingX: 0,
+        helpKeyWidth: 6,
+        helpKeyAlign: "right",
+      },
+      helpOrder: ["paste"],
+      labels: {
+        helpPaste: "paste now",
+      },
+      keyBindings: {
+        copyPaste: "p",
+      },
+    });
+    const helpFrame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <ModeOverlay config={config} state={{ ...initialState(), mode: "help" }} />
+        </Shell>
+      ),
+      24,
+      4,
+    );
+
+    expect(lineContaining(helpFrame, "paste now")).toContain("     ppaste now");
   });
 
   test("can opt into extended help rows for hidden action groups", async () => {
@@ -2568,6 +3319,45 @@ describe("OpenTUI render snapshots", () => {
     expect(columnOf(searchFrame, "SEARCH-TITLE")).toBeLessThan(30);
   });
 
+  test("can pad title chrome asymmetrically", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        historyTitle: "PAD",
+      },
+      chrome: {
+        panelBorderStyle: "single",
+      },
+      layout: {
+        frameTitlePadding: 0,
+        frameTitlePaddingLeft: 2,
+        frameTitlePaddingRight: 1,
+        listWidthPercent: 100,
+        showRowMetadata: false,
+      },
+    });
+    const frame = await captureFrame(
+      () => (
+        <EntryList
+          config={config}
+          entries={[textEntry(1, "title padded content", false)]}
+          selectedIndex={0}
+          selectedIds={new Set()}
+          rows={1}
+          width={32}
+          widthPercent={100}
+          query=""
+          onSelectEntry={() => {}}
+          onScroll={() => {}}
+        />
+      ),
+      36,
+      4,
+    );
+
+    expect(frame).toContain("  PAD ─");
+    expect(frame).not.toContain("  PAD  ─");
+  });
+
   test("can hide title chrome while keeping panel and overlay borders", async () => {
     const config = resolveTuiConfig({
       labels: {
@@ -2782,6 +3572,48 @@ describe("OpenTUI render snapshots", () => {
     expect(frame).not.toContain("| markerless");
   });
 
+  test("can reserve and align row marker slots", async () => {
+    const config = resolveTuiConfig({
+      chrome: {
+        panelBorder: false,
+        listBorder: false,
+        selectedMarker: ">",
+        normalMarker: ".",
+      },
+      layout: {
+        showRowMetadata: false,
+        rowMarkerWidth: 3,
+        rowMarkerAlign: "right",
+        rowMarkerGap: 1,
+        rowPreviewMaxWidth: 80,
+        panelPaddingX: 0,
+      },
+    });
+    const frame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <EntryList
+            config={config}
+            entries={[textEntry(1, "marker slot selected", false), textEntry(2, "marker slot normal", false)]}
+            selectedIndex={0}
+            selectedIds={new Set()}
+            rows={4}
+            width={64}
+            widthPercent={100}
+            query=""
+            onSelectEntry={() => {}}
+            onScroll={() => {}}
+          />
+        </Shell>
+      ),
+      72,
+      5,
+    );
+
+    expect(frame).toContain("  > marker slot selected");
+    expect(frame).toContain("  . marker slot normal");
+  });
+
   test("can render wider custom scrollbar glyphs", async () => {
     const config = resolveTuiConfig({
       chrome: {
@@ -2818,6 +3650,94 @@ describe("OpenTUI render snapshots", () => {
     expectFrameWithin(frame, 50, 7);
     expect(frame).toContain("██");
     expect(frame).toContain("░░");
+  });
+
+  test("can align narrow scrollbar glyphs inside a wider scrollbar", async () => {
+    const config = resolveTuiConfig({
+      chrome: {
+        panelBorder: false,
+        selectedMarker: "",
+        normalMarker: "",
+        scrollbarThumb: "#",
+        scrollbarTrack: ".",
+      },
+      layout: {
+        scrollbarWidth: 3,
+        scrollbarAlign: "right",
+        showRowMetadata: false,
+        rowMarkerGap: 0,
+        rowPreviewMaxWidth: 24,
+        panelPaddingX: 0,
+      },
+    });
+    const entries = Array.from({ length: 6 }, (_, index) => textEntry(index + 1, `right scroll ${index + 1}`, false));
+    const frame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <EntryList
+            config={config}
+            entries={entries}
+            selectedIndex={0}
+            selectedIds={new Set()}
+            rows={3}
+            width={32}
+            widthPercent={100}
+            query=""
+            onSelectEntry={() => {}}
+            onScroll={() => {}}
+          />
+        </Shell>
+      ),
+      36,
+      4,
+    );
+
+    expect(lineContaining(frame, "right scroll 1").endsWith("  #")).toBe(true);
+    expect(lineContaining(frame, "right scroll 2").endsWith("  .")).toBe(true);
+  });
+
+  test("can place the list scrollbar on the left", async () => {
+    const config = resolveTuiConfig({
+      chrome: {
+        panelBorder: false,
+        selectedMarker: "",
+        normalMarker: "",
+        scrollbarThumb: "##",
+        scrollbarTrack: "..",
+      },
+      layout: {
+        scrollbarWidth: 2,
+        scrollbarPlacement: "left",
+        showRowMetadata: false,
+        rowMarkerGap: 0,
+        rowPreviewMaxWidth: 24,
+        panelPaddingX: 0,
+      },
+    });
+    const entries = Array.from({ length: 6 }, (_, index) => textEntry(index + 1, `left scroll ${index + 1}`, false));
+    const frame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <EntryList
+            config={config}
+            entries={entries}
+            selectedIndex={0}
+            selectedIds={new Set()}
+            rows={3}
+            width={32}
+            widthPercent={100}
+            query=""
+            onSelectEntry={() => {}}
+            onScroll={() => {}}
+          />
+        </Shell>
+      ),
+      36,
+      4,
+    );
+
+    expect(lineContaining(frame, "left scroll 1").startsWith("##left scroll 1")).toBe(true);
+    expect(lineContaining(frame, "left scroll 2").startsWith("..left scroll 2")).toBe(true);
   });
 
   test("caps row preview text with Clipse maxEntryLength", async () => {
@@ -3018,6 +3938,7 @@ describe("OpenTUI render snapshots", () => {
         labels: {
           imagePreviewProtocolUnsupported: "NO {protocol}",
           imagePreviewProtocolRendererUnavailable: "FALLBACK {protocol}",
+          imagePreviewKittyProtocolName: "KITTY-GFX",
           imagePreviewSourceTemplate: "SRC {source}",
         },
         layout: {
@@ -3046,7 +3967,7 @@ describe("OpenTUI render snapshots", () => {
         58,
         8,
       );
-      expect(colorHex(findSpan(splitSpans, "NO Kitty"))).toBe("#aa5500");
+      expect(colorHex(findSpan(splitSpans, "NO KITTY-GFX"))).toBe("#aa5500");
 
       const fullSpans = await captureSpans(
         () => (
@@ -3065,12 +3986,13 @@ describe("OpenTUI render snapshots", () => {
         58,
         8,
       );
-      expect(colorHex(findSpan(fullSpans, "FALLBACK Kitty"))).toBe("#bb6600");
+      expect(colorHex(findSpan(fullSpans, "FALLBACK KITTY-GFX"))).toBe("#bb6600");
 
       const sourceConfig = resolveTuiConfig({
         labels: {
           splitImagePreviewSourceTemplate: "SPLIT {source}",
           fullImagePreviewSourceTemplate: "FULL {source}",
+          imagePreviewBlocksSource: "ansi image cells",
         },
         layout: {
           imagePreviewMode: "blocks",
@@ -3090,7 +4012,7 @@ describe("OpenTUI render snapshots", () => {
         58,
         8,
       );
-      expect(sourceFrame).toContain("SPLIT image blocks 2x1");
+      expect(sourceFrame).toContain("SPLIT ansi image cells 2x1");
 
       const fullSourceFrame = await captureFrame(
         () => (
@@ -3101,7 +4023,7 @@ describe("OpenTUI render snapshots", () => {
         58,
         8,
       );
-      expect(fullSourceFrame).toContain("FULL image blocks 2x1");
+      expect(fullSourceFrame).toContain("FULL ansi image cells 2x1");
 
       const hiddenConfig = resolveTuiConfig({
         labels: { imagePreviewProtocolUnsupported: "NO {protocol}" },
@@ -3123,6 +4045,66 @@ describe("OpenTUI render snapshots", () => {
         8,
       );
       expect(hiddenFrame).not.toContain("NO Kitty");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("can space split and full image notices from rendered previews", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ditox-tui-image-notice-spacing-"));
+    try {
+      const imagePath = join(dir, "preview.png");
+      const bytes = rgbaPng(2, 2, [
+        [255, 0, 0, 255],
+        [0, 255, 0, 255],
+        [0, 0, 255, 255],
+        [255, 255, 255, 255],
+      ]);
+      writeFileSync(imagePath, bytes);
+      const entry = imageEntry(33, imagePath, bytes.length);
+      const config = resolveTuiConfig({
+        labels: {
+          splitImagePreviewSourceTemplate: "SPLIT-SOURCE {source}",
+          fullImagePreviewSourceTemplate: "FULL-SOURCE {source}",
+        },
+        layout: {
+          imagePreviewMode: "blocks",
+          fullPreviewImageMode: "blocks",
+          imagePreviewRenderer: "text",
+          fullPreviewImageRenderer: "text",
+          imagePreviewMaxWidth: 2,
+          fullPreviewImageMaxWidth: 2,
+          imagePreviewMaxRows: 1,
+          fullPreviewImageMaxRows: 1,
+          imagePreviewNoticeVisibility: "always",
+          fullPreviewImageNoticeVisibility: "always",
+          imagePreviewNoticeSpacing: 1,
+          fullPreviewImageNoticeSpacing: 2,
+          showMetadata: false,
+          showFullPreviewMetadata: false,
+        },
+      });
+      const splitFrame = await captureFrame(
+        () => (
+          <Shell config={config}>
+            <PreviewPane config={config} entry={entry} rows={6} width={48} />
+          </Shell>
+        ),
+        58,
+        8,
+      );
+      expect(lineIndex(splitFrame, "SPLIT-SOURCE") - lineIndex(splitFrame, "▀")).toBe(2);
+
+      const fullFrame = await captureFrame(
+        () => (
+          <Shell config={config}>
+            <FullPreview config={config} entry={entry} rows={7} width={48} offset={0} onScroll={() => {}} />
+          </Shell>
+        ),
+        58,
+        9,
+      );
+      expect(lineIndex(fullFrame, "FULL-SOURCE") - lineIndex(fullFrame, "▀")).toBe(3);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -3417,6 +4399,61 @@ describe("OpenTUI render snapshots", () => {
     }
   });
 
+  test("renders split and full image previews with configurable alignment", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ditox-tui-image-align-"));
+    try {
+      const imagePath = join(dir, "align.png");
+      const bytes = rgbaPng(2, 2, [
+        [255, 0, 0, 255],
+        [0, 255, 0, 255],
+        [0, 0, 255, 255],
+        [255, 255, 0, 255],
+      ]);
+      writeFileSync(imagePath, bytes);
+      const entry = imageEntry(27, imagePath, bytes.length);
+      const config = resolveTuiConfig({
+        chrome: {
+          previewBorder: false,
+          fullPreviewBorder: false,
+        },
+        layout: {
+          imagePreviewMode: "blocks",
+          fullPreviewImageMode: "blocks",
+          imagePreviewRenderer: "text",
+          fullPreviewImageRenderer: "text",
+          imagePreviewBlockGlyph: "█",
+          fullPreviewImageBlockGlyph: "▓",
+          imagePreviewMaxWidth: 2,
+          imagePreviewMaxRows: 1,
+          fullPreviewImageMaxWidth: 2,
+          fullPreviewImageMaxRows: 1,
+          imagePreviewAlign: "center",
+          fullPreviewImageAlign: "right",
+          showMetadata: false,
+          showFullPreviewMetadata: false,
+          showPreviewGutter: false,
+          showFullPreviewGutter: false,
+        },
+      });
+
+      const splitFrame = await captureFrame(
+        () => <PreviewPane config={config} entry={entry} rows={3} width={10} widthPercent={100} />,
+        12,
+        4,
+      );
+      expect(columnOf(splitFrame, "█")).toBe(4);
+
+      const fullFrame = await captureFrame(
+        () => <FullPreview config={config} entry={entry} rows={3} width={10} offset={0} onScroll={() => {}} />,
+        12,
+        4,
+      );
+      expect(columnOf(fullFrame, "▓")).toBe(7);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("can hide empty-state helper copy", async () => {
     const config = resolveTuiConfig({
       labels: {
@@ -3449,6 +4486,130 @@ describe("OpenTUI render snapshots", () => {
 
     expect(frame).toContain("no filtered clips");
     expect(frame).not.toContain("hidden widen query");
+  });
+
+  test("aligns empty-state title and helper copy independently", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        noMatchesTitle: "EMPTY",
+        noMatchesHelp: "HELP",
+      },
+      chrome: {
+        listBorder: false,
+      },
+      layout: {
+        emptyStatePaddingX: 0,
+        emptyStatePaddingY: 0,
+        emptyStateTitleAlign: "center",
+        emptyStateHelpAlign: "right",
+        showScrollbar: false,
+      },
+    });
+    const frame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <EntryList
+            config={config}
+            entries={[]}
+            selectedIndex={0}
+            selectedIds={new Set()}
+            rows={3}
+            width={30}
+            widthPercent={100}
+            query="needle"
+            onSelectEntry={() => {}}
+            onScroll={() => {}}
+          />
+        </Shell>
+      ),
+      30,
+      4,
+    );
+
+    expect(columnOf(frame, "EMPTY")).toBe(12);
+    expect(columnOf(frame, "HELP")).toBe(25);
+  });
+
+  test("can space empty-state title and helper copy", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        noHistoryTitle: "EMPTY-TITLE",
+        noHistoryHelp: "EMPTY-HELP",
+      },
+      chrome: {
+        listBorder: false,
+      },
+      layout: {
+        emptyStatePaddingX: 0,
+        emptyStatePaddingY: 0,
+        emptyStateLineSpacing: 1,
+        showScrollbar: false,
+      },
+    });
+    const frame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <EntryList
+            config={config}
+            entries={[]}
+            selectedIndex={0}
+            selectedIds={new Set()}
+            rows={5}
+            width={32}
+            widthPercent={100}
+            query=""
+            onSelectEntry={() => {}}
+            onScroll={() => {}}
+          />
+        </Shell>
+      ),
+      32,
+      6,
+    );
+
+    expect(lineIndex(frame, "EMPTY-HELP") - lineIndex(frame, "EMPTY-TITLE")).toBe(2);
+  });
+
+  test("can vertically align empty-state copy", async () => {
+    const config = resolveTuiConfig({
+      labels: {
+        noHistoryTitle: "LOW",
+        noHistoryHelp: "hidden",
+      },
+      chrome: {
+        listBorder: false,
+      },
+      layout: {
+        emptyStatePaddingX: 0,
+        emptyStatePaddingY: 0,
+        emptyStateVerticalAlign: "bottom",
+        showEmptyStateHelp: false,
+        showScrollbar: false,
+      },
+    });
+    const frame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <EntryList
+            config={config}
+            entries={[]}
+            selectedIndex={0}
+            selectedIds={new Set()}
+            rows={5}
+            width={20}
+            widthPercent={100}
+            query=""
+            onSelectEntry={() => {}}
+            onScroll={() => {}}
+          />
+        </Shell>
+      ),
+      20,
+      6,
+    );
+
+    expect(lineIndex(frame, "LOW")).toBeGreaterThanOrEqual(4);
+    expect(frame).not.toContain("hidden");
   });
 
   test("can choose image metadata preview fields", async () => {

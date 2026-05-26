@@ -1,7 +1,7 @@
 import type { Entry, EntryFilter, WatcherStatus } from "./types";
 import type { TuiTheme } from "./theme";
 import type { TuiLabels, TuiStatusToneMatchers, TuiSurfaceStyle } from "./tui-config";
-import type { PreviewImageField, UiConfig } from "./ui-config";
+import type { ContentAlign, PreviewImageField, UiConfig } from "./ui-config";
 
 export type PreviewLine = {
   gutter: string;
@@ -46,7 +46,10 @@ type EntryLabelSet = Pick<
   SizeLabelSet &
   AgeLabelSet &
   TextFormatLabelSet;
-type EntryMetaLayout = Pick<UiConfig, "rowAgeWidth" | "rowSizeWidth" | "rowPinnedWidth" | "rowMetaHashLength">;
+type EntryMetaLayout = Pick<
+  UiConfig,
+  "rowAgeWidth" | "rowAgeAlign" | "rowSizeWidth" | "rowSizeAlign" | "rowPinnedWidth" | "rowPinnedAlign" | "rowMetaHashLength"
+>;
 type FilterLabelSet = Pick<TuiLabels, "filterAll" | "filterText" | "filterImages" | "filterFavorites" | "filterToday">;
 type ClearKindLabelSet = Pick<TuiLabels, "clearKindAll" | "clearKindText" | "clearKindImages">;
 type ViewStatusLabelSet = Pick<TuiLabels, "statusPinnedView" | "statusAllView" | "statusViewSuffix">;
@@ -63,7 +66,21 @@ type OperationStatusLabelSet = Pick<
   | "statusKeptPinned"
   | "statusIncludedPinned"
 >;
-type WatcherLabelSet = Pick<TuiLabels, "watcherRunning" | "watcherPaused" | "watcherStale" | "watcherStopped" | "watcherErrorSeparator"> & AgeLabelSet;
+type PinStatusLabelSet = Pick<TuiLabels, "entryIdPrefix" | "statusPinnedPrefix" | "statusUnpinnedPrefix" | "statusPinTemplate">;
+type WatcherLabelSet = Pick<
+  TuiLabels,
+  | "watcherRunning"
+  | "watcherPaused"
+  | "watcherStale"
+  | "watcherStopped"
+  | "watcherErrorSeparator"
+  | "watcherRunningTemplate"
+  | "watcherPausedTemplate"
+  | "watcherStaleTemplate"
+  | "watcherStoppedTemplate"
+  | "watcherErrorTemplate"
+> &
+  AgeLabelSet;
 type PreviewLabelSet = Pick<
   TuiLabels,
   | "noEntryTitle"
@@ -78,6 +95,7 @@ type PreviewLabelSet = Pick<
   | "previewUnknownDimensions"
   | "previewBlobMissing"
   | "previewGutterSeparator"
+  | "previewTextGutterTemplate"
 > &
   SizeLabelSet &
   TextFormatLabelSet;
@@ -134,8 +152,11 @@ const defaultEntryLabels: EntryLabelSet = {
 
 const defaultEntryMetaLayout: EntryMetaLayout = {
   rowAgeWidth: 2,
+  rowAgeAlign: "right",
   rowSizeWidth: 6,
+  rowSizeAlign: "right",
   rowPinnedWidth: 3,
+  rowPinnedAlign: "left",
   rowMetaHashLength: 8,
 };
 
@@ -172,18 +193,30 @@ const defaultOperationStatusLabels: OperationStatusLabelSet = {
   statusIncludedPinned: "included pinned",
 };
 
+const defaultPinStatusLabels: PinStatusLabelSet = {
+  entryIdPrefix: "#",
+  statusPinnedPrefix: "pinned",
+  statusUnpinnedPrefix: "unpinned",
+  statusPinTemplate: "{prefix} {entryIdPrefix}{id}",
+};
+
 const defaultWatcherLabels: WatcherLabelSet = {
   watcherRunning: "watcher live",
   watcherPaused: "watcher paused",
   watcherStale: "watcher stale",
   watcherStopped: "watcher stopped",
   watcherErrorSeparator: ": ",
+  watcherRunningTemplate: "{status} {age}",
+  watcherPausedTemplate: "{status}",
+  watcherStaleTemplate: "{status} {age}",
+  watcherStoppedTemplate: "{status}",
+  watcherErrorTemplate: "{status}{separator}{error}",
   ...defaultAgeLabels,
 };
 
 const defaultStatusToneMatchers: TuiStatusToneMatchers = {
   error: ["error", "failed", "not found", "exited", "unavailable"],
-  success: ["copied", "pasted", "cleared"],
+  success: ["copied", "pasted", "cleared", "pinned", "unpinned"],
   warning: ["paused"],
 };
 
@@ -200,6 +233,7 @@ const defaultPreviewLabels: PreviewLabelSet = {
   previewUnknownDimensions: "unknown",
   previewBlobMissing: "not stored",
   previewGutterSeparator: "  ",
+  previewTextGutterTemplate: "{linePadded}",
   ...defaultSizeLabels,
   ...defaultTextFormatLabels,
 };
@@ -231,10 +265,10 @@ export function entryKindLabel(entry: Entry, labels: Partial<EntryLabelSet> = {}
 export function entryMeta(entry: Entry, now = Date.now(), labels: Partial<EntryLabelSet> = {}, layout: Partial<EntryMetaLayout> = {}): string {
   const text = { ...defaultEntryLabels, ...labels };
   const metrics = { ...defaultEntryMetaLayout, ...layout };
-  const age = padText(formatAge(entry.created_at_ms, now, text), metrics.rowAgeWidth);
-  const size = padText(formatBytes(entry.byte_len, text), metrics.rowSizeWidth);
+  const age = fitText(formatAge(entry.created_at_ms, now, text), metrics.rowAgeWidth, metrics.rowAgeAlign, false);
+  const size = fitText(formatBytes(entry.byte_len, text), metrics.rowSizeWidth, metrics.rowSizeAlign, false);
   const pinnedRaw = text.rowPinnedLabel;
-  const pinned = fitText(pinnedRaw, metrics.rowPinnedWidth, "end");
+  const pinned = fitText(pinnedRaw, metrics.rowPinnedWidth, metrics.rowPinnedAlign, true);
   const pinnedSlot = entry.favorite
     ? applyTemplate(text.rowPinnedSlotTemplate, { pinned, pinnedRaw })
     : applyTemplate(text.rowUnpinnedSlotTemplate, { pinned, pinnedRaw });
@@ -260,10 +294,17 @@ export function entryMeta(entry: Entry, now = Date.now(), labels: Partial<EntryL
   });
 }
 
-export function fitRowMeta(value: string, width: number, labels: Partial<TextFormatLabelSet> = {}): string {
+export function fitRowMeta(value: string, width: number, labels: Partial<TextFormatLabelSet> = {}, align: ContentAlign = "left"): string {
   const target = Math.max(0, Math.floor(width));
   if (target === 0) return "";
-  return truncateText(value, target, labels).padEnd(target, " ");
+  const clipped = truncateText(value, target, labels);
+  const extra = Math.max(0, target - clipped.length);
+  if (align === "right") return `${" ".repeat(extra)}${clipped}`;
+  if (align === "center") {
+    const left = Math.floor(extra / 2);
+    return `${" ".repeat(left)}${clipped}${" ".repeat(extra - left)}`;
+  }
+  return `${clipped}${" ".repeat(extra)}`;
 }
 
 export function entryPreview(entry: Entry, width: number, labels: Partial<Pick<TuiLabels, "emptyEntryPreview"> & TextFormatLabelSet> = {}): string {
@@ -348,6 +389,8 @@ export function statusTone(
     labels?.errorClipboardWriteFailed,
     labels?.errorPasteBackFailed,
     labels?.errorDitoxdExited,
+    labels?.errorProcessTemplate,
+    labels?.errorRpcTemplate,
   ];
   if (matchesAnyStatusToken(value, [...matchers.error, ...errorLabels], true)) return "error";
   const successLabels = [
@@ -356,6 +399,8 @@ export function statusTone(
     labels?.statusCopiedCountPrefix,
     labels?.statusClearedPrefix,
     labels?.statusDeletedPrefix,
+    labels?.statusPinnedPrefix,
+    labels?.statusUnpinnedPrefix,
   ];
   if (matchesAnyStatusToken(value, [...matchers.success, ...successLabels])) return "success";
   if (matchesAnyStatusToken(value, matchers.warning)) return "warning";
@@ -366,8 +411,25 @@ function matchesAnyStatusToken(value: string, tokens: Array<string | undefined>,
   return tokens.some((token) => {
     if (typeof token !== "string" || token.length === 0) return false;
     const normalized = (stripTemplates ? token.replace(/\{[^}]+\}/g, "") : token).trim().toLowerCase();
-    return normalized.length > 0 && value.includes(normalized);
+    if (normalized.length === 0) return false;
+    if (value.includes(normalized)) return true;
+    return stripTemplates && matchesStatusTemplate(value, token);
   });
+}
+
+function matchesStatusTemplate(value: string, token: string): boolean {
+  const staticText = token.replace(/\{[^}]+\}/g, "").trim();
+  if (staticText.length === 0) return false;
+  const pattern = token
+    .toLowerCase()
+    .split(/\{[^}]+\}/g)
+    .map(escapeRegExp)
+    .join(".*");
+  return new RegExp(pattern).test(value);
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export type WatcherStatusView = {
@@ -377,17 +439,26 @@ export type WatcherStatusView = {
 
 export function watcherStatusView(status: WatcherStatus | null, labels: Partial<WatcherLabelSet>, now = Date.now()): WatcherStatusView {
   const text = { ...defaultWatcherLabels, ...labels };
-  if (!status) return { text: text.watcherStopped, tone: "muted" };
-  if (status.last_error) return { text: `${text.watcherStopped}${text.watcherErrorSeparator}${status.last_error}`, tone: "error" };
-  if (status.paused) return { text: text.watcherPaused, tone: "warning" };
-  if (status.running) return { text: `${text.watcherRunning} ${watcherAge(status.last_seen_ms, now, text)}`, tone: "success" };
-  if (status.last_seen_ms !== null) return { text: `${text.watcherStale} ${watcherAge(status.last_seen_ms, now, text)}`, tone: "warning" };
-  return { text: text.watcherStopped, tone: "error" };
+  if (!status) return { text: watcherStatusText(text.watcherStoppedTemplate, text.watcherStopped, "", text), tone: "muted" };
+  if (status.last_error) return { text: watcherStatusText(text.watcherErrorTemplate, text.watcherStopped, "", text, status.last_error), tone: "error" };
+  if (status.paused) return { text: watcherStatusText(text.watcherPausedTemplate, text.watcherPaused, watcherAge(status.last_seen_ms, now, text), text), tone: "warning" };
+  if (status.running) return { text: watcherStatusText(text.watcherRunningTemplate, text.watcherRunning, watcherAge(status.last_seen_ms, now, text), text), tone: "success" };
+  if (status.last_seen_ms !== null) return { text: watcherStatusText(text.watcherStaleTemplate, text.watcherStale, watcherAge(status.last_seen_ms, now, text), text), tone: "warning" };
+  return { text: watcherStatusText(text.watcherStoppedTemplate, text.watcherStopped, "", text), tone: "error" };
 }
 
 function watcherAge(lastSeenMs: number | null, now: number, labels: Partial<AgeLabelSet>): string {
   if (lastSeenMs === null) return "";
   return formatAge(lastSeenMs, now, labels);
+}
+
+function watcherStatusText(template: string, status: string, age: string, labels: WatcherLabelSet, error = ""): string {
+  return applyTemplate(template, {
+    status,
+    age,
+    error,
+    separator: labels.watcherErrorSeparator,
+  });
 }
 
 export function formatFilter(filter: EntryFilter, labels: Partial<FilterLabelSet> = {}): string {
@@ -450,6 +521,16 @@ export function formatClearedStatus(count: number, preservePinned: boolean, labe
   });
 }
 
+export function formatPinStatus(entry: Entry, pinned: boolean, labels: Partial<PinStatusLabelSet> = {}): string {
+  const text = { ...defaultPinStatusLabels, ...labels };
+  return applyTemplate(text.statusPinTemplate, {
+    prefix: pinned ? text.statusPinnedPrefix : text.statusUnpinnedPrefix,
+    id: String(entry.id),
+    entryIdPrefix: text.entryIdPrefix,
+    pinned: pinned ? "true" : "false",
+  });
+}
+
 export function formatEntriesStatus(count: number, labels: Partial<OperationStatusLabelSet> = {}): string {
   const text = { ...defaultOperationStatusLabels, ...labels };
   return applyTemplate(text.statusEntriesTemplate, {
@@ -498,11 +579,15 @@ export function previewModel(
 
   const lines = entry.content.split(/\r?\n/);
   if (lines.length === 0) return [{ gutter: "1", text: "", tone: "primary" }];
-  return lines.slice(0, maxLines).map<PreviewLine>((line, index) => ({
-    gutter: String(index + 1).padStart(Math.max(1, previewLayout.previewLineNumberWidth), " "),
-    text: line,
-    tone: "primary",
-  }));
+  return lines.slice(0, maxLines).map<PreviewLine>((line, index) => {
+    const lineNumber = String(index + 1);
+    const linePadded = lineNumber.padStart(Math.max(1, previewLayout.previewLineNumberWidth), " ");
+    return {
+      gutter: applyTemplate(text.previewTextGutterTemplate, { line: lineNumber, lineNumber, linePadded, lineNumberPadded: linePadded }),
+      text: line,
+      tone: "primary",
+    };
+  });
 }
 
 export function previewMetaTemplateValues(
@@ -549,15 +634,18 @@ function applyTemplate(template: string, values: Record<string, string | number>
   return Object.entries(values).reduce((current, [key, value]) => current.replaceAll(`{${key}}`, String(value)), template);
 }
 
-function fitText(value: string, width: number, align: "start" | "end"): string {
+function fitText(value: string, width: number, align: ContentAlign, clip: boolean): string {
   const target = Math.max(0, Math.floor(width));
   if (target === 0) return "";
-  const clipped = value.length > target ? value.slice(0, target) : value;
-  return align === "start" ? clipped.padStart(target, " ") : clipped.padEnd(target, " ");
-}
-
-function padText(value: string, width: number): string {
-  return value.padStart(Math.max(0, Math.floor(width)), " ");
+  const chars = Array.from(value);
+  const clipped = clip && chars.length > target ? chars.slice(0, target).join("") : value;
+  const extra = Math.max(0, target - Array.from(clipped).length);
+  if (align === "right") return `${" ".repeat(extra)}${clipped}`;
+  if (align === "center") {
+    const left = Math.floor(extra / 2);
+    return `${" ".repeat(left)}${clipped}${" ".repeat(extra - left)}`;
+  }
+  return `${clipped}${" ".repeat(extra)}`;
 }
 
 export function previewWindow(lines: PreviewLine[], offset: number, rows: number): PreviewLine[] {

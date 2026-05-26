@@ -8,6 +8,7 @@ import {
 } from "../image-preview";
 import { entryAccent, previewMetaTemplateValues, previewModel, previewWindow, truncateText } from "../presentation";
 import { visibleFullPreviewLineCapacity } from "../state";
+import type { ContentAlign, VerticalAlign } from "../ui-config";
 import {
   formatTemplate,
   paddedTitle,
@@ -91,17 +92,20 @@ export function FullPreview(props: {
     previewModel(props.entry, layout().maxFullPreviewLines, labels(), layout());
   const imageNoticeText = () => imagePreviewNotice(props.config, blockPreview());
   const imageFallbackVisible = () => props.entry?.kind === "image" && blockPreview().kind === "fallback" && layout().fullPreviewImageMode !== "metadata";
+  const imageNoticeSpacingRows = () =>
+    props.entry?.kind === "image" && blockPreview().kind === "rendered" && imageNoticeText() ? layout().fullPreviewImageNoticeSpacing : 0;
   const imagePreviewRows = () => {
     if (props.entry?.kind !== "image") return 0;
     const preview = blockPreview();
     const renderedRows = preview.kind === "rendered" ? preview.native.cellRows : 0;
-    return renderedRows + (imageNoticeText() ? 1 : 0) + (imageFallbackVisible() ? 1 : 0);
+    return renderedRows + imageNoticeSpacingRows() + (imageNoticeText() ? 1 : 0) + (imageFallbackVisible() ? 1 : 0);
   };
   const metadataRows = () => (layout().showFullPreviewMetadata && props.entry ? layout().fullPreviewMetaHeight : 0);
   const visibleRows = () => visibleFullPreviewLineCapacity(props.rows, layout().fullPreviewLineSpacing, layout().fullPreviewScrollInsetRows, metadataRows() + imagePreviewRows());
   const visible = () => previewWindow(lines(), props.offset, visibleRows());
+  const metaDetailsVisible = () => layout().fullPreviewMetaHeight >= 2 + layout().fullPreviewMetaLineSpacing;
   const bottomTitle = () => {
-    if (!props.entry) return paddedTitle(labels().previewBackHint, layout().frameTitlePadding);
+    if (!props.entry) return paddedTitle(labels().previewBackHint, layout().frameTitlePaddingLeft, layout().frameTitlePaddingRight);
     const total = lines().length;
     const end = Math.min(total, props.offset + visibleRows());
     return paddedTitle(
@@ -114,7 +118,8 @@ export function FullPreview(props: {
         separator: labels().previewMetaSeparator,
         back: labels().previewBackHint,
       }),
-      layout().frameTitlePadding,
+      layout().frameTitlePaddingLeft,
+      layout().frameTitlePaddingRight,
     );
   };
   return (
@@ -126,7 +131,11 @@ export function FullPreview(props: {
       backgroundColor={style().bg}
       paddingX={layout().fullPreviewPaddingX}
       paddingY={layout().fullPreviewPaddingY}
-      title={props.config.chrome.fullPreviewBorder && props.config.chrome.showFullPreviewTitle ? paddedTitle(labels().previewModeTitle, layout().frameTitlePadding) : undefined}
+      title={
+        props.config.chrome.fullPreviewBorder && props.config.chrome.showFullPreviewTitle
+          ? paddedTitle(labels().previewModeTitle, layout().frameTitlePaddingLeft, layout().frameTitlePaddingRight)
+          : undefined
+      }
       titleAlignment={props.config.chrome.fullPreviewTitleAlignment}
       bottomTitle={props.config.chrome.fullPreviewBorder && props.config.chrome.showFullPreviewBottomTitle ? bottomTitle() : undefined}
       bottomTitleAlignment={props.config.chrome.fullPreviewBottomTitleAlignment}
@@ -139,63 +148,105 @@ export function FullPreview(props: {
     >
       <Show when={layout().showFullPreviewMetadata ? props.entry : undefined}>
         {(entry) => (
-          <box height={layout().fullPreviewMetaHeight} backgroundColor={metaStyle().bg} paddingX={layout().fullPreviewMetaPaddingX} paddingY={layout().fullPreviewMetaPaddingY}>
-            <text style={textStyle(metaStyle(), fullContentColor(props.config, metaStyle(), "fullMeta", entryAccent(metaStyle(), entry())))}>{fullPreviewMeta(props.config, entry())}</text>
-          </box>
-        )}
-      </Show>
-      <Show when={props.entry?.kind === "image" && blockPreview().kind === "rendered"}>
-        <ImagePreviewRows preview={blockPreview()} renderer={layout().fullPreviewImageRenderer} blockGlyph={layout().fullPreviewImageBlockGlyph} />
-      </Show>
-      <Show when={imageNoticeText()}>
-        {(notice) => (
-          <box height={1} flexDirection="row" backgroundColor={style().bg}>
-            <text style={textStyle(style(), fullContentColor(props.config, style(), "fullImageNotice", style().muted))}>{notice()}</text>
-          </box>
-        )}
-      </Show>
-      <Show when={imageFallbackVisible()}>
-        <text style={textStyle(style())}>
-          <span style={textStyle(style(), fullContentColor(props.config, style(), "fullImageFallbackPrefix", style().muted))}>
-            {labels().fullImagePreviewFallbackPrefix}
-          </span>
-          <span style={textStyle(style(), fullContentColor(props.config, style(), "fullImageFallbackSeparator", style().muted))}>
-            {labels().fullImagePreviewFallbackSeparator}
-          </span>
-          <span style={textStyle(style(), fullContentColor(props.config, style(), "fullImageFallbackReason", style().muted))}>
-            {(blockPreview() as Extract<ImageBlockPreviewModel, { kind: "fallback" }>).reason}
-          </span>
-        </text>
-      </Show>
-      <For each={visible()}>
-        {(line, index) => (
-          <>
-            <box height={1} flexDirection="row" backgroundColor={style().bg}>
-              <Show when={layout().showFullPreviewGutter}>
-                <text style={textStyle(gutterStyle(), fullContentColor(props.config, gutterStyle(), "fullGutter", gutterStyle().muted))}>
-                  {line.gutter.padStart(layout().fullPreviewGutterWidth, " ")}
+          <box
+            height={layout().fullPreviewMetaHeight}
+            flexDirection="column"
+            backgroundColor={metaStyle().bg}
+            paddingX={layout().fullPreviewMetaPaddingX}
+            paddingY={layout().fullPreviewMetaPaddingY}
+          >
+            <box width="100%" flexGrow={1} flexDirection="column" justifyContent={verticalJustify(layout().fullPreviewMetaVerticalAlign)}>
+              <box width="100%" flexDirection="row" justifyContent={justifyContent(layout().fullPreviewMetaContentAlign)}>
+                <text style={textStyle(metaStyle(), fullContentColor(props.config, metaStyle(), "fullMetaHeader", entryAccent(metaStyle(), entry())))}>
+                  {fullPreviewMetaHeader(props.config, entry())}
                 </text>
-                <text style={textStyle(gutterStyle(), fullContentColor(props.config, gutterStyle(), "fullGutterSeparator", gutterStyle().muted))}>
-                  {labels().fullPreviewGutterSeparator}
-                </text>
+              </box>
+              <Show when={metaDetailsVisible() && layout().fullPreviewMetaLineSpacing > 0}>
+                <box width="100%" height={layout().fullPreviewMetaLineSpacing} backgroundColor={metaStyle().bg} />
               </Show>
-              <text style={textStyle(style(), fullLineToneColor(props.config, style(), props.entry, line.tone, index()))}>
-                {truncateText(line.text, textWidth(), labels())}
-              </text>
+              <Show when={metaDetailsVisible()}>
+                <box width="100%" flexDirection="row" justifyContent={justifyContent(layout().fullPreviewMetaContentAlign)}>
+                  <text style={textStyle(metaStyle(), fullContentColor(props.config, metaStyle(), "fullMetaDetails", metaStyle().fg))}>
+                    {fullPreviewMetaDetails(props.config, entry())}
+                  </text>
+                </box>
+              </Show>
             </box>
-            <Show when={layout().fullPreviewLineSpacing > 0 && index() < visible().length - 1}>
-              <box width="100%" height={layout().fullPreviewLineSpacing} backgroundColor={spacerStyle().bg} />
-            </Show>
-          </>
+          </box>
         )}
-      </For>
+      </Show>
+      <box width="100%" flexGrow={1} flexDirection="column" justifyContent={verticalJustify(layout().fullPreviewBodyVerticalAlign)}>
+        <Show when={props.entry?.kind === "image" && blockPreview().kind === "rendered"}>
+          <ImagePreviewRows
+            preview={blockPreview()}
+            renderer={layout().fullPreviewImageRenderer}
+            blockGlyph={layout().fullPreviewImageBlockGlyph}
+            align={layout().fullPreviewImageAlign}
+            width={textWidth()}
+          />
+        </Show>
+        <Show when={imageNoticeSpacingRows() > 0}>
+          <box width="100%" height={imageNoticeSpacingRows()} backgroundColor={spacerStyle().bg} />
+        </Show>
+        <Show when={imageNoticeText()}>
+          {(notice) => (
+            <box height={1} flexDirection="row" justifyContent={justifyContent(layout().fullPreviewContentAlign)} backgroundColor={style().bg}>
+              <text style={textStyle(style(), fullContentColor(props.config, style(), "fullImageNotice", style().muted))}>{notice()}</text>
+            </box>
+          )}
+        </Show>
+        <Show when={imageFallbackVisible()}>
+          <box height={1} flexDirection="row" justifyContent={justifyContent(layout().fullPreviewContentAlign)} backgroundColor={style().bg}>
+            <text style={textStyle(style())}>
+              <span style={textStyle(style(), fullContentColor(props.config, style(), "fullImageFallbackPrefix", style().muted))}>
+                {labels().fullImagePreviewFallbackPrefix}
+              </span>
+              <span style={textStyle(style(), fullContentColor(props.config, style(), "fullImageFallbackSeparator", style().muted))}>
+                {labels().fullImagePreviewFallbackSeparator}
+              </span>
+              <span style={textStyle(style(), fullContentColor(props.config, style(), "fullImageFallbackReason", style().muted))}>
+                {(blockPreview() as Extract<ImageBlockPreviewModel, { kind: "fallback" }>).reason}
+              </span>
+            </text>
+          </box>
+        </Show>
+        <For each={visible()}>
+          {(line, index) => (
+            <>
+              <box height={1} flexDirection="row" backgroundColor={style().bg}>
+                <Show when={layout().showFullPreviewGutter}>
+                  <text style={textStyle(gutterStyle(), fullContentColor(props.config, gutterStyle(), "fullGutter", gutterStyle().muted))}>
+                    {fitGutter(line.gutter, layout().fullPreviewGutterWidth, layout().fullPreviewGutterAlign)}
+                  </text>
+                  <text style={textStyle(gutterStyle(), fullContentColor(props.config, gutterStyle(), "fullGutterSeparator", gutterStyle().muted))}>
+                    {labels().fullPreviewGutterSeparator}
+                  </text>
+                </Show>
+                <box flexGrow={1} flexDirection="row" justifyContent={justifyContent(layout().fullPreviewContentAlign)}>
+                  <text style={textStyle(style(), fullLineToneColor(props.config, style(), props.entry, line.tone, index()))}>
+                    {truncateText(line.text, textWidth(), labels())}
+                  </text>
+                </box>
+              </box>
+              <Show when={layout().fullPreviewLineSpacing > 0 && index() < visible().length - 1}>
+                <box width="100%" height={layout().fullPreviewLineSpacing} backgroundColor={spacerStyle().bg} />
+              </Show>
+            </>
+          )}
+        </For>
+      </box>
     </box>
   );
 }
 
-function fullPreviewMeta(config: ResolvedTuiConfig, entry: Entry): string {
+function fullPreviewMetaHeader(config: ResolvedTuiConfig, entry: Entry): string {
   const labels = config.labels;
-  return formatTemplate(labels.fullPreviewMetaTemplate, previewMetaTemplateValues(entry, labels, config.layout.previewMetaHashLength));
+  return formatTemplate(labels.fullPreviewMetaHeaderTemplate, previewMetaTemplateValues(entry, labels, config.layout.fullPreviewMetaHashLength));
+}
+
+function fullPreviewMetaDetails(config: ResolvedTuiConfig, entry: Entry): string {
+  const labels = config.labels;
+  return formatTemplate(labels.fullPreviewMetaDetailsTemplate, previewMetaTemplateValues(entry, labels, config.layout.fullPreviewMetaHashLength));
 }
 
 function imagePreviewBackground(config: ResolvedTuiConfig, fallback: string): string {
@@ -218,6 +269,32 @@ function scrollDirection(event: any): -1 | 1 | null {
   if (event.button === 4) return -1;
   if (event.button === 5) return 1;
   return null;
+}
+
+function justifyContent(align: ContentAlign): "flex-start" | "center" | "flex-end" {
+  if (align === "right") return "flex-end";
+  if (align === "center") return "center";
+  return "flex-start";
+}
+
+function verticalJustify(align: VerticalAlign): "flex-start" | "center" | "flex-end" {
+  if (align === "bottom") return "flex-end";
+  if (align === "center") return "center";
+  return "flex-start";
+}
+
+function fitGutter(value: string, width: number, align: ContentAlign): string {
+  const target = Math.max(1, Math.floor(width));
+  const trimmed = value.trim();
+  const raw = trimmed.length > 0 ? trimmed : value;
+  const clipped = Array.from(raw).slice(0, target).join("");
+  const extra = Math.max(0, target - Array.from(clipped).length);
+  if (align === "right") return `${" ".repeat(extra)}${clipped}`;
+  if (align === "center") {
+    const left = Math.floor(extra / 2);
+    return `${" ".repeat(left)}${clipped}${" ".repeat(extra - left)}`;
+  }
+  return `${clipped}${" ".repeat(extra)}`;
 }
 
 function toneColor(style: TuiSurfaceStyle, tone: "primary" | "secondary" | "muted" | "accent" | "error" | "success"): string {

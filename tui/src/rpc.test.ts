@@ -10,6 +10,8 @@ describe("rpc presentation", () => {
     expect(formatProcessError("entries.copy", "error: FileNotFound", 1)).toBe("wl-copy was not found or could not be started");
     expect(formatProcessError("entries.paste", "error: FileNotFound", 1)).toBe("wl-copy or hyprctl was not found");
     expect(formatRpcError("entries.paste", "PasteBackFailed")).toBe("failed to paste through Hyprland");
+    expect(formatProcessError("watcher.status", "boom", 12)).toBe("boom");
+    expect(formatRpcError("watcher.status", "StrangeError")).toBe("StrangeError");
     expect(formatProcessError("watcher.status", "", null)).toBe("ditoxd exited with unknown status");
   });
 
@@ -21,6 +23,9 @@ describe("rpc presentation", () => {
       errorClipboardWriteFailed: "copy write failed",
       errorPasteBackFailed: "paste transport failed",
       errorDitoxdExited: "backend exited: {status}",
+      errorUnknownStatus: "mystery status",
+      errorProcessTemplate: "{method} failed[{status}]: {message}",
+      errorRpcTemplate: "{method} rpc failed: {message}",
     };
 
     expect(formatDitoxdMissing("./bin/ditoxd", labels)).toBe("backend missing: ./bin/ditoxd");
@@ -28,7 +33,10 @@ describe("rpc presentation", () => {
     expect(formatProcessError("entries.paste", "error: FileNotFound", 1, labels)).toBe("paste transport missing");
     expect(formatProcessError("entries.copy", "ClipboardWriteFailed", 1, labels)).toBe("copy write failed");
     expect(formatRpcError("entries.paste", "PasteBackFailed", labels)).toBe("paste transport failed");
-    expect(formatProcessError("watcher.status", "", 42, labels)).toBe("backend exited: 42");
+    expect(formatProcessError("watcher.status", "boom", 7, labels)).toBe("watcher.status failed[7]: boom");
+    expect(formatRpcError("watcher.status", "StrangeError", labels)).toBe("watcher.status rpc failed: StrangeError");
+    expect(formatProcessError("watcher.status", "", 42, labels)).toBe("watcher.status failed[42]: backend exited: 42");
+    expect(formatProcessError("watcher.status", "", null, labels)).toBe("watcher.status failed[mystery status]: backend exited: mystery status");
   });
 
   test("parses content-length framed JSON", () => {
