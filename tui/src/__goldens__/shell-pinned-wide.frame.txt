@@ -1,0 +1,15 @@
+┌─ditox────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│GOLD::filter=SAVED::query=-::mode=marked 2                                                                │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─history──────────────────────────────────────┐┌─preview──────────────────────────────────────────────────┐
+│ * TXT 1sec 49 B PIN   saved golden clip...   ││ TXT #1 ~ digest:text-10000                               │
+│ + IMG 2sec 2.0 KB     image/png 32x24        ││ text/plain ~ 49 B ~ pinned                               │
+│ . TXT 3sec 17 B       plain golden clip      ││                                                          │
+│                                              ││    1  saved golden clip with enough text for truncation  │
+│                                              ││                                                          │
+│                                              ││                                                          │
+│                                              ││                                                          │
+│                                              ││                                                          │
+│                                              ││                                                          │
+└──────────────────────────────────────────────┘└─#1───────────────────────────────────────────────────────┘
+enter paste ctrl+y copy space preview / search ? help / watcher paused / stored 2                           

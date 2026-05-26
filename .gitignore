@@ -9,4 +9,4 @@ bun.lockb
 tmp/
 dist/
 coverage/
-
+tui/artifacts/

@@ -113,8 +113,44 @@ pub fn writeText(allocator: std.mem.Allocator, init: std.process.Init, text: []c
         return;
     }
 
+    try writeBytesToClipboard(allocator, init, text, null);
+}
+
+pub fn writeBytes(allocator: std.mem.Allocator, init: std.process.Init, bytes: []const u8, mime: []const u8) !void {
+    if (init.environ_map.*.get("DITOX_CLIPBOARD_MOCK")) |path| {
+        try writeMockClipboard(init, path, bytes);
+        const mime_path = try std.fmt.allocPrint(allocator, "{s}.mime", .{path});
+        defer allocator.free(mime_path);
+        try writeMockClipboard(init, mime_path, mime);
+        return;
+    }
+
+    try writeBytesToClipboard(allocator, init, bytes, mime);
+}
+
+pub fn pasteText(allocator: std.mem.Allocator, init: std.process.Init, text: []const u8, target_window: ?[]const u8, buffer_ms: u32, keybind: []const u8) !void {
+    try writeText(allocator, init, text);
+    if (init.environ_map.*.get("DITOX_CLIPBOARD_MOCK") != null) return;
+    try sendPasteShortcut(allocator, init, target_window, buffer_ms, keybind);
+}
+
+pub fn pasteBytes(allocator: std.mem.Allocator, init: std.process.Init, bytes: []const u8, mime: []const u8, target_window: ?[]const u8, buffer_ms: u32, keybind: []const u8) !void {
+    try writeBytes(allocator, init, bytes, mime);
+    if (init.environ_map.*.get("DITOX_CLIPBOARD_MOCK") != null) return;
+    try sendPasteShortcut(allocator, init, target_window, buffer_ms, keybind);
+}
+
+fn writeBytesToClipboard(allocator: std.mem.Allocator, init: std.process.Init, bytes: []const u8, mime: ?[]const u8) !void {
+    var argv_buffer: [3][]const u8 = undefined;
+    const argv = if (mime) |value| blk: {
+        argv_buffer = .{ "wl-copy", "--type", value };
+        break :blk argv_buffer[0..3];
+    } else blk: {
+        argv_buffer[0] = "wl-copy";
+        break :blk argv_buffer[0..1];
+    };
     var child = try std.process.spawn(init.io, .{
-        .argv = &.{"wl-copy"},
+        .argv = argv,
         .stdin = .pipe,
         .stdout = .ignore,
         .stderr = .pipe,
@@ -123,7 +159,7 @@ pub fn writeText(allocator: std.mem.Allocator, init: std.process.Init, text: []c
 
     var stdin_buffer: [4096]u8 = undefined;
     var stdin_writer = child.stdin.?.writer(init.io, &stdin_buffer);
-    try stdin_writer.interface.writeAll(text);
+    try stdin_writer.interface.writeAll(bytes);
     try stdin_writer.interface.flush();
     child.stdin.?.close(init.io);
     child.stdin = null;
@@ -143,9 +179,7 @@ pub fn writeText(allocator: std.mem.Allocator, init: std.process.Init, text: []c
     return error.ClipboardWriteFailed;
 }
 
-pub fn pasteText(allocator: std.mem.Allocator, init: std.process.Init, text: []const u8, target_window: ?[]const u8, buffer_ms: u32) !void {
-    try writeText(allocator, init, text);
-    if (init.environ_map.*.get("DITOX_CLIPBOARD_MOCK") != null) return;
+pub fn sendPasteShortcut(allocator: std.mem.Allocator, init: std.process.Init, target_window: ?[]const u8, buffer_ms: u32, keybind: []const u8) !void {
     try std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(buffer_ms), .awake);
 
     if (target_window) |address| {
@@ -158,8 +192,10 @@ pub fn pasteText(allocator: std.mem.Allocator, init: std.process.Init, text: []c
         }) catch {};
     }
 
+    const shortcut = try hyprlandShortcut(allocator, keybind);
+    defer allocator.free(shortcut);
     const paste = try std.process.run(allocator, init.io, .{
-        .argv = &.{ "hyprctl", "dispatch", "sendshortcut", "CTRL,V," },
+        .argv = &.{ "hyprctl", "dispatch", "sendshortcut", shortcut },
         .stdout_limit = .limited(4096),
         .stderr_limit = .limited(4096),
     });
@@ -171,6 +207,61 @@ pub fn pasteText(allocator: std.mem.Allocator, init: std.process.Init, text: []c
         else => {},
     }
     return error.PasteBackFailed;
+}
+
+fn hyprlandShortcut(allocator: std.mem.Allocator, keybind: []const u8) ![]u8 {
+    const lower = try std.ascii.allocLowerString(allocator, std.mem.trim(u8, keybind, " \t\r\n"));
+    defer allocator.free(lower);
+    if (lower.len == 0) return error.InvalidPasteKeybind;
+
+    var mods: std.ArrayList([]const u8) = .empty;
+    defer mods.deinit(allocator);
+    var main_key: ?[]const u8 = null;
+
+    var parts = std.mem.splitScalar(u8, lower, '+');
+    while (parts.next()) |raw_part| {
+        const part = std.mem.trim(u8, raw_part, " \t\r\n");
+        if (part.len == 0) return error.InvalidPasteKeybind;
+        if (pasteModifier(part)) |modifier| {
+            try mods.append(allocator, modifier);
+        } else {
+            if (main_key != null) return error.InvalidPasteKeybind;
+            main_key = try hyprlandKey(allocator, part);
+        }
+    }
+
+    const key = main_key orelse return error.InvalidPasteKeybind;
+    defer allocator.free(key);
+
+    var out = std.Io.Writer.Allocating.init(allocator);
+    errdefer out.deinit();
+    for (mods.items, 0..) |modifier, index| {
+        if (index > 0) try out.writer.writeByte(' ');
+        try out.writer.writeAll(modifier);
+    }
+    try out.writer.print(",{s},", .{key});
+    return out.toOwnedSlice();
+}
+
+fn pasteModifier(part: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, part, "ctrl") or std.mem.eql(u8, part, "control")) return "CTRL";
+    if (std.mem.eql(u8, part, "shift")) return "SHIFT";
+    if (std.mem.eql(u8, part, "alt") or std.mem.eql(u8, part, "option")) return "ALT";
+    if (std.mem.eql(u8, part, "super") or std.mem.eql(u8, part, "meta") or std.mem.eql(u8, part, "cmd") or std.mem.eql(u8, part, "command") or std.mem.eql(u8, part, "win")) return "SUPER";
+    return null;
+}
+
+fn hyprlandKey(allocator: std.mem.Allocator, part: []const u8) ![]const u8 {
+    if (part.len == 1) {
+        const upper = try allocator.alloc(u8, 1);
+        upper[0] = std.ascii.toUpper(part[0]);
+        return upper;
+    }
+    if (std.mem.eql(u8, part, "space")) return allocator.dupe(u8, "SPACE");
+    if (std.mem.eql(u8, part, "enter") or std.mem.eql(u8, part, "return")) return allocator.dupe(u8, "RETURN");
+    if (std.mem.eql(u8, part, "tab")) return allocator.dupe(u8, "TAB");
+    if (std.mem.eql(u8, part, "escape") or std.mem.eql(u8, part, "esc")) return allocator.dupe(u8, "ESCAPE");
+    return std.ascii.allocUpperString(allocator, part);
 }
 
 pub fn activeHyprlandAddress(allocator: std.mem.Allocator, init: std.process.Init) !?[]u8 {

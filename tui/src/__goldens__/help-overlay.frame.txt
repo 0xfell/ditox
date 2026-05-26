@@ -1,0 +1,17 @@
+╭─bindings─────────────────────────────────────────────────────╮
+│up / k down / j                   move selection              │
+│left / pageup right / pagedown    page selection              │
+│home end                          first / last entry          │
+│space                             open preview                │
+│shift+tab                         toggle pinned view          │
+│ctrl+p                            send selected clip          │
+│ctrl+y y                          copy current / selected set │
+│x s shift+s                       mark / select / clear marks │
+│shift+up shift+down               range select                │
+│/ tab                             search / cycle filter       │
+│ctrl+g                            copy filtered clips         │
+│p d / backspace                   pin / delete                │
+│c a c t c i                       clear history               │
+╰c x                               clear everything────────────╯
+                                                                
+                                                                

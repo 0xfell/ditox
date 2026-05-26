@@ -39,6 +39,17 @@ pub fn build(b: *std.Build) void {
     const core_tests = b.addTest(.{ .root_module = core });
     const run_core_tests = b.addRunArtifact(core_tests);
     test_step.dependOn(&run_core_tests.step);
+    const daemon_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("backend/src/daemon.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "ditox_core", .module = core }},
+        }),
+    });
+    wireSqlite(b, daemon_tests.root_module);
+    const run_daemon_tests = b.addRunArtifact(daemon_tests);
+    test_step.dependOn(&run_daemon_tests.step);
 
     const run_step = b.step("run", "Run ditox");
     const run_cmd = b.addRunArtifact(cli);
@@ -63,4 +74,3 @@ fn wireSqlite(b: *std.Build, module: *std.Build.Module) void {
 fn env(b: *std.Build, name: []const u8) ?[]const u8 {
     return b.graph.environ_map.get(name);
 }
-

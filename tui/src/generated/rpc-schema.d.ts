@@ -25,136 +25,93 @@ export type Request =
   | HistoryResumeRequest
   | RepairRunRequest
   | StatsGetRequest;
-export type HealthCheckRequest = BaseRequest & {
-  method?: "health.check";
-  params?: {};
-  [k: string]: unknown;
-};
 export type Id = string | number | null;
-export type Method =
-  | "health.check"
-  | "config.get"
-  | "watcher.status"
-  | "entries.list"
-  | "entries.search"
-  | "entries.get"
-  | "entries.add"
-  | "entries.copy"
-  | "entries.bulk_copy"
-  | "entries.output"
-  | "entries.paste"
-  | "entries.delete"
-  | "entries.favorite"
-  | "entries.clear"
-  | "history.pause"
-  | "history.resume"
-  | "repair.run"
-  | "stats.get";
-export type ConfigGetRequest = BaseRequest & {
-  method?: "config.get";
-  params?: {};
-  [k: string]: unknown;
-};
-export type WatcherStatusRequest = BaseRequest & {
-  method?: "watcher.status";
-  params?: {};
-  [k: string]: unknown;
-};
-export type EntriesListRequest = BaseRequest & {
-  method?: "entries.list";
-  params?: ListParams;
-  [k: string]: unknown;
-};
 export type Filter = "all" | "text" | "images" | "favorites" | "today";
-export type EntriesSearchRequest = BaseRequest & {
-  method?: "entries.search";
-  params?: ListParams;
-  [k: string]: unknown;
-};
-export type EntriesGetRequest = BaseRequest & {
-  method?: "entries.get";
-  params?: IdParams;
-  [k: string]: unknown;
-};
-export type EntriesAddRequest = BaseRequest & {
-  method?: "entries.add";
-  params?: AddParams;
-  [k: string]: unknown;
-};
-export type EntriesCopyRequest = BaseRequest & {
-  method?: "entries.copy";
-  params?: IdParams;
-  [k: string]: unknown;
-};
-export type EntriesBulkCopyRequest = BaseRequest & {
-  method?: "entries.bulk_copy";
-  params?: IdsParams;
-  [k: string]: unknown;
-};
-export type EntriesOutputRequest = BaseRequest & {
-  method?: "entries.output";
-  params?: IdsParams;
-  [k: string]: unknown;
-};
-export type EntriesPasteRequest = BaseRequest & {
-  method?: "entries.paste";
-  params?: PasteParams;
-  [k: string]: unknown;
-};
-export type EntriesDeleteRequest = BaseRequest & {
-  method?: "entries.delete";
-  params?: IdParams;
-  [k: string]: unknown;
-};
-export type EntriesFavoriteRequest = BaseRequest & {
-  method?: "entries.favorite";
-  params?: FavoriteParams;
-  [k: string]: unknown;
-};
-export type EntriesClearRequest = BaseRequest & {
-  method?: "entries.clear";
-  params?: ClearParams;
-  [k: string]: unknown;
-};
-export type HistoryPauseRequest = BaseRequest & {
-  method?: "history.pause";
-  params?: PauseParams;
-  [k: string]: unknown;
-};
-export type HistoryResumeRequest = BaseRequest & {
-  method?: "history.resume";
-  params?: {};
-  [k: string]: unknown;
-};
-export type RepairRunRequest = BaseRequest & {
-  method?: "repair.run";
-  params?: {};
-  [k: string]: unknown;
-};
-export type StatsGetRequest = BaseRequest & {
-  method?: "stats.get";
-  params?: {};
-  [k: string]: unknown;
-};
+export type Success =
+  | HealthCheckSuccess
+  | ConfigGetSuccess
+  | WatcherStatusSuccess
+  | EntriesListSuccess
+  | EntriesSearchSuccess
+  | EntriesGetSuccess
+  | EntriesAddSuccess
+  | EntriesCopySuccess
+  | EntriesBulkCopySuccess
+  | EntriesOutputSuccess
+  | EntriesPasteSuccess
+  | EntriesDeleteSuccess
+  | EntriesFavoriteSuccess
+  | EntriesClearSuccess
+  | HistoryPauseSuccess
+  | HistoryResumeSuccess
+  | RepairRunSuccess
+  | StatsGetSuccess;
 
-export interface BaseRequest {
+export interface HealthCheckRequest {
   jsonrpc: "2.0";
   id: Id;
-  method: Method;
-  params?: {
-    [k: string]: unknown;
-  };
+  method: "health.check";
+  params?: EmptyParams;
+}
+export interface EmptyParams {}
+export interface ConfigGetRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "config.get";
+  params?: EmptyParams;
+}
+export interface WatcherStatusRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "watcher.status";
+  params?: EmptyParams;
+}
+export interface EntriesListRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "entries.list";
+  params?: ListParams;
 }
 export interface ListParams {
   query?: string;
   filter?: Filter;
   limit?: number;
 }
+export interface EntriesSearchRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "entries.search";
+  params?: ListParams;
+}
+export interface EntriesGetRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "entries.get";
+  params: IdParams;
+}
 export interface IdParams {
   id: number;
 }
+export interface EntriesAddRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "entries.add";
+  params: AddParams;
+}
 export interface AddParams {
   content: string;
+}
+export interface EntriesCopyRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "entries.copy";
+  params: IdParams;
+}
+export interface EntriesBulkCopyRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "entries.bulk_copy";
+  params: IdsParams;
 }
 export interface IdsParams {
   /**
@@ -162,40 +119,79 @@ export interface IdsParams {
    */
   ids: [number, ...number[]];
 }
+export interface EntriesOutputRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "entries.output";
+  params: IdsParams;
+}
+export interface EntriesPasteRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "entries.paste";
+  params: PasteParams;
+}
 export interface PasteParams {
   id: number;
   target_window?: string;
+}
+export interface EntriesDeleteRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "entries.delete";
+  params: IdParams;
+}
+export interface EntriesFavoriteRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "entries.favorite";
+  params: FavoriteParams;
 }
 export interface FavoriteParams {
   id: number;
   favorite: boolean;
 }
+export interface EntriesClearRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "entries.clear";
+  params: ClearParams;
+}
 export interface ClearParams {
   kind: "all" | "text" | "image" | "images";
+  preserve_favorites?: boolean;
+}
+export interface HistoryPauseRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "history.pause";
+  params?: PauseParams;
 }
 export interface PauseParams {
   duration_ms?: number;
 }
-export interface Success {
+export interface HistoryResumeRequest {
   jsonrpc: "2.0";
   id: Id;
-  result:
-    | HealthResult
-    | ConfigResult
-    | WatcherResult
-    | ListResult
-    | GetResult
-    | AddResult
-    | CopyResult
-    | OutputResult
-    | PasteResult
-    | DeleteResult
-    | FavoriteResult
-    | ClearResult
-    | PauseResult
-    | ResumeResult
-    | RepairResult
-    | StatsResult;
+  method: "history.resume";
+  params?: EmptyParams;
+}
+export interface RepairRunRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "repair.run";
+  params?: EmptyParams;
+}
+export interface StatsGetRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "stats.get";
+  params?: EmptyParams;
+}
+export interface HealthCheckSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: HealthResult;
 }
 export interface HealthResult {
   ok: boolean;
@@ -203,19 +199,34 @@ export interface HealthResult {
   version: string;
   storage: string;
 }
+export interface ConfigGetSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: ConfigResult;
+}
 export interface ConfigResult {
   config_path: string;
   data_dir: string;
   db_path: string;
+  image_dir: string;
   max_entries: number;
+  delete_after_seconds: number;
   allow_duplicates: boolean;
   poll_interval_ms: number;
   paste_enabled: boolean;
   paste_buffer_ms: number;
+  auto_paste_enabled: boolean;
+  auto_paste_keybind: string;
+  auto_paste_buffer_ms: number;
   max_preview_chars: number;
   terminal_command: string;
   excluded_apps: string[];
   excluded_windows: string[];
+}
+export interface WatcherStatusSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: WatcherResult;
 }
 export interface WatcherResult {
   running: boolean;
@@ -224,6 +235,11 @@ export interface WatcherResult {
   poll_interval_ms: number;
   last_seen_ms: number | null;
   last_error: string | null;
+}
+export interface EntriesListSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: ListResult;
 }
 export interface ListResult {
   entries: Entry[];
@@ -243,39 +259,111 @@ export interface Entry {
   image_width: number | null;
   image_height: number | null;
 }
+export interface EntriesSearchSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: ListResult;
+}
+export interface EntriesGetSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: GetResult;
+}
 export interface GetResult {
   entry: Entry;
+}
+export interface EntriesAddSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: AddResult;
 }
 export interface AddResult {
   id: number;
 }
+export interface EntriesCopySuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: CopyResult;
+}
 export interface CopyResult {
   copied: boolean;
+}
+export interface EntriesBulkCopySuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: CopyResult;
+}
+export interface EntriesOutputSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: OutputResult;
 }
 export interface OutputResult {
   content: string;
 }
+export interface EntriesPasteSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: PasteResult;
+}
 export interface PasteResult {
   pasted: boolean;
+}
+export interface EntriesDeleteSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: DeleteResult;
 }
 export interface DeleteResult {
   deleted: boolean;
 }
+export interface EntriesFavoriteSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: FavoriteResult;
+}
 export interface FavoriteResult {
   updated: boolean;
+}
+export interface EntriesClearSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: ClearResult;
 }
 export interface ClearResult {
   deleted: number;
 }
+export interface HistoryPauseSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: PauseResult;
+}
 export interface PauseResult {
   paused_for_ms: number;
+}
+export interface HistoryResumeSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: ResumeResult;
 }
 export interface ResumeResult {
   resumed: boolean;
 }
+export interface RepairRunSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: RepairResult;
+}
 export interface RepairResult {
   ok: boolean;
   pruned_blobs: number;
+  sanitized_text: number;
+  removed_missing_images: number;
+}
+export interface StatsGetSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: StatsResult;
 }
 export interface StatsResult {
   entries: number;

@@ -1,9 +1,10 @@
 import type { JSX } from "solid-js";
-import type { TuiTheme } from "../theme";
+import { surface, type ResolvedTuiConfig } from "../tui-config";
 
-export function Shell(props: { theme: TuiTheme; children: JSX.Element }) {
+export function Shell(props: { config: ResolvedTuiConfig; children: JSX.Element }) {
+  const style = () => surface(props.config, "shell");
   return (
-    <box flexDirection="column" width="100%" height="100%" backgroundColor={props.theme.bgBase}>
+    <box flexDirection="column" width="100%" height="100%" backgroundColor={style().bg}>
       {props.children}
     </box>
   );

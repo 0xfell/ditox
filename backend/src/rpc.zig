@@ -2,8 +2,8 @@ const std = @import("std");
 const app = @import("app.zig");
 
 const Request = struct {
-    jsonrpc: []const u8 = "2.0",
-    id: std.json.Value = .null,
+    jsonrpc: []const u8,
+    id: std.json.Value,
     method: []const u8,
     params: ?std.json.Value = null,
 };
@@ -15,14 +15,20 @@ pub fn handle(allocator: std.mem.Allocator, init: std.process.Init, input: []con
     };
     defer parsed.deinit();
 
+    const params = parsed.value.params;
+    const method = parsed.value.method;
+    if (!std.mem.eql(u8, parsed.value.jsonrpc, "2.0")) {
+        return errorResponseOwned(allocator, parsed.value.id, -32600, "invalid jsonrpc version");
+    }
+    if (validateParams(method, params)) |message| {
+        return errorResponseOwned(allocator, parsed.value.id, -32602, message);
+    }
+
     var opened = app.openStore(allocator, init) catch |err| {
         return errorResponseOwned(allocator, parsed.value.id, -32000, @errorName(err));
     };
     defer opened.cfg.deinit();
     defer opened.store.close();
-
-    const params = parsed.value.params;
-    const method = parsed.value.method;
 
     return dispatch(allocator, init, parsed.value.id, method, params, &opened) catch |err| {
         return errorResponseOwned(allocator, parsed.value.id, -32000, @errorName(err));
@@ -98,7 +104,8 @@ fn dispatch(allocator: std.mem.Allocator, init: std.process.Init, id_value: std.
     }
     if (std.mem.eql(u8, method, "entries.clear")) {
         const kind = getString(params, "kind") orelse "all";
-        return successResponseOwned(allocator, id_value, .{ .deleted = try opened.store.clear(kind) });
+        const preserve_favorites = getBool(params, "preserve_favorites") orelse false;
+        return successResponseOwned(allocator, id_value, .{ .deleted = try opened.store.clearWithOptions(kind, preserve_favorites) });
     }
     if (std.mem.eql(u8, method, "history.pause")) {
         const duration_ms = getU32(params, "duration_ms") orelse 0;
@@ -110,7 +117,7 @@ fn dispatch(allocator: std.mem.Allocator, init: std.process.Init, id_value: std.
         return successResponseOwned(allocator, id_value, .{ .resumed = true });
     }
     if (std.mem.eql(u8, method, "repair.run")) {
-        return successResponseOwned(allocator, id_value, try opened.store.repair());
+        return successResponseOwned(allocator, id_value, try opened.store.repair(opened.cfg));
     }
     if (std.mem.eql(u8, method, "stats.get")) {
         return successResponseOwned(allocator, id_value, try opened.store.stats());
@@ -198,6 +205,172 @@ fn getObject(params: ?std.json.Value) ?std.json.ObjectMap {
     return if (value == .object) value.object else null;
 }
 
+fn validateParams(method: []const u8, params: ?std.json.Value) ?[]const u8 {
+    if (std.mem.eql(u8, method, "health.check") or
+        std.mem.eql(u8, method, "config.get") or
+        std.mem.eql(u8, method, "watcher.status") or
+        std.mem.eql(u8, method, "history.resume") or
+        std.mem.eql(u8, method, "repair.run") or
+        std.mem.eql(u8, method, "stats.get"))
+    {
+        return validateNoParams(params);
+    }
+    if (std.mem.eql(u8, method, "entries.list") or std.mem.eql(u8, method, "entries.search")) return validateListParams(params);
+    if (std.mem.eql(u8, method, "entries.get") or std.mem.eql(u8, method, "entries.copy") or std.mem.eql(u8, method, "entries.delete")) {
+        return validateIdParams(params);
+    }
+    if (std.mem.eql(u8, method, "entries.add")) return validateAddParams(params);
+    if (std.mem.eql(u8, method, "entries.bulk_copy") or std.mem.eql(u8, method, "entries.output")) return validateIdsParams(params);
+    if (std.mem.eql(u8, method, "entries.paste")) return validatePasteParams(params);
+    if (std.mem.eql(u8, method, "entries.favorite")) return validateFavoriteParams(params);
+    if (std.mem.eql(u8, method, "entries.clear")) return validateClearParams(params);
+    if (std.mem.eql(u8, method, "history.pause")) return validatePauseParams(params);
+    return null;
+}
+
+fn validateNoParams(params: ?std.json.Value) ?[]const u8 {
+    const value = params orelse return null;
+    if (value != .object) return "params must be an object";
+    if (value.object.count() != 0) return "unexpected params";
+    return null;
+}
+
+fn validateListParams(params: ?std.json.Value) ?[]const u8 {
+    if (validateOptionalKeys(params, &.{ "query", "filter", "limit" })) |message| return message;
+    const object = getObject(params) orelse return null;
+    if (object.get("query")) |value| if (value != .string) return "invalid query";
+    if (object.get("filter")) |value| {
+        if (value != .string or !validFilter(value.string)) return "invalid filter";
+    }
+    if (object.get("limit")) |value| {
+        if (value != .integer or value.integer < 1 or value.integer > 500) return "invalid limit";
+    }
+    return null;
+}
+
+fn validateIdParams(params: ?std.json.Value) ?[]const u8 {
+    if (validateRequiredKeys(params, &.{"id"}, &.{})) |message| return message;
+    const object = getObject(params).?;
+    if (object.get("id").? != .integer) return "invalid id";
+    return null;
+}
+
+fn validateIdsParams(params: ?std.json.Value) ?[]const u8 {
+    if (validateRequiredKeys(params, &.{"ids"}, &.{})) |message| return message;
+    const value = getObject(params).?.get("ids").?;
+    if (value != .array or value.array.items.len == 0) return "invalid ids";
+    for (value.array.items) |item| {
+        if (item != .integer) return "invalid ids";
+    }
+    return null;
+}
+
+fn validateAddParams(params: ?std.json.Value) ?[]const u8 {
+    if (validateRequiredKeys(params, &.{"content"}, &.{})) |message| return message;
+    if (getObject(params).?.get("content").? != .string) return "invalid content";
+    return null;
+}
+
+fn validatePasteParams(params: ?std.json.Value) ?[]const u8 {
+    if (validateRequiredKeys(params, &.{"id"}, &.{"target_window"})) |message| return message;
+    const object = getObject(params).?;
+    if (object.get("id").? != .integer) return "invalid id";
+    if (object.get("target_window")) |value| if (value != .string) return "invalid target_window";
+    return null;
+}
+
+fn validateFavoriteParams(params: ?std.json.Value) ?[]const u8 {
+    if (validateRequiredKeys(params, &.{ "id", "favorite" }, &.{})) |message| return message;
+    const object = getObject(params).?;
+    if (object.get("id").? != .integer) return "invalid id";
+    if (object.get("favorite").? != .bool) return "invalid favorite";
+    return null;
+}
+
+fn validateClearParams(params: ?std.json.Value) ?[]const u8 {
+    if (validateRequiredKeys(params, &.{"kind"}, &.{"preserve_favorites"})) |message| return message;
+    const object = getObject(params).?;
+    if (object.get("kind").? != .string or !validClearKind(object.get("kind").?.string)) return "invalid kind";
+    if (object.get("preserve_favorites")) |value| if (value != .bool) return "invalid preserve_favorites";
+    return null;
+}
+
+fn validatePauseParams(params: ?std.json.Value) ?[]const u8 {
+    if (validateOptionalKeys(params, &.{"duration_ms"})) |message| return message;
+    const object = getObject(params) orelse return null;
+    if (object.get("duration_ms")) |value| {
+        if (value != .integer or value.integer < 0) return "invalid duration_ms";
+    }
+    return null;
+}
+
+fn validateOptionalKeys(params: ?std.json.Value, optional: []const []const u8) ?[]const u8 {
+    const value = params orelse return null;
+    if (value != .object) return "params must be an object";
+    for (value.object.keys()) |key| {
+        if (!containsKey(optional, key)) return "unexpected params";
+    }
+    return null;
+}
+
+fn validateRequiredKeys(params: ?std.json.Value, required: []const []const u8, optional: []const []const u8) ?[]const u8 {
+    const value = params orelse return "missing params";
+    if (value != .object) return "params must be an object";
+    for (required) |key| {
+        if (!value.object.contains(key)) return "missing params";
+    }
+    for (value.object.keys()) |key| {
+        if (!containsKey(required, key) and !containsKey(optional, key)) return "unexpected params";
+    }
+    return null;
+}
+
+fn containsKey(keys: []const []const u8, candidate: []const u8) bool {
+    for (keys) |key| {
+        if (std.mem.eql(u8, key, candidate)) return true;
+    }
+    return false;
+}
+
+fn validFilter(value: []const u8) bool {
+    return std.mem.eql(u8, value, "all") or
+        std.mem.eql(u8, value, "text") or
+        std.mem.eql(u8, value, "images") or
+        std.mem.eql(u8, value, "favorites") or
+        std.mem.eql(u8, value, "today");
+}
+
+fn validClearKind(value: []const u8) bool {
+    return std.mem.eql(u8, value, "all") or
+        std.mem.eql(u8, value, "text") or
+        std.mem.eql(u8, value, "image") or
+        std.mem.eql(u8, value, "images");
+}
+
 test "requestBody accepts content-length frames" {
     try std.testing.expectEqualStrings("{\"ok\":true}", requestBody("Content-Length: 11\r\n\r\n{\"ok\":true}"));
+}
+
+test "validateParams enforces method-specific RPC params" {
+    try expectValidParams("entries.paste", "{\"id\":1,\"target_window\":\"0xabc\"}");
+    try expectValidParams("entries.list", "{\"query\":\"needle\",\"filter\":\"today\",\"limit\":500}");
+    try expectValidParams("history.pause", "{}");
+    try expectValidParams("stats.get", "{}");
+    try expectInvalidParams("entries.favorite", "{\"id\":1}");
+    try expectInvalidParams("entries.clear", "{\"kind\":\"everything\"}");
+    try expectInvalidParams("entries.list", "{\"query\":\"ok\",\"extra\":1}");
+    try expectInvalidParams("entries.bulk_copy", "{\"ids\":[]}");
+    try expectInvalidParams("stats.get", "{\"unexpected\":true}");
+}
+
+fn expectValidParams(method: []const u8, json: []const u8) !void {
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
+    defer parsed.deinit();
+    try std.testing.expect(validateParams(method, parsed.value) == null);
+}
+
+fn expectInvalidParams(method: []const u8, json: []const u8) !void {
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
+    defer parsed.deinit();
+    try std.testing.expect(validateParams(method, parsed.value) != null);
 }

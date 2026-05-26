@@ -1,70 +1,273 @@
-import { For, Show } from "solid-js";
-import { entryAccent, formatBytes, previewModel, truncateText } from "../presentation";
-import type { UiConfig } from "../ui-config";
-import type { TuiTheme } from "../theme";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import {
+  imageBlockPreview,
+  imageBlockPreviewAsync,
+  shouldLoadImageBlockPreviewAsync,
+  type ImageBlockPreview as ImageBlockPreviewModel,
+  type ImageProtocolCapabilities,
+} from "../image-preview";
+import { entryAccent, previewMetaTemplateValues, previewModel, truncateText } from "../presentation";
+import { visiblePreviewLineCapacity } from "../state";
+import {
+  formatTemplate,
+  paddedTitle,
+  surface,
+  textStyle,
+  type ResolvedTuiConfig,
+  type TuiPreviewContentPartName,
+  type TuiStatusLineToneName,
+  type TuiSurfaceStyle,
+} from "../tui-config";
 import type { Entry } from "../types";
+import { ImagePreviewRows } from "./ImagePreviewRows";
 
-export function PreviewPane(props: { theme: TuiTheme; config: UiConfig; entry: Entry | undefined; rows: number; width: number }) {
-  const lines = () => previewModel(props.entry, Math.min(props.config.maxPreviewLines, props.rows));
+export function PreviewPane(props: {
+  config: ResolvedTuiConfig;
+  entry: Entry | undefined;
+  rows: number;
+  width: number;
+  widthPercent?: number;
+  imageCapabilities?: Partial<ImageProtocolCapabilities>;
+}) {
+  const style = () => surface(props.config, "preview");
+  const gutterStyle = () => surface(props.config, "previewGutter");
+  const spacerStyle = () => surface(props.config, "previewSpacer");
+  const layout = () => props.config.layout;
+  const labels = () => props.config.labels;
+  const [loadedBlockPreview, setLoadedBlockPreview] = createSignal<ImageBlockPreviewModel | null>(null);
+  const textWidth = () => Math.max(1, props.width - (layout().showPreviewGutter ? layout().previewTextWidthInset : layout().previewPaddingX * 2));
+  const blockPreviewRequest = createMemo(() => ({
+    entry: props.entry,
+    maxWidth: Math.min(textWidth(), layout().imagePreviewMaxWidth),
+    maxRows: Math.min(Math.max(2, props.rows - layout().imagePreviewRowInset), layout().imagePreviewMaxRows),
+    background: imagePreviewBackground(props.config, style().bg),
+    mode: layout().imagePreviewMode,
+    labels: labels(),
+    blockGlyph: layout().imagePreviewBlockGlyph,
+    capabilities: props.imageCapabilities,
+  }));
+  createEffect(() => {
+    const request = blockPreviewRequest();
+    const syncPreview = imageBlockPreview(
+      request.entry,
+      request.maxWidth,
+      request.maxRows,
+      request.background,
+      request.mode,
+      request.labels,
+      request.blockGlyph,
+      request.capabilities,
+    );
+    setLoadedBlockPreview(syncPreview);
+    if (!shouldLoadImageBlockPreviewAsync(request.entry, request.mode)) return;
+
+    let disposed = false;
+    void imageBlockPreviewAsync(
+      request.entry,
+      request.maxWidth,
+      request.maxRows,
+      request.background,
+      request.mode,
+      request.labels,
+      request.blockGlyph,
+      request.capabilities,
+    ).then((preview) => {
+      if (!disposed) setLoadedBlockPreview(preview);
+    });
+    onCleanup(() => {
+      disposed = true;
+    });
+  });
+  const blockPreview = () => {
+    const request = blockPreviewRequest();
+    return (
+      loadedBlockPreview() ??
+      imageBlockPreview(request.entry, request.maxWidth, request.maxRows, request.background, request.mode, request.labels, request.blockGlyph, request.capabilities)
+    );
+  };
+  const imageNoticeText = () => imagePreviewNotice(props.config, blockPreview());
+  const imageFallbackVisible = () => props.entry?.kind === "image" && blockPreview().kind === "fallback" && layout().imagePreviewMode !== "metadata";
+  const imagePreviewRows = () => {
+    if (props.entry?.kind !== "image") return 0;
+    const preview = blockPreview();
+    const renderedRows = preview.kind === "rendered" ? preview.native.cellRows : 0;
+    return renderedRows + (imageNoticeText() ? 1 : 0) + (imageFallbackVisible() ? 1 : 0);
+  };
+  const metadataRows = () => (layout().showMetadata && props.entry ? layout().previewMetaHeight : 0);
+  const visibleTextRows = () =>
+    visiblePreviewLineCapacity(Math.min(layout().maxPreviewLines, Math.max(0, props.rows - metadataRows() - imagePreviewRows())), layout().previewLineSpacing);
+  const lines = () =>
+    previewModel(
+      props.entry,
+      visibleTextRows(),
+      labels(),
+      layout(),
+    );
   return (
     <box
-      width={`${props.config.previewWidthPercent}%`}
-      border
-      borderStyle="single"
-      borderColor={props.entry ? entryAccent(props.theme, props.entry) : props.theme.border}
-      backgroundColor={props.theme.bgPanel}
-      paddingX={props.config.panelPaddingX}
-      paddingY={props.config.panelPaddingY}
-      title=" preview "
-      bottomTitle={props.entry ? ` #${props.entry.id} ` : undefined}
+      width={`${props.widthPercent ?? layout().previewWidthPercent}%`}
+      border={props.config.chrome.previewBorder ? true : undefined}
+      borderStyle={props.config.chrome.previewBorder ? props.config.chrome.previewBorderStyle : undefined}
+      borderColor={props.config.chrome.previewBorder ? splitBorderColor(props.config, style(), props.entry) : undefined}
+      backgroundColor={style().bg}
+      paddingX={layout().previewPaddingX}
+      paddingY={layout().previewPaddingY}
+      title={props.config.chrome.previewBorder && props.config.chrome.showPreviewTitle ? paddedTitle(labels().previewTitle, layout().frameTitlePadding) : undefined}
+      titleAlignment={props.config.chrome.previewTitleAlignment}
+      bottomTitle={
+        props.config.chrome.previewBorder && props.config.chrome.showPreviewEntryTitle && props.entry
+          ? paddedTitle(previewEntryTitle(props.config, props.entry), layout().frameTitlePadding)
+          : undefined
+      }
+      bottomTitleAlignment={props.config.chrome.previewBottomTitleAlignment}
     >
-      <Show when={props.config.showMetadata ? props.entry : undefined}>
-        {(entry) => <PreviewMeta theme={props.theme} entry={entry()} />}
+      <Show when={layout().showMetadata ? props.entry : undefined}>
+        {(entry) => <PreviewMeta config={props.config} entry={entry()} />}
+      </Show>
+      <Show when={props.entry?.kind === "image" && blockPreview().kind === "rendered"}>
+        <ImagePreviewRows preview={blockPreview()} renderer={layout().imagePreviewRenderer} blockGlyph={layout().imagePreviewBlockGlyph} />
+      </Show>
+      <Show when={imageNoticeText()}>
+        {(notice) => (
+          <box height={1} flexDirection="row" backgroundColor={style().bg}>
+            <text style={textStyle(style(), splitContentColor(props.config, style(), "splitImageNotice", style().muted))}>{notice()}</text>
+          </box>
+        )}
+      </Show>
+      <Show when={imageFallbackVisible()}>
+        <text style={textStyle(style())}>
+          <span style={textStyle(style(), splitContentColor(props.config, style(), "splitImageFallbackPrefix", style().muted))}>
+            {labels().splitImagePreviewFallbackPrefix}
+          </span>
+          <span style={textStyle(style(), splitContentColor(props.config, style(), "splitImageFallbackSeparator", style().muted))}>
+            {labels().splitImagePreviewFallbackSeparator}
+          </span>
+          <span style={textStyle(style(), splitContentColor(props.config, style(), "splitImageFallbackReason", style().muted))}>
+            {(blockPreview() as Extract<ImageBlockPreviewModel, { kind: "fallback" }>).reason}
+          </span>
+        </text>
       </Show>
       <For each={lines()}>
-        {(line) => (
-          <box height={1} flexDirection="row" backgroundColor={props.theme.bgPanel}>
-            <text style={{ fg: props.theme.textDim, bg: props.theme.bgPanel }}>{line.gutter.padStart(4, " ")}</text>
-            <text style={{ fg: props.theme.textDim, bg: props.theme.bgPanel }}>  </text>
-            <text style={{ fg: toneColor(props.theme, line.tone), bg: props.theme.bgPanel }}>
-              {truncateText(line.text, Math.max(8, props.width - 8))}
-            </text>
-          </box>
+        {(line, index) => (
+          <>
+            <box height={1} flexDirection="row" backgroundColor={style().bg}>
+              <Show when={layout().showPreviewGutter}>
+                <text style={textStyle(gutterStyle(), splitContentColor(props.config, gutterStyle(), "splitGutter", gutterStyle().muted))}>
+                  {line.gutter.padStart(layout().previewGutterWidth, " ")}
+                </text>
+                <text style={textStyle(gutterStyle(), splitContentColor(props.config, gutterStyle(), "splitGutterSeparator", gutterStyle().muted))}>
+                  {labels().previewGutterSeparator}
+                </text>
+              </Show>
+              <text style={textStyle(style(), splitLineToneColor(props.config, style(), props.entry, line.tone, index()))}>
+                {truncateText(line.text, textWidth(), labels())}
+              </text>
+            </box>
+            <Show when={layout().previewLineSpacing > 0 && index() < lines().length - 1}>
+              <box width="100%" height={layout().previewLineSpacing} backgroundColor={spacerStyle().bg} />
+            </Show>
+          </>
         )}
       </For>
     </box>
   );
 }
 
-function PreviewMeta(props: { theme: TuiTheme; entry: Entry }) {
+function imagePreviewBackground(config: ResolvedTuiConfig, fallback: string): string {
+  return config.layout.imagePreviewBackground === "auto" ? fallback : config.layout.imagePreviewBackground;
+}
+
+function imagePreviewNotice(config: ResolvedTuiConfig, preview: ImageBlockPreviewModel): string | null {
+  if (preview.kind !== "rendered") return null;
+  if (config.layout.imagePreviewNoticeVisibility === "never") return null;
+  if (preview.notice) return preview.notice;
+  if (config.layout.imagePreviewNoticeVisibility === "always") {
+    return formatTemplate(config.labels.splitImagePreviewSourceTemplate, { source: preview.source });
+  }
+  return null;
+}
+
+function PreviewMeta(props: { config: ResolvedTuiConfig; entry: Entry }) {
+  const style = () => surface(props.config, "previewMeta");
+  const labels = () => props.config.labels;
+  const values = () => previewMetaTemplateValues(props.entry, labels(), props.config.layout.previewMetaHashLength);
+  const header = () =>
+    formatTemplate(labels().previewMetaHeaderTemplate, values());
+  const details = () =>
+    formatTemplate(labels().previewMetaDetailsTemplate, values());
   return (
-    <box height={3} flexDirection="column" backgroundColor={props.theme.bgSubtle} paddingX={1}>
-      <text style={{ fg: entryAccent(props.theme, props.entry), bg: props.theme.bgSubtle }}>
-        {props.entry.kind.toUpperCase()} #{props.entry.id}
-        <span style={{ fg: props.theme.textDim, bg: props.theme.bgSubtle }}>  hash </span>
-        <span style={{ fg: props.theme.textSecondary, bg: props.theme.bgSubtle }}>{props.entry.hash.slice(0, 12)}</span>
-      </text>
-      <text style={{ fg: props.theme.textMuted, bg: props.theme.bgSubtle }}>
-        {props.entry.mime}  {formatBytes(props.entry.byte_len)}
-        {props.entry.favorite ? "  pinned" : ""}
-      </text>
+    <box
+      height={props.config.layout.previewMetaHeight}
+      flexDirection="column"
+      backgroundColor={style().bg}
+      paddingX={props.config.layout.previewMetaPaddingX}
+      paddingY={props.config.layout.previewMetaPaddingY}
+    >
+      <text style={textStyle(style(), splitContentColor(props.config, style(), "splitMetaHeader", style().accent))}>{header()}</text>
+      <Show when={props.config.layout.previewMetaHeight >= 2}>
+        <text style={textStyle(style(), splitContentColor(props.config, style(), "splitMetaDetails", style().fg))}>{details()}</text>
+      </Show>
     </box>
   );
 }
 
-function toneColor(theme: TuiTheme, tone: "primary" | "secondary" | "muted" | "accent" | "error" | "success"): string {
+function previewEntryTitle(config: ResolvedTuiConfig, entry: Entry): string {
+  return formatTemplate(config.labels.previewEntryTitleTemplate, {
+    entryIdPrefix: config.labels.entryIdPrefix,
+    id: entry.id,
+  });
+}
+
+function toneColor(style: TuiSurfaceStyle, tone: "primary" | "secondary" | "muted" | "accent" | "error" | "success"): string {
   switch (tone) {
     case "secondary":
-      return theme.textSecondary;
+      return style.secondary;
     case "muted":
-      return theme.textMuted;
+      return style.muted;
     case "accent":
-      return theme.accentCommand;
+      return style.accent;
     case "error":
-      return theme.accentError;
+      return style.error;
     case "success":
-      return theme.accentSuccess;
+      return style.success;
     default:
-      return theme.textPrimary;
+      return style.fg;
   }
+}
+
+type PreviewLineTone = "primary" | "secondary" | "muted" | "accent" | "error" | "success";
+
+function splitBorderColor(config: ResolvedTuiConfig, style: TuiSurfaceStyle, entry: Entry | undefined): string {
+  return splitContentColor(config, style, "splitBorder", entry ? entryAccent(style, entry) : style.border);
+}
+
+function splitLineToneColor(config: ResolvedTuiConfig, style: TuiSurfaceStyle, entry: Entry | undefined, tone: PreviewLineTone, index: number): string {
+  if (!entry) return splitContentColor(config, style, index === 0 ? "splitEmptyTitle" : "splitEmptyHelp", toneColor(style, tone));
+  return splitContentColor(config, style, splitLineTonePart(tone), toneColor(style, tone));
+}
+
+function splitLineTonePart(tone: PreviewLineTone): TuiPreviewContentPartName {
+  switch (tone) {
+    case "secondary":
+      return "splitSecondary";
+    case "muted":
+      return "splitMuted";
+    case "accent":
+      return "splitAccent";
+    case "error":
+      return "splitError";
+    case "success":
+      return "splitSuccess";
+    default:
+      return "splitPrimary";
+  }
+}
+
+function splitContentColor(config: ResolvedTuiConfig, style: TuiSurfaceStyle, part: TuiPreviewContentPartName, autoColor: string): string {
+  return configuredToneColor(style, config.previewContentTones[part], autoColor);
+}
+
+function configuredToneColor(style: TuiSurfaceStyle, tone: TuiStatusLineToneName, autoColor: string): string {
+  if (tone === "auto") return autoColor;
+  return style[tone];
 }

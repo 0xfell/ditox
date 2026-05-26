@@ -44,6 +44,9 @@ fn watchClipboard(allocator: std.mem.Allocator, init: std.process.Init) !void {
     defer opened.cfg.deinit();
     defer opened.store.close();
 
+    try opened.store.markWatcherPid(@as(i64, @intCast(std.os.linux.getpid())));
+    defer opened.store.clearWatcherPid() catch {};
+
     var last_hash: ?[64]u8 = null;
     while (true) {
         opened.store.markWatcherSeen() catch {};
@@ -130,7 +133,31 @@ fn isActiveWindowExcluded(allocator: std.mem.Allocator, init: std.process.Init, 
 
 fn matchesAny(value: []const u8, patterns: []const []const u8) bool {
     for (patterns) |pattern| {
-        if (pattern.len > 0 and std.mem.indexOf(u8, value, pattern) != null) return true;
+        if (containsIgnoreCase(value, pattern)) return true;
     }
     return false;
+}
+
+fn containsIgnoreCase(value: []const u8, pattern: []const u8) bool {
+    if (pattern.len == 0 or pattern.len > value.len) return false;
+    var start: usize = 0;
+    while (start + pattern.len <= value.len) : (start += 1) {
+        for (pattern, 0..) |needle, offset| {
+            if (std.ascii.toLower(value[start + offset]) != std.ascii.toLower(needle)) break;
+        } else {
+            return true;
+        }
+    }
+    return false;
+}
+
+test "excluded app and window matching is case-insensitive" {
+    const apps = [_][]const u8{ "Bitwarden", "KeePassXC" };
+    const windows = [_][]const u8{"Secret Window"};
+
+    try std.testing.expect(matchesAny("bitwarden desktop", &apps));
+    try std.testing.expect(matchesAny("org.keepassxc.KeePassXC", &apps));
+    try std.testing.expect(matchesAny("private SECRET window title", &windows));
+    try std.testing.expect(!matchesAny("Alacritty", &apps));
+    try std.testing.expect(!matchesAny("normal browser tab", &windows));
 }

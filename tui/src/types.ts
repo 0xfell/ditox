@@ -20,6 +20,15 @@ export type ListResponse = {
   entries: Entry[];
 };
 
+export type WatcherStatus = {
+  running: boolean;
+  paused: boolean;
+  backend: string;
+  poll_interval_ms: number;
+  last_seen_ms: number | null;
+  last_error: string | null;
+};
+
 export type RpcSuccess<T> = {
   jsonrpc: "2.0";
   id: string;

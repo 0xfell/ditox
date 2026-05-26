@@ -1,41 +1,109 @@
+export type ImagePreviewMode = "metadata" | "blocks" | "kitty" | "sixel";
+export type ImagePreviewRenderer = "auto" | "opentui" | "text";
+export type ImagePreviewNoticeVisibility = "never" | "protocol" | "always";
+export type OverlayPlacement = "bottom" | "top";
+export type PreviewImageField = "type" | "mime" | "size" | "dimensions" | "hash" | "blob";
+
 export type UiConfig = {
   compactMode: boolean;
   listWidthPercent: number;
   previewWidthPercent: number;
   maxPreviewLines: number;
+  maxFullPreviewLines: number;
+  historyLimit: number;
+  imagePreviewMode: ImagePreviewMode;
+  fullPreviewImageMode: ImagePreviewMode;
+  imagePreviewMaxWidth: number;
+  imagePreviewMaxRows: number;
+  fullPreviewImageMaxWidth: number;
+  fullPreviewImageMaxRows: number;
+  imagePreviewRenderer: ImagePreviewRenderer;
+  fullPreviewImageRenderer: ImagePreviewRenderer;
+  imagePreviewBlockGlyph: string;
+  fullPreviewImageBlockGlyph: string;
+  imagePreviewBackground: string;
+  fullPreviewImageBackground: string;
+  imagePreviewNoticeVisibility: ImagePreviewNoticeVisibility;
+  fullPreviewImageNoticeVisibility: ImagePreviewNoticeVisibility;
+  headerHeight: number;
+  statusHeight: number;
+  showHeader: boolean;
+  showStatusLine: boolean;
+  searchOverlayHeight: number;
+  confirmOverlayHeight: number;
+  confirmPinnedExtraRows: number;
+  clearOverlayHeight: number;
+  helpOverlayHeight: number;
+  overlayPlacement: OverlayPlacement;
+  minPaneWidth: number;
+  splitPaneGap: number;
+  splitPaneWidthInset: number;
+  fullPreviewWidthInset: number;
+  previewTextWidthInset: number;
+  fullPreviewTextWidthInset: number;
+  imagePreviewRowInset: number;
+  fullPreviewImageRowInset: number;
+  fullPreviewScrollInsetRows: number;
+  previewLineNumberWidth: number;
+  previewGutterWidth: number;
+  fullPreviewGutterWidth: number;
+  previewLineSpacing: number;
+  fullPreviewLineSpacing: number;
+  previewMetaHeight: number;
+  fullPreviewMetaHeight: number;
+  previewMetaHashLength: number;
+  previewImageFields: PreviewImageField[];
+  statusSeparatorPadding: number;
+  frameTitlePadding: number;
+  headerPaddingX: number;
+  headerPaddingY: number;
+  statusPaddingX: number;
+  statusPaddingY: number;
+  overlayPaddingX: number;
+  overlayPaddingY: number;
+  searchOverlayPaddingX: number;
+  searchOverlayPaddingY: number;
+  dangerOverlayPaddingX: number;
+  dangerOverlayPaddingY: number;
+  helpOverlayPaddingX: number;
+  helpOverlayPaddingY: number;
+  listPaddingX: number;
+  listPaddingY: number;
+  previewPaddingX: number;
+  previewPaddingY: number;
+  fullPreviewPaddingX: number;
+  fullPreviewPaddingY: number;
+  previewMetaPaddingX: number;
+  previewMetaPaddingY: number;
+  fullPreviewMetaPaddingX: number;
+  fullPreviewMetaPaddingY: number;
+  emptyStatePaddingX: number;
+  emptyStatePaddingY: number;
+  helpKeyWidth: number;
+  confirmHintIndent: number;
+  rowAgeWidth: number;
+  rowSizeWidth: number;
+  rowPinnedWidth: number;
+  rowMetaHashLength: number;
+  rowMarkerGap: number;
+  rowMetaPreviewGap: number;
+  rowPreviewReservedWidth: number;
+  rowPreviewMaxWidth: number;
+  rowSpacing: number;
+  alternateRows: boolean;
+  refreshIntervalMs: number;
+  mouseEnabled: boolean;
+  mouseScrollRows: number;
   showScrollbar: boolean;
+  scrollbarWidth: number;
   showMetadata: boolean;
+  showRowMetadata: boolean;
+  showPreviewPane: boolean;
+  showFullPreviewMetadata: boolean;
+  showPreviewGutter: boolean;
+  showFullPreviewGutter: boolean;
+  highlightSearchMatches: boolean;
+  showEmptyStateHelp: boolean;
   panelPaddingX: number;
   panelPaddingY: number;
 };
-
-export function currentUiConfig(): UiConfig {
-  const compactMode = boolEnv("DITOX_TUI_COMPACT", false);
-  const listWidthPercent = clampNumber(numberEnv("DITOX_TUI_LIST_WIDTH", 46), 32, 68);
-  return {
-    compactMode,
-    listWidthPercent,
-    previewWidthPercent: 100 - listWidthPercent,
-    maxPreviewLines: clampNumber(numberEnv("DITOX_TUI_MAX_PREVIEW_LINES", compactMode ? 18 : 28), 8, 80),
-    showScrollbar: boolEnv("DITOX_TUI_SCROLLBAR", true),
-    showMetadata: boolEnv("DITOX_TUI_METADATA", true),
-    panelPaddingX: compactMode ? 0 : 1,
-    panelPaddingY: 0,
-  };
-}
-
-function boolEnv(name: string, fallback: boolean): boolean {
-  const value = Bun.env[name];
-  if (value === "1" || value === "true" || value === "yes") return true;
-  if (value === "0" || value === "false" || value === "no") return false;
-  return fallback;
-}
-
-function numberEnv(name: string, fallback: number): number {
-  const parsed = Number(Bun.env[name]);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
-}

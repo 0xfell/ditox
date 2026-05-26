@@ -961,6 +961,7 @@ Core config sections:
 
 - general:
   - max entries.
+  - delete-after retention for non-pinned entries, with `0` meaning disabled.
   - poll interval.
 - storage:
   - data directory override.

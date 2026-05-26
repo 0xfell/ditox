@@ -4,12 +4,24 @@
   "title": "Ditox JSON-RPC Contract",
   "type": "object",
   "oneOf": [
-    { "$ref": "#/$defs/request" },
-    { "$ref": "#/$defs/success" },
-    { "$ref": "#/$defs/failure" }
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/success"
+    },
+    {
+      "$ref": "#/$defs/failure"
+    }
   ],
   "$defs": {
-    "id": { "type": ["string", "integer", "null"] },
+    "id": {
+      "type": [
+        "string",
+        "integer",
+        "null"
+      ]
+    },
     "method": {
       "enum": [
         "health.check",
@@ -34,208 +46,616 @@
     },
     "request": {
       "oneOf": [
-        { "$ref": "#/$defs/healthCheckRequest" },
-        { "$ref": "#/$defs/configGetRequest" },
-        { "$ref": "#/$defs/watcherStatusRequest" },
-        { "$ref": "#/$defs/entriesListRequest" },
-        { "$ref": "#/$defs/entriesSearchRequest" },
-        { "$ref": "#/$defs/entriesGetRequest" },
-        { "$ref": "#/$defs/entriesAddRequest" },
-        { "$ref": "#/$defs/entriesCopyRequest" },
-        { "$ref": "#/$defs/entriesBulkCopyRequest" },
-        { "$ref": "#/$defs/entriesOutputRequest" },
-        { "$ref": "#/$defs/entriesPasteRequest" },
-        { "$ref": "#/$defs/entriesDeleteRequest" },
-        { "$ref": "#/$defs/entriesFavoriteRequest" },
-        { "$ref": "#/$defs/entriesClearRequest" },
-        { "$ref": "#/$defs/historyPauseRequest" },
-        { "$ref": "#/$defs/historyResumeRequest" },
-        { "$ref": "#/$defs/repairRunRequest" },
-        { "$ref": "#/$defs/statsGetRequest" }
+        {
+          "$ref": "#/$defs/healthCheckRequest"
+        },
+        {
+          "$ref": "#/$defs/configGetRequest"
+        },
+        {
+          "$ref": "#/$defs/watcherStatusRequest"
+        },
+        {
+          "$ref": "#/$defs/entriesListRequest"
+        },
+        {
+          "$ref": "#/$defs/entriesSearchRequest"
+        },
+        {
+          "$ref": "#/$defs/entriesGetRequest"
+        },
+        {
+          "$ref": "#/$defs/entriesAddRequest"
+        },
+        {
+          "$ref": "#/$defs/entriesCopyRequest"
+        },
+        {
+          "$ref": "#/$defs/entriesBulkCopyRequest"
+        },
+        {
+          "$ref": "#/$defs/entriesOutputRequest"
+        },
+        {
+          "$ref": "#/$defs/entriesPasteRequest"
+        },
+        {
+          "$ref": "#/$defs/entriesDeleteRequest"
+        },
+        {
+          "$ref": "#/$defs/entriesFavoriteRequest"
+        },
+        {
+          "$ref": "#/$defs/entriesClearRequest"
+        },
+        {
+          "$ref": "#/$defs/historyPauseRequest"
+        },
+        {
+          "$ref": "#/$defs/historyResumeRequest"
+        },
+        {
+          "$ref": "#/$defs/repairRunRequest"
+        },
+        {
+          "$ref": "#/$defs/statsGetRequest"
+        }
       ]
-    },
-    "baseRequest": {
-      "type": "object",
-      "required": ["jsonrpc", "id", "method"],
-      "additionalProperties": false,
-      "properties": {
-        "jsonrpc": { "const": "2.0" },
-        "id": { "$ref": "#/$defs/id" },
-        "method": { "$ref": "#/$defs/method" },
-        "params": { "type": "object" }
-      }
     },
     "healthCheckRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "health.check" }, "params": { "type": "object", "additionalProperties": false } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "health.check"
+        },
+        "params": {
+          "$ref": "#/$defs/emptyParams"
+        }
+      }
     },
     "configGetRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "config.get" }, "params": { "type": "object", "additionalProperties": false } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "config.get"
+        },
+        "params": {
+          "$ref": "#/$defs/emptyParams"
+        }
+      }
     },
     "watcherStatusRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "watcher.status" }, "params": { "type": "object", "additionalProperties": false } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "watcher.status"
+        },
+        "params": {
+          "$ref": "#/$defs/emptyParams"
+        }
+      }
     },
     "entriesListRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "entries.list" }, "params": { "$ref": "#/$defs/listParams" } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "entries.list"
+        },
+        "params": {
+          "$ref": "#/$defs/listParams"
+        }
+      }
     },
     "entriesSearchRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "entries.search" }, "params": { "$ref": "#/$defs/listParams" } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "entries.search"
+        },
+        "params": {
+          "$ref": "#/$defs/listParams"
+        }
+      }
     },
     "entriesGetRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "entries.get" }, "params": { "$ref": "#/$defs/idParams" } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "entries.get"
+        },
+        "params": {
+          "$ref": "#/$defs/idParams"
+        }
+      }
     },
     "entriesAddRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "entries.add" }, "params": { "$ref": "#/$defs/addParams" } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "entries.add"
+        },
+        "params": {
+          "$ref": "#/$defs/addParams"
+        }
+      }
     },
     "entriesCopyRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "entries.copy" }, "params": { "$ref": "#/$defs/idParams" } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "entries.copy"
+        },
+        "params": {
+          "$ref": "#/$defs/idParams"
+        }
+      }
     },
     "entriesBulkCopyRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "entries.bulk_copy" }, "params": { "$ref": "#/$defs/idsParams" } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "entries.bulk_copy"
+        },
+        "params": {
+          "$ref": "#/$defs/idsParams"
+        }
+      }
     },
     "entriesOutputRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "entries.output" }, "params": { "$ref": "#/$defs/idsParams" } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "entries.output"
+        },
+        "params": {
+          "$ref": "#/$defs/idsParams"
+        }
+      }
     },
     "entriesPasteRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "entries.paste" }, "params": { "$ref": "#/$defs/pasteParams" } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "entries.paste"
+        },
+        "params": {
+          "$ref": "#/$defs/pasteParams"
+        }
+      }
     },
     "entriesDeleteRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "entries.delete" }, "params": { "$ref": "#/$defs/idParams" } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "entries.delete"
+        },
+        "params": {
+          "$ref": "#/$defs/idParams"
+        }
+      }
     },
     "entriesFavoriteRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "entries.favorite" }, "params": { "$ref": "#/$defs/favoriteParams" } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "entries.favorite"
+        },
+        "params": {
+          "$ref": "#/$defs/favoriteParams"
+        }
+      }
     },
     "entriesClearRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "entries.clear" }, "params": { "$ref": "#/$defs/clearParams" } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "entries.clear"
+        },
+        "params": {
+          "$ref": "#/$defs/clearParams"
+        }
+      }
     },
     "historyPauseRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "history.pause" }, "params": { "$ref": "#/$defs/pauseParams" } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "history.pause"
+        },
+        "params": {
+          "$ref": "#/$defs/pauseParams"
+        }
+      }
     },
     "historyResumeRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "history.resume" }, "params": { "type": "object", "additionalProperties": false } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "history.resume"
+        },
+        "params": {
+          "$ref": "#/$defs/emptyParams"
+        }
+      }
     },
     "repairRunRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "repair.run" }, "params": { "type": "object", "additionalProperties": false } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "repair.run"
+        },
+        "params": {
+          "$ref": "#/$defs/emptyParams"
+        }
+      }
     },
     "statsGetRequest": {
-      "allOf": [
-        { "$ref": "#/$defs/baseRequest" },
-        { "properties": { "method": { "const": "stats.get" }, "params": { "type": "object", "additionalProperties": false } } }
-      ]
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "stats.get"
+        },
+        "params": {
+          "$ref": "#/$defs/emptyParams"
+        }
+      }
+    },
+    "emptyParams": {
+      "type": "object",
+      "additionalProperties": false
     },
     "listParams": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "query": { "type": "string" },
-        "filter": { "$ref": "#/$defs/filter" },
-        "limit": { "type": "integer", "minimum": 1, "maximum": 500 }
+        "query": {
+          "type": "string"
+        },
+        "filter": {
+          "$ref": "#/$defs/filter"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        }
       }
     },
     "idParams": {
       "type": "object",
-      "required": ["id"],
+      "required": [
+        "id"
+      ],
       "additionalProperties": false,
-      "properties": { "id": { "type": "integer" } }
+      "properties": {
+        "id": {
+          "type": "integer"
+        }
+      }
     },
     "idsParams": {
       "type": "object",
-      "required": ["ids"],
+      "required": [
+        "ids"
+      ],
       "additionalProperties": false,
       "properties": {
         "ids": {
           "type": "array",
-          "items": { "type": "integer" },
+          "items": {
+            "type": "integer"
+          },
           "minItems": 1
         }
       }
     },
     "addParams": {
       "type": "object",
-      "required": ["content"],
+      "required": [
+        "content"
+      ],
       "additionalProperties": false,
-      "properties": { "content": { "type": "string" } }
+      "properties": {
+        "content": {
+          "type": "string"
+        }
+      }
     },
     "pasteParams": {
       "type": "object",
-      "required": ["id"],
+      "required": [
+        "id"
+      ],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "integer" },
-        "target_window": { "type": "string" }
+        "id": {
+          "type": "integer"
+        },
+        "target_window": {
+          "type": "string"
+        }
       }
     },
     "favoriteParams": {
       "type": "object",
-      "required": ["id", "favorite"],
+      "required": [
+        "id",
+        "favorite"
+      ],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "integer" },
-        "favorite": { "type": "boolean" }
+        "id": {
+          "type": "integer"
+        },
+        "favorite": {
+          "type": "boolean"
+        }
       }
     },
     "clearParams": {
       "type": "object",
-      "required": ["kind"],
+      "required": [
+        "kind"
+      ],
       "additionalProperties": false,
-      "properties": { "kind": { "enum": ["all", "text", "image", "images"] } }
+      "properties": {
+        "kind": {
+          "enum": [
+            "all",
+            "text",
+            "image",
+            "images"
+          ]
+        },
+        "preserve_favorites": {
+          "type": "boolean"
+        }
+      }
     },
     "pauseParams": {
       "type": "object",
       "additionalProperties": false,
-      "properties": { "duration_ms": { "type": "integer", "minimum": 0 } }
+      "properties": {
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
     },
-    "filter": { "enum": ["all", "text", "images", "favorites", "today"] },
+    "filter": {
+      "enum": [
+        "all",
+        "text",
+        "images",
+        "favorites",
+        "today"
+      ]
+    },
     "entry": {
       "type": "object",
       "required": [
@@ -255,195 +675,836 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "integer" },
-        "kind": { "enum": ["text", "image"] },
-        "mime": { "type": "string" },
-        "content": { "type": "string" },
-        "preview": { "type": "string" },
-        "hash": { "type": "string" },
-        "favorite": { "type": "boolean" },
-        "created_at_ms": { "type": "integer" },
-        "byte_len": { "type": "integer" },
-        "source_app": { "type": ["string", "null"] },
-        "blob_path": { "type": ["string", "null"] },
-        "image_width": { "type": ["integer", "null"] },
-        "image_height": { "type": ["integer", "null"] }
+        "id": {
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "text",
+            "image"
+          ]
+        },
+        "mime": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "preview": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "favorite": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "integer"
+        },
+        "byte_len": {
+          "type": "integer"
+        },
+        "source_app": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "blob_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "image_width": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "image_height": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
       }
     },
     "success": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/healthCheckSuccess"
+        },
+        {
+          "$ref": "#/$defs/configGetSuccess"
+        },
+        {
+          "$ref": "#/$defs/watcherStatusSuccess"
+        },
+        {
+          "$ref": "#/$defs/entriesListSuccess"
+        },
+        {
+          "$ref": "#/$defs/entriesSearchSuccess"
+        },
+        {
+          "$ref": "#/$defs/entriesGetSuccess"
+        },
+        {
+          "$ref": "#/$defs/entriesAddSuccess"
+        },
+        {
+          "$ref": "#/$defs/entriesCopySuccess"
+        },
+        {
+          "$ref": "#/$defs/entriesBulkCopySuccess"
+        },
+        {
+          "$ref": "#/$defs/entriesOutputSuccess"
+        },
+        {
+          "$ref": "#/$defs/entriesPasteSuccess"
+        },
+        {
+          "$ref": "#/$defs/entriesDeleteSuccess"
+        },
+        {
+          "$ref": "#/$defs/entriesFavoriteSuccess"
+        },
+        {
+          "$ref": "#/$defs/entriesClearSuccess"
+        },
+        {
+          "$ref": "#/$defs/historyPauseSuccess"
+        },
+        {
+          "$ref": "#/$defs/historyResumeSuccess"
+        },
+        {
+          "$ref": "#/$defs/repairRunSuccess"
+        },
+        {
+          "$ref": "#/$defs/statsGetSuccess"
+        }
+      ]
+    },
+    "healthCheckSuccess": {
       "type": "object",
-      "required": ["jsonrpc", "id", "result"],
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
       "additionalProperties": false,
       "properties": {
-        "jsonrpc": { "const": "2.0" },
-        "id": { "$ref": "#/$defs/id" },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
         "result": {
-          "oneOf": [
-            { "$ref": "#/$defs/healthResult" },
-            { "$ref": "#/$defs/configResult" },
-            { "$ref": "#/$defs/watcherResult" },
-            { "$ref": "#/$defs/listResult" },
-            { "$ref": "#/$defs/getResult" },
-            { "$ref": "#/$defs/addResult" },
-            { "$ref": "#/$defs/copyResult" },
-            { "$ref": "#/$defs/outputResult" },
-            { "$ref": "#/$defs/pasteResult" },
-            { "$ref": "#/$defs/deleteResult" },
-            { "$ref": "#/$defs/favoriteResult" },
-            { "$ref": "#/$defs/clearResult" },
-            { "$ref": "#/$defs/pauseResult" },
-            { "$ref": "#/$defs/resumeResult" },
-            { "$ref": "#/$defs/repairResult" },
-            { "$ref": "#/$defs/statsResult" }
-          ]
+          "$ref": "#/$defs/healthResult"
+        }
+      }
+    },
+    "configGetSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/configResult"
+        }
+      }
+    },
+    "watcherStatusSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/watcherResult"
+        }
+      }
+    },
+    "entriesListSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/listResult"
+        }
+      }
+    },
+    "entriesSearchSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/listResult"
+        }
+      }
+    },
+    "entriesGetSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/getResult"
+        }
+      }
+    },
+    "entriesAddSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/addResult"
+        }
+      }
+    },
+    "entriesCopySuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/copyResult"
+        }
+      }
+    },
+    "entriesBulkCopySuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/copyResult"
+        }
+      }
+    },
+    "entriesOutputSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/outputResult"
+        }
+      }
+    },
+    "entriesPasteSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/pasteResult"
+        }
+      }
+    },
+    "entriesDeleteSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/deleteResult"
+        }
+      }
+    },
+    "entriesFavoriteSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/favoriteResult"
+        }
+      }
+    },
+    "entriesClearSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/clearResult"
+        }
+      }
+    },
+    "historyPauseSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/pauseResult"
+        }
+      }
+    },
+    "historyResumeSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/resumeResult"
+        }
+      }
+    },
+    "repairRunSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/repairResult"
+        }
+      }
+    },
+    "statsGetSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/statsResult"
         }
       }
     },
     "healthResult": {
       "type": "object",
-      "required": ["ok", "name", "version", "storage"],
+      "required": [
+        "ok",
+        "name",
+        "version",
+        "storage"
+      ],
       "additionalProperties": false,
       "properties": {
-        "ok": { "type": "boolean" },
-        "name": { "type": "string" },
-        "version": { "type": "string" },
-        "storage": { "type": "string" }
+        "ok": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "storage": {
+          "type": "string"
+        }
       }
     },
     "configResult": {
       "type": "object",
-      "required": ["config_path", "data_dir", "db_path", "max_entries", "allow_duplicates", "poll_interval_ms", "paste_enabled", "paste_buffer_ms", "max_preview_chars", "terminal_command", "excluded_apps", "excluded_windows"],
+      "required": [
+        "config_path",
+        "data_dir",
+        "db_path",
+        "image_dir",
+        "max_entries",
+        "delete_after_seconds",
+        "allow_duplicates",
+        "poll_interval_ms",
+        "paste_enabled",
+        "paste_buffer_ms",
+        "auto_paste_enabled",
+        "auto_paste_keybind",
+        "auto_paste_buffer_ms",
+        "max_preview_chars",
+        "terminal_command",
+        "excluded_apps",
+        "excluded_windows"
+      ],
       "additionalProperties": false,
       "properties": {
-        "config_path": { "type": "string" },
-        "data_dir": { "type": "string" },
-        "db_path": { "type": "string" },
-        "max_entries": { "type": "integer" },
-        "allow_duplicates": { "type": "boolean" },
-        "poll_interval_ms": { "type": "integer" },
-        "paste_enabled": { "type": "boolean" },
-        "paste_buffer_ms": { "type": "integer" },
-        "max_preview_chars": { "type": "integer" },
-        "terminal_command": { "type": "string" },
-        "excluded_apps": { "type": "array", "items": { "type": "string" } },
-        "excluded_windows": { "type": "array", "items": { "type": "string" } }
+        "config_path": {
+          "type": "string"
+        },
+        "data_dir": {
+          "type": "string"
+        },
+        "db_path": {
+          "type": "string"
+        },
+        "image_dir": {
+          "type": "string"
+        },
+        "max_entries": {
+          "type": "integer"
+        },
+        "delete_after_seconds": {
+          "type": "integer"
+        },
+        "allow_duplicates": {
+          "type": "boolean"
+        },
+        "poll_interval_ms": {
+          "type": "integer"
+        },
+        "paste_enabled": {
+          "type": "boolean"
+        },
+        "paste_buffer_ms": {
+          "type": "integer"
+        },
+        "auto_paste_enabled": {
+          "type": "boolean"
+        },
+        "auto_paste_keybind": {
+          "type": "string"
+        },
+        "auto_paste_buffer_ms": {
+          "type": "integer"
+        },
+        "max_preview_chars": {
+          "type": "integer"
+        },
+        "terminal_command": {
+          "type": "string"
+        },
+        "excluded_apps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "excluded_windows": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "watcherResult": {
       "type": "object",
-      "required": ["running", "paused", "backend", "poll_interval_ms", "last_seen_ms", "last_error"],
+      "required": [
+        "running",
+        "paused",
+        "backend",
+        "poll_interval_ms",
+        "last_seen_ms",
+        "last_error"
+      ],
       "additionalProperties": false,
       "properties": {
-        "running": { "type": "boolean" },
-        "paused": { "type": "boolean" },
-        "backend": { "type": "string" },
-        "poll_interval_ms": { "type": "integer" },
-        "last_seen_ms": { "type": ["integer", "null"] },
-        "last_error": { "type": ["string", "null"] }
+        "running": {
+          "type": "boolean"
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "backend": {
+          "type": "string"
+        },
+        "poll_interval_ms": {
+          "type": "integer"
+        },
+        "last_seen_ms": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "last_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "listResult": {
       "type": "object",
-      "required": ["entries"],
+      "required": [
+        "entries"
+      ],
       "additionalProperties": false,
       "properties": {
-        "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } }
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entry"
+          }
+        }
       }
     },
     "getResult": {
       "type": "object",
-      "required": ["entry"],
+      "required": [
+        "entry"
+      ],
       "additionalProperties": false,
-      "properties": { "entry": { "$ref": "#/$defs/entry" } }
+      "properties": {
+        "entry": {
+          "$ref": "#/$defs/entry"
+        }
+      }
     },
     "addResult": {
       "type": "object",
-      "required": ["id"],
+      "required": [
+        "id"
+      ],
       "additionalProperties": false,
-      "properties": { "id": { "type": "integer" } }
+      "properties": {
+        "id": {
+          "type": "integer"
+        }
+      }
     },
     "copyResult": {
       "type": "object",
-      "required": ["copied"],
+      "required": [
+        "copied"
+      ],
       "additionalProperties": false,
-      "properties": { "copied": { "type": "boolean" } }
+      "properties": {
+        "copied": {
+          "type": "boolean"
+        }
+      }
     },
     "outputResult": {
       "type": "object",
-      "required": ["content"],
+      "required": [
+        "content"
+      ],
       "additionalProperties": false,
-      "properties": { "content": { "type": "string" } }
+      "properties": {
+        "content": {
+          "type": "string"
+        }
+      }
     },
     "pasteResult": {
       "type": "object",
-      "required": ["pasted"],
+      "required": [
+        "pasted"
+      ],
       "additionalProperties": false,
-      "properties": { "pasted": { "type": "boolean" } }
+      "properties": {
+        "pasted": {
+          "type": "boolean"
+        }
+      }
     },
     "deleteResult": {
       "type": "object",
-      "required": ["deleted"],
+      "required": [
+        "deleted"
+      ],
       "additionalProperties": false,
-      "properties": { "deleted": { "type": "boolean" } }
+      "properties": {
+        "deleted": {
+          "type": "boolean"
+        }
+      }
     },
     "favoriteResult": {
       "type": "object",
-      "required": ["updated"],
+      "required": [
+        "updated"
+      ],
       "additionalProperties": false,
-      "properties": { "updated": { "type": "boolean" } }
+      "properties": {
+        "updated": {
+          "type": "boolean"
+        }
+      }
     },
     "clearResult": {
       "type": "object",
-      "required": ["deleted"],
+      "required": [
+        "deleted"
+      ],
       "additionalProperties": false,
-      "properties": { "deleted": { "type": "integer" } }
+      "properties": {
+        "deleted": {
+          "type": "integer"
+        }
+      }
     },
     "pauseResult": {
       "type": "object",
-      "required": ["paused_for_ms"],
+      "required": [
+        "paused_for_ms"
+      ],
       "additionalProperties": false,
-      "properties": { "paused_for_ms": { "type": "integer" } }
+      "properties": {
+        "paused_for_ms": {
+          "type": "integer"
+        }
+      }
     },
     "resumeResult": {
       "type": "object",
-      "required": ["resumed"],
+      "required": [
+        "resumed"
+      ],
       "additionalProperties": false,
-      "properties": { "resumed": { "type": "boolean" } }
+      "properties": {
+        "resumed": {
+          "type": "boolean"
+        }
+      }
     },
     "repairResult": {
       "type": "object",
-      "required": ["ok", "pruned_blobs"],
+      "required": [
+        "ok",
+        "pruned_blobs",
+        "sanitized_text",
+        "removed_missing_images"
+      ],
       "additionalProperties": false,
       "properties": {
-        "ok": { "type": "boolean" },
-        "pruned_blobs": { "type": "integer" }
+        "ok": {
+          "type": "boolean"
+        },
+        "pruned_blobs": {
+          "type": "integer"
+        },
+        "sanitized_text": {
+          "type": "integer"
+        },
+        "removed_missing_images": {
+          "type": "integer"
+        }
       }
     },
     "statsResult": {
       "type": "object",
-      "required": ["entries", "text", "images", "favorites"],
+      "required": [
+        "entries",
+        "text",
+        "images",
+        "favorites"
+      ],
       "additionalProperties": false,
       "properties": {
-        "entries": { "type": "integer" },
-        "text": { "type": "integer" },
-        "images": { "type": "integer" },
-        "favorites": { "type": "integer" }
+        "entries": {
+          "type": "integer"
+        },
+        "text": {
+          "type": "integer"
+        },
+        "images": {
+          "type": "integer"
+        },
+        "favorites": {
+          "type": "integer"
+        }
       }
     },
     "failure": {
       "type": "object",
-      "required": ["jsonrpc", "id", "error"],
+      "required": [
+        "jsonrpc",
+        "id",
+        "error"
+      ],
       "additionalProperties": false,
       "properties": {
-        "jsonrpc": { "const": "2.0" },
-        "id": { "$ref": "#/$defs/id" },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
         "error": {
           "type": "object",
-          "required": ["code", "message"],
+          "required": [
+            "code",
+            "message"
+          ],
           "additionalProperties": false,
           "properties": {
-            "code": { "type": "integer" },
-            "message": { "type": "string" },
+            "code": {
+              "type": "integer"
+            },
+            "message": {
+              "type": "string"
+            },
             "data": {}
           }
         }
