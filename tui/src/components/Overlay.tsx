@@ -79,7 +79,7 @@ export function ModeOverlay(props: { config: ResolvedTuiConfig; state: UiState; 
   const helpAction = (value: string) =>
     fitOverlayText(value, props.config.layout.helpOverlayActionMaxWidth, Math.max(0, helpWidth() - helpKeyColumnWidth()), props.config);
   const deletingPinned = () => selectedSetIncludesPinned(props.state);
-  const helpRowsView = () => helpRows(props.config);
+  const helpRowsView = () => visibleHelpRows(props.config);
   return (
     <>
       <Show when={props.state.mode === "search"}>
@@ -202,6 +202,26 @@ function OverlayLine(props: { config: ResolvedTuiConfig; tone: TuiOverlayToneNam
       {props.children}
     </box>
   );
+}
+
+function visibleHelpRows(config: ResolvedTuiConfig): Array<{ keys: string; action: string }> {
+  const rows = helpRows(config);
+  const capacity = overlayContentRows(config, "command", config.layout.helpOverlayHeight);
+  const spacing = overlayLineSpacing(config, "command");
+  const visible: Array<{ keys: string; action: string }> = [];
+  let usedRows = 0;
+  for (const row of rows) {
+    const nextRows = usedRows + (visible.length > 0 ? spacing : 0) + 1;
+    if (nextRows > capacity) break;
+    visible.push(row);
+    usedRows = nextRows;
+  }
+  return visible;
+}
+
+function overlayContentRows(config: ResolvedTuiConfig, tone: TuiOverlayToneName, height: number): number {
+  const borderRows = overlayBorderVisible(config, tone) ? 2 : 0;
+  return Math.max(0, height - borderRows - overlayPaddingY(config, tone) * 2);
 }
 
 function OverlayLineGap(props: { config: ResolvedTuiConfig; tone: TuiOverlayToneName }) {

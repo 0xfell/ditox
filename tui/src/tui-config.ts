@@ -1244,7 +1244,7 @@ const defaultLayout: UiConfig = {
   confirmOverlayHeight: 3,
   confirmPinnedExtraRows: 1,
   clearOverlayHeight: 4,
-  helpOverlayHeight: 15,
+  helpOverlayHeight: 16,
   overlayPlacement: "bottom",
   minPaneWidth: 24,
   splitPaneGap: 1,

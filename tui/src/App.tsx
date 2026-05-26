@@ -2,7 +2,15 @@ import { createEffect, createSignal, onCleanup, onMount, type JSX } from "solid-
 import { render, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { KeymapProvider, useBindings, useKeymap } from "@opentui/keymap/solid";
-import { CliRenderEvents, parseColor, type CliRendererConfig, type CursorStyleOptions, type KittyKeyboardOptions, type TerminalCapabilities } from "@opentui/core";
+import {
+  CliRenderEvents,
+  parseColor,
+  type CliRenderer,
+  type CliRendererConfig,
+  type CursorStyleOptions,
+  type KittyKeyboardOptions,
+  type TerminalCapabilities,
+} from "@opentui/core";
 import {
   clampSelection,
   applySearch,
@@ -121,7 +129,7 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
       if (paste) await pasteEntry(entry.id, Bun.env.DITOX_TARGET_WINDOW, config.labels);
       else await copyEntry(entry.id, config.labels);
       setState((previous) => ({ ...previous, status: paste ? config.labels.statusPasted : config.labels.statusCopied }));
-      exitAfter(paste ? config.behavior.exitAfterPaste : config.behavior.exitAfterCopy);
+      exitAfter(paste ? config.behavior.exitAfterPaste : config.behavior.exitAfterCopy, renderer);
     } catch (error) {
       setState((previous) => ({ ...previous, status: error instanceof Error ? error.message : String(error) }));
     }
@@ -136,7 +144,7 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
         ...previous,
         status: result.copied ? formatCopiedCountStatus(ids.length, config.labels) : config.labels.statusNothingCopied,
       }));
-      exitAfter(result.copied && config.behavior.exitAfterBulkCopy);
+      exitAfter(result.copied && config.behavior.exitAfterBulkCopy, renderer);
     } catch (error) {
       setState((previous) => ({ ...previous, status: error instanceof Error ? error.message : String(error) }));
     }
@@ -168,7 +176,7 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
           status: copyResult.copied ? formatCopiedCountStatus(ids.length, config.labels) : config.labels.statusNothingCopied,
         }),
       );
-      exitAfter(copyResult.copied && config.behavior.exitAfterSearchCopy);
+      exitAfter(copyResult.copied && config.behavior.exitAfterSearchCopy, renderer);
     } catch (error) {
       setState((previous) => ({ ...previous, status: error instanceof Error ? error.message : String(error) }));
     }
@@ -179,9 +187,12 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
     if (ids.length === 0) return;
     try {
       const result = await outputEntries(ids, config.labels);
-      process.stdout.write(result.content);
-      if (result.content.length > 0 && !result.content.endsWith("\n")) process.stdout.write("\n");
-      process.exit(0);
+      shutdownTui(renderer, {
+        afterDestroy: () => {
+          process.stdout.write(result.content);
+          if (result.content.length > 0 && !result.content.endsWith("\n")) process.stdout.write("\n");
+        },
+      });
     } catch (error) {
       setState((previous) => ({ ...previous, status: error instanceof Error ? error.message : String(error) }));
     }
@@ -406,6 +417,7 @@ type DitoxKeymapActions = {
 
 function useDitoxKeymap(actions: DitoxKeymapActions) {
   const keymap = useKeymap();
+  const renderer = useRenderer();
 
   onMount(() => {
     const dispose = keymap.intercept("key", (ctx) => {
@@ -464,7 +476,7 @@ function useDitoxKeymap(actions: DitoxKeymapActions) {
           ...bind(keys.previewPageDown, () => actions.setState((previous) => movePreview(previous, previewVisibleRows(actions), totalLines(), previewVisibleRows(actions)))),
           ...bind(keys.copyPaste, () => actions.copySelected(true)),
           ...bind(keys.copyOnly, () => actions.copySelected(false)),
-          ...bind(keys.forceQuit, () => process.exit(0)),
+          ...bind(keys.forceQuit, () => shutdownTui(renderer)),
         ],
       };
     }
@@ -491,8 +503,8 @@ function useDitoxKeymap(actions: DitoxKeymapActions) {
     return {
       priority: 100,
       bindings: [
-        ...bind(keys.forceQuit, () => process.exit(0)),
-        ...bind(keys.quit, () => process.exit(0)),
+        ...bind(keys.forceQuit, () => shutdownTui(renderer)),
+        ...bind(keys.quit, () => shutdownTui(renderer)),
         ...bind(keys.up, () => actions.setState((previous) => moveSelection(previous, -1))),
         ...bind(keys.down, () => actions.setState((previous) => moveSelection(previous, 1))),
         ...bind(keys.pageUp, () => actions.setState((previous) => movePage(previous, actions.browsePageRows(), -1))),
@@ -571,9 +583,56 @@ function liveSearchKey(state: UiState): string {
   return [state.query, state.pinnedOnly ? "pinned" : state.filter].join("\u0000");
 }
 
-function exitAfter(enabled: boolean): void {
+function exitAfter(enabled: boolean, renderer: CliRenderer): void {
   if (!enabled) return;
-  setTimeout(() => process.exit(0), 0);
+  setTimeout(() => shutdownTui(renderer), 0);
+}
+
+type TerminalWriter = {
+  isTTY?: boolean;
+  write: (chunk: string) => unknown;
+};
+
+type ShutdownTuiOptions = {
+  code?: number;
+  stdout?: TerminalWriter;
+  exit?: (code: number) => void;
+  schedule?: (callback: () => void) => unknown;
+  afterDestroy?: () => void;
+};
+
+export const terminalExitResetSequence = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?2004l\x1b[?25h\x1b[0m";
+
+let terminalExitResetInstalled = false;
+let terminalExitResetWritten = false;
+let tuiShutdownStarted = false;
+
+export function writeTerminalExitReset(stdout: TerminalWriter = process.stdout): void {
+  if (terminalExitResetWritten) return;
+  if (!stdout.isTTY) return;
+  stdout.write(terminalExitResetSequence);
+  terminalExitResetWritten = true;
+}
+
+export function installTerminalExitReset(stdout: TerminalWriter = process.stdout): void {
+  if (terminalExitResetInstalled) return;
+  terminalExitResetInstalled = true;
+  process.once("exit", () => writeTerminalExitReset(stdout));
+}
+
+export function shutdownTui(renderer: Pick<CliRenderer, "destroy">, options: ShutdownTuiOptions = {}): void {
+  if (tuiShutdownStarted) return;
+  tuiShutdownStarted = true;
+  const stdout = options.stdout ?? process.stdout;
+  try {
+    renderer.destroy();
+  } finally {
+    writeTerminalExitReset(stdout);
+    options.afterDestroy?.();
+    const exit = options.exit ?? process.exit;
+    const schedule = options.schedule ?? ((callback: () => void) => setTimeout(callback, 0));
+    schedule(() => exit(options.code ?? 0));
+  }
 }
 
 function activeOverlayHeight(state: UiState, config: ResolvedTuiConfig): number {
@@ -588,6 +647,7 @@ function activeOverlayHeight(state: UiState, config: ResolvedTuiConfig): number 
 
 export async function run() {
   const config = currentTuiConfig();
+  installTerminalExitReset();
   await render(() => <AppRoot config={config} />, tuiRenderOptions(config));
 }
 

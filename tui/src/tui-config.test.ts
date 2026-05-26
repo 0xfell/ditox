@@ -63,7 +63,7 @@ describe("tui config", () => {
     expect(config.layout.confirmOverlayHeight).toBe(3);
     expect(config.layout.confirmPinnedExtraRows).toBe(1);
     expect(config.layout.clearOverlayHeight).toBe(4);
-    expect(config.layout.helpOverlayHeight).toBe(15);
+    expect(config.layout.helpOverlayHeight).toBe(16);
     expect(config.layout.minPaneWidth).toBe(24);
     expect(config.layout.splitPaneGap).toBe(1);
     expect(config.layout.splitPaneWidthInset).toBe(6);

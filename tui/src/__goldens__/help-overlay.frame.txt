@@ -12,6 +12,6 @@
 │ctrl+g                            copy filtered clips         │
 │p d / backspace                   pin / delete                │
 │c a c t c i                       clear history               │
-╰c x                               clear everything────────────╯
-                                                                
+│c x                               clear everything            │
+╰──────────────────────────────────────────────────────────────╯
                                                                 

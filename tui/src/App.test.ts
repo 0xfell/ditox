@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { estimatedImagePreviewRows, fullPreviewReservedRows, imageProtocolCapabilities } from "./App";
+import {
+  estimatedImagePreviewRows,
+  fullPreviewReservedRows,
+  imageProtocolCapabilities,
+  shutdownTui,
+  terminalExitResetSequence,
+  writeTerminalExitReset,
+} from "./App";
 import { resolveTuiConfig } from "./tui-config";
 import type { Entry } from "./types";
 
@@ -76,5 +83,37 @@ describe("App helpers", () => {
     });
 
     expect(fullPreviewReservedRows(imageEntry, config, 6)).toBe(4);
+  });
+
+  test("writes terminal reset escapes and destroys renderer before exit", () => {
+    const writes: string[] = [];
+    const exits: number[] = [];
+    const calls: string[] = [];
+    shutdownTui(
+      {
+        destroy: () => calls.push("destroy"),
+      },
+      {
+        stdout: {
+          isTTY: true,
+          write: (chunk) => writes.push(chunk),
+        },
+        afterDestroy: () => calls.push("after"),
+        exit: (code) => exits.push(code),
+        schedule: (callback) => callback(),
+      },
+    );
+
+    expect(calls).toEqual(["destroy", "after"]);
+    expect(writes).toEqual([terminalExitResetSequence]);
+    expect(terminalExitResetSequence).toContain("\x1b[?1006l");
+    expect(terminalExitResetSequence).toContain("\x1b[?1003l");
+    expect(exits).toEqual([0]);
+  });
+
+  test("does not write terminal reset escapes to non-tty stdout", () => {
+    const writes: string[] = [];
+    writeTerminalExitReset({ isTTY: false, write: (chunk) => writes.push(chunk) });
+    expect(writes).toEqual([]);
   });
 });

@@ -525,6 +525,38 @@ describe("OpenTUI render snapshots", () => {
     expectFrameWithin(helpFrame, 22, 8);
   });
 
+  test("fits the default help keymap inside its frame", async () => {
+    const config = resolveTuiConfig();
+
+    const frame = await captureFrame(
+      () => <ModeOverlay config={config} state={{ ...initialState(), mode: "help" as const }} width={126} />,
+      126,
+      config.layout.helpOverlayHeight,
+    );
+
+    expect(frame).toContain("clear everything");
+    expect(frame).toContain("c x");
+    expectFrameWithin(frame, 126, config.layout.helpOverlayHeight);
+  });
+
+  test("does not paint extra help rows past a short configured frame", async () => {
+    const config = resolveTuiConfig({
+      layout: {
+        helpOverlayHeight: 8,
+      },
+    });
+
+    const frame = await captureFrame(
+      () => <ModeOverlay config={config} state={{ ...initialState(), mode: "help" as const }} width={80} />,
+      80,
+      8,
+    );
+
+    expect(frame).toContain("move selection");
+    expect(frame).not.toContain("clear everything");
+    expectFrameWithin(frame, 80, 8);
+  });
+
   test("routes status line placeholder tones from config", async () => {
     const config = resolveTuiConfig({
       labels: {
