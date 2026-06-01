@@ -8,6 +8,19 @@ const c = @cImport({
     @cInclude("unistd.h");
 });
 
+// SQLITE_TRANSIENT is `((sqlite3_destructor_type)-1)`. Translating that macro
+// through @cImport lowers to `@ptrFromInt` into a function-pointer type, which
+// asserts the address is aligned. On targets where function pointers are
+// >1-aligned (e.g. aarch64) the all-ones sentinel fails that assertion and the
+// build breaks; on x86_64 (fn-ptr align 1) it slips through. Bind the
+// destructor as an opaque pointer instead: identical C ABI (one pointer-sized
+// argument), with no function-pointer alignment requirement.
+const sqlite3_bind_text_opaque = @extern(
+    *const fn (?*c.sqlite3_stmt, c_int, [*c]const u8, c_int, ?*const anyopaque) callconv(.c) c_int,
+    .{ .name = "sqlite3_bind_text" },
+);
+const sqlite_transient: ?*const anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
+
 pub const current_schema_version: i64 = 2;
 
 pub const Stats = struct {
@@ -801,7 +814,7 @@ pub const Storage = struct {
 };
 
 fn bindText(stmt: *c.sqlite3_stmt, index: c_int, value: []const u8) !void {
-    if (c.sqlite3_bind_text(stmt, index, value.ptr, @intCast(value.len), c.SQLITE_TRANSIENT) != c.SQLITE_OK) {
+    if (sqlite3_bind_text_opaque(stmt, index, value.ptr, @intCast(value.len), sqlite_transient) != c.SQLITE_OK) {
         return error.SQLiteFailure;
     }
 }
