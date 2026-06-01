@@ -30,4 +30,4 @@ See `AGENTS.md` (repo root) for the authoritative architecture overview.
 ## Distribution
 
 - Nix flake; CI builds `x86_64-linux` + `aarch64-linux` and pushes to
-  `https://0xfell.cachix.org`. See `README.md` → Install.
+  `https://ditox.cachix.org`. See `README.md` → Install.

@@ -21,14 +21,14 @@ Trust the binary cache once (otherwise Nix will rebuild from source):
 ```nix
 # NixOS / nix.conf
 nix.settings = {
-  substituters = [ "https://0xfell.cachix.org" ];
+  substituters = [ "https://ditox.cachix.org" ];
   trusted-public-keys = [
-    "0xfell.cachix.org-1:9c1Be/MO9FfBo21PPQ6didcE6OG3A5EnrnKP10vCw4c="
+    "ditox.cachix.org-1:QfG+UY/7dvbRfIGwYgP05dea2Swgb8HpqcbxHJcJE3Y="
   ];
 };
 ```
 
-Or, with the Cachix CLI: `cachix use 0xfell`.
+Or, with the Cachix CLI: `cachix use ditox`.
 
 Then run or install:
 

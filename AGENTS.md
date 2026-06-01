@@ -109,7 +109,7 @@ contracts/          JSON-RPC schema + fixtures (rpc.schema.json, *.rpc)
 tests/              CLI smoke tests (bun test, via assert-style spawning)
 docs/               ROADMAP, TODO, and design notes
 flake.nix           Hermetic package, devShell, apps, homeManagerModules
-.github/workflows/  CI: dual-arch nix build + push to the 0xfell cachix cache
+.github/workflows/  CI: dual-arch nix build + push to the ditox cachix cache
 ```
 
 ### Backend modules (`backend/src/`)
@@ -187,6 +187,6 @@ already exists.
 ## Release / Distribution
 
 - **Nix flake** — `nix run github:0xfell/ditox`. CI builds x86_64-linux +
-  aarch64-linux and pushes closures to `https://0xfell.cachix.org` so users
+  aarch64-linux and pushes closures to `https://ditox.cachix.org` so users
   install prebuilt (see `README.md` → Install).
 - Bump `version` in `flake.nix`; tag `v*` to mark a release. CI runs on tag push.
