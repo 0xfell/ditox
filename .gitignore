@@ -1,12 +1,28 @@
-.direnv/
+# Secrets / local env
 .env
+.direnv/
+
+# Nix build outputs
+result
+result-*
+
+# Zig build outputs
 .zig-cache/
 zig-out/
+zig-out-*/
+
+# Bun / Node
 node_modules/
 bun.lockb
+dist/
+
+# TUI dev artifacts
+tui/artifacts/
+
+# Databases
 *.db
 *.db-*
+
+# Misc
 tmp/
-dist/
 coverage/
-tui/artifacts/
