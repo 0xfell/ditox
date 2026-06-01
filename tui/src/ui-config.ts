@@ -1,5 +1,5 @@
 export type ImagePreviewMode = "metadata" | "blocks" | "kitty" | "sixel";
-export type ImagePreviewRenderer = "auto" | "opentui" | "text";
+export type ImagePreviewRenderer = "auto" | "native" | "opentui" | "text";
 export type ImagePreviewAlign = "left" | "center" | "right";
 export type ContentAlign = "left" | "center" | "right";
 export type VerticalAlign = "top" | "center" | "bottom";

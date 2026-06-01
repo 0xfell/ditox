@@ -9,6 +9,7 @@ import {
 import { entryAccent, previewMetaTemplateValues, previewModel, truncateText } from "../presentation";
 import { visiblePreviewLineCapacity } from "../state";
 import type { ContentAlign, VerticalAlign } from "../ui-config";
+import { selectNativeImageProtocol, type TerminalImageManagerLike, type TerminalImageState } from "../terminal-image";
 import {
   formatTemplate,
   paddedTitle,
@@ -29,6 +30,8 @@ export function PreviewPane(props: {
   width: number;
   widthPercent?: number;
   imageCapabilities?: Partial<ImageProtocolCapabilities>;
+  imageTerminal?: TerminalImageState;
+  imageManager?: TerminalImageManagerLike;
 }) {
   const style = () => surface(props.config, "preview");
   const gutterStyle = () => surface(props.config, "previewGutter");
@@ -45,7 +48,7 @@ export function PreviewPane(props: {
     mode: layout().imagePreviewMode,
     labels: labels(),
     blockGlyph: layout().imagePreviewBlockGlyph,
-    capabilities: props.imageCapabilities,
+    capabilities: props.imageTerminal?.capabilities ?? props.imageCapabilities,
   }));
   createEffect(() => {
     const request = blockPreviewRequest();
@@ -96,6 +99,19 @@ export function PreviewPane(props: {
     const renderedRows = preview.kind === "rendered" ? preview.native.cellRows : 0;
     return renderedRows + imageNoticeSpacingRows() + (imageNoticeText() ? 1 : 0) + (imageFallbackVisible() ? 1 : 0);
   };
+  const nativeImageActive = () => {
+    if (!props.imageManager || props.entry?.kind !== "image" || blockPreview().kind !== "rendered") return false;
+    const terminal = props.imageTerminal;
+    const resolution = terminal?.resolution ?? null;
+    return Boolean(
+      terminal &&
+        resolution &&
+        selectNativeImageProtocol(layout().imagePreviewMode, layout().imagePreviewRenderer, terminal.capabilities, resolution),
+    );
+  };
+  createEffect(() => {
+    if (!nativeImageActive()) props.imageManager?.clear();
+  });
   const metadataRows = () => (layout().showMetadata && props.entry ? layout().previewMetaHeight : 0);
   const visibleTextRows = () =>
     visiblePreviewLineCapacity(Math.min(layout().maxPreviewLines, Math.max(0, props.rows - metadataRows() - imagePreviewRows())), layout().previewLineSpacing);
@@ -136,9 +152,14 @@ export function PreviewPane(props: {
           <ImagePreviewRows
             preview={blockPreview()}
             renderer={layout().imagePreviewRenderer}
+            mode={layout().imagePreviewMode}
             blockGlyph={layout().imagePreviewBlockGlyph}
             align={layout().imagePreviewAlign}
             width={textWidth()}
+            background={imagePreviewBackground(props.config, style().bg)}
+            entry={props.entry}
+            terminal={props.imageTerminal}
+            imageManager={props.imageManager}
           />
         </Show>
         <Show when={imageNoticeSpacingRows() > 0}>

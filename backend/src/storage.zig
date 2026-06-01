@@ -38,6 +38,7 @@ pub const Storage = struct {
         var storage = Storage{ .allocator = allocator, .io = io, .db = db.? };
         errdefer storage.close();
 
+        try storage.configureConnection();
         try storage.registerSqlFunctions();
         try storage.migrate();
         return storage;
@@ -384,10 +385,12 @@ pub const Storage = struct {
 
     fn migrate(self: *Storage) !void {
         try self.exec("PRAGMA journal_mode = WAL");
+        try self.exec("PRAGMA synchronous = NORMAL");
         try self.exec("PRAGMA foreign_keys = ON");
 
         const version = try self.schemaVersion();
         if (version > current_schema_version) return error.UnsupportedSchemaVersion;
+        const rebuild_fts = version < current_schema_version or !try self.tableExists("entry_fts");
 
         if (version < current_schema_version) {
             try self.exec("BEGIN IMMEDIATE");
@@ -403,7 +406,7 @@ pub const Storage = struct {
         }
 
         try self.exec(rest_schema);
-        try self.exec("INSERT INTO entry_fts(entry_fts) VALUES('rebuild')");
+        if (rebuild_fts) try self.rebuildSearchIndex();
     }
 
     fn migrateToV1(self: *Storage) !void {
@@ -427,10 +430,19 @@ pub const Storage = struct {
         );
     }
 
+    fn rebuildSearchIndex(self: *Storage) !void {
+        try self.exec("INSERT INTO entry_fts(entry_fts) VALUES('rebuild')");
+    }
+
     fn setSchemaVersion(self: *Storage, version: i64) !void {
         const sql = try std.fmt.allocPrint(self.allocator, "PRAGMA user_version = {}", .{version});
         defer self.allocator.free(sql);
         try self.exec(sql);
+    }
+
+    fn configureConnection(self: *Storage) !void {
+        if (c.sqlite3_busy_timeout(self.db, 5000) != c.SQLITE_OK) return self.sqliteError();
+        if (c.sqlite3_extended_result_codes(self.db, 1) != c.SQLITE_OK) return self.sqliteError();
     }
 
     fn registerSqlFunctions(self: *Storage) !void {
@@ -450,6 +462,16 @@ pub const Storage = struct {
 
     fn ensureColumn(self: *Storage, table: []const u8, column: []const u8, sql: []const u8) !void {
         if (!try self.columnExists(table, column)) try self.exec(sql);
+    }
+
+    fn tableExists(self: *Storage, table: []const u8) !bool {
+        const stmt = try self.prepare("SELECT 1 FROM sqlite_master WHERE type IN ('table', 'virtual table') AND name = ? LIMIT 1");
+        defer _ = c.sqlite3_finalize(stmt);
+        try bindText(stmt, 1, table);
+        const rc = c.sqlite3_step(stmt);
+        if (rc == c.SQLITE_DONE) return false;
+        if (rc == c.SQLITE_ROW) return true;
+        return self.sqliteError();
     }
 
     fn columnExists(self: *Storage, table: []const u8, column: []const u8) !bool {

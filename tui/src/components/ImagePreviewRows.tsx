@@ -1,16 +1,27 @@
 import type { BoxRenderable, OptimizedBuffer } from "@opentui/core";
-import { For } from "solid-js";
+import { For, onCleanup } from "solid-js";
 import type { ImageBlockPreview as ImageBlockPreviewModel } from "../image-preview";
-import type { ImagePreviewAlign, ImagePreviewRenderer } from "../ui-config";
+import type { TerminalImageManagerLike, TerminalImageState } from "../terminal-image";
+import { computeNativeImagePlacement, selectNativeImageProtocol } from "../terminal-image";
+import type { Entry } from "../types";
+import type { ImagePreviewAlign, ImagePreviewMode, ImagePreviewRenderer } from "../ui-config";
 
 export function ImagePreviewRows(props: {
   preview: ImageBlockPreviewModel;
   renderer: ImagePreviewRenderer;
+  mode: ImagePreviewMode;
   blockGlyph: string;
   align?: ImagePreviewAlign;
   width?: number;
+  background?: string;
+  entry?: Entry;
+  terminal?: TerminalImageState;
+  imageManager?: TerminalImageManagerLike;
 }) {
   if (props.preview.kind !== "rendered") return null;
+  const nativeRows = nativeImageRows(props);
+  if (nativeRows) return nativeRows;
+
   const imageWidth = props.preview.native.cols;
   const contentWidth = Math.max(imageWidth, Math.floor(props.width ?? imageWidth));
   const imageHeight = props.preview.native.cellRows;
@@ -25,10 +36,10 @@ export function ImagePreviewRows(props: {
   );
 }
 
-function shouldUseOpenTuiRenderer(renderer: ImagePreviewRenderer, blockGlyph: string): boolean {
+function shouldUseOpenTuiRenderer(renderer: ImagePreviewRenderer, _blockGlyph: string): boolean {
   if (renderer === "opentui") return true;
   if (renderer === "text") return false;
-  return blockGlyph === "▀";
+  return false;
 }
 
 function imageAlignPadding(width: number, imageWidth: number, align: ImagePreviewAlign): number {
@@ -47,6 +58,82 @@ function OpenTuiImageRows(props: { preview: Extract<ImageBlockPreviewModel, { ki
   return <box width={props.preview.native.cols} height={props.preview.native.cellRows} flexShrink={0} renderAfter={drawImage} />;
 }
 
+function nativeImageRows(props: {
+  preview: ImageBlockPreviewModel;
+  renderer: ImagePreviewRenderer;
+  mode: ImagePreviewMode;
+  align?: ImagePreviewAlign;
+  width?: number;
+  background?: string;
+  entry?: Entry;
+  terminal?: TerminalImageState;
+  imageManager?: TerminalImageManagerLike;
+}) {
+  if (props.preview.kind !== "rendered") return null;
+  const terminal = props.terminal;
+  const resolution = terminal?.resolution ?? null;
+  const protocol = selectNativeImageProtocol(props.mode, props.renderer, terminal?.capabilities, resolution);
+  if (!terminal || !resolution || !protocol || !props.imageManager) return null;
+
+  const contentWidth = Math.max(1, Math.floor(props.width ?? props.preview.bounds.maxCols));
+  const placement = computeNativeImagePlacement({
+    imageWidth: props.preview.image.width,
+    imageHeight: props.preview.image.height,
+    maxCols: props.preview.bounds.maxCols,
+    maxRows: props.preview.native.cellRows,
+    contentWidth,
+    terminalColumns: terminal.columns,
+    terminalRows: terminal.rows,
+    resolution,
+    align: props.align ?? "left",
+    protocol,
+  });
+  if (!placement) return null;
+
+  return (
+    <box width={contentWidth} height={placement.rows} flexDirection="row" flexShrink={0} backgroundColor={props.background}>
+      {placement.leftPad > 0 ? <box width={placement.leftPad} height={placement.rows} flexShrink={0} backgroundColor={props.background} /> : null}
+      <NativeTerminalImage
+        preview={props.preview}
+        sourceKey={nativeImageSourceKey(props.entry, props.preview)}
+        background={props.background ?? "#000000"}
+        manager={props.imageManager}
+        placement={placement}
+      />
+    </box>
+  );
+}
+
+function NativeTerminalImage(props: {
+  preview: Extract<ImageBlockPreviewModel, { kind: "rendered" }>;
+  sourceKey: string;
+  background: string;
+  manager: TerminalImageManagerLike;
+  placement: NonNullable<ReturnType<typeof computeNativeImagePlacement>>;
+}) {
+  onCleanup(() => props.manager.clear());
+  const drawImage = function (this: BoxRenderable) {
+    props.manager.queue({
+      protocol: props.placement.protocol,
+      sourceKey: props.sourceKey,
+      image: props.preview.image,
+      background: props.background,
+      screenX: this.screenX,
+      screenY: this.screenY,
+      cols: props.placement.cols,
+      rows: props.placement.rows,
+      pixelWidth: props.placement.pixelWidth,
+      pixelHeight: props.placement.pixelHeight,
+      contentPixelWidth: props.placement.contentPixelWidth,
+      contentPixelHeight: props.placement.contentPixelHeight,
+      contentOffsetX: props.placement.contentOffsetX,
+      contentOffsetY: props.placement.contentOffsetY,
+      frameId: this.ctx.frameId,
+    });
+  };
+  return <box width={props.placement.cols} height={props.placement.rows} flexShrink={0} backgroundColor={props.background} renderAfter={drawImage} />;
+}
+
 function TextImageRows(props: { preview: Extract<ImageBlockPreviewModel, { kind: "rendered" }> }) {
   return (
     <box flexDirection="column" flexShrink={0}>
@@ -59,4 +146,9 @@ function TextImageRows(props: { preview: Extract<ImageBlockPreviewModel, { kind:
       </For>
     </box>
   );
+}
+
+function nativeImageSourceKey(entry: Entry | undefined, preview: Extract<ImageBlockPreviewModel, { kind: "rendered" }>): string {
+  if (entry?.kind === "image") return `${entry.hash}:${entry.mime}:${entry.blob_path ?? ""}`;
+  return `${preview.image.width}x${preview.image.height}:${preview.source}`;
 }

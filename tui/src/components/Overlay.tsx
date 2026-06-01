@@ -75,11 +75,9 @@ export function ModeOverlay(props: { config: ResolvedTuiConfig; state: UiState; 
       props.config,
     );
   const dangerHint = (value: string) => fitOverlayText(value, props.config.layout.dangerOverlayHintMaxWidth, dangerWidth(), props.config);
-  const helpKeyColumnWidth = () => Math.min(props.config.layout.helpKeyWidth, helpWidth());
-  const helpAction = (value: string) =>
-    fitOverlayText(value, props.config.layout.helpOverlayActionMaxWidth, Math.max(0, helpWidth() - helpKeyColumnWidth()), props.config);
+  const helpAction = (value: string, width: number) => fitOverlayText(value, props.config.layout.helpOverlayActionMaxWidth, width, props.config);
   const deletingPinned = () => selectedSetIncludesPinned(props.state);
-  const helpRowsView = () => visibleHelpRows(props.config);
+  const helpColumnsView = () => helpColumns(props.config, helpWidth(), props.width !== undefined);
   return (
     <>
       <Show when={props.state.mode === "search"}>
@@ -145,21 +143,38 @@ export function ModeOverlay(props: { config: ResolvedTuiConfig; state: UiState; 
       </Show>
       <Show when={props.state.mode === "help"}>
         <OverlayFrame config={props.config} title={labels().helpTitle} height={props.config.layout.helpOverlayHeight} tone="command">
-          <For each={helpRowsView()}>
-            {(row, index) => (
-              <>
-                <OverlayLine config={props.config} tone="command">
-                  <text style={textStyle(helpStyle())}>
-                    <span style={textStyle(helpStyle(), overlayContentColor(props.config, helpStyle(), "helpKey"))}>{fitHelpKey(row.keys, props.config, helpKeyColumnWidth())}</span>
-                    <span style={textStyle(helpStyle(), overlayContentColor(props.config, helpStyle(), "helpAction"))}>{helpAction(row.action)}</span>
-                  </text>
-                </OverlayLine>
-                <Show when={index() < helpRowsView().length - 1}>
-                  <OverlayLineGap config={props.config} tone="command" />
-                </Show>
-              </>
-            )}
-          </For>
+          <box width="100%" flexDirection="row" justifyContent={justifyContent(overlayContentAlign(props.config, "command"))}>
+            <For each={helpColumnsView()}>
+              {(column, columnIndex) => (
+                <>
+                  <box width={column.width} flexDirection="column" flexShrink={0}>
+                    <For each={column.rows}>
+                      {(row, index) => (
+                        <>
+                          <box height={1} width="100%" flexDirection="row">
+                            <text style={textStyle(helpStyle())}>
+                              <span style={textStyle(helpStyle(), overlayContentColor(props.config, helpStyle(), "helpKey"))}>
+                                {fitHelpKey(row.keys, props.config, column.keyWidth)}
+                              </span>
+                              <span style={textStyle(helpStyle(), overlayContentColor(props.config, helpStyle(), "helpAction"))}>
+                                {helpAction(row.action, column.actionWidth)}
+                              </span>
+                            </text>
+                          </box>
+                          <Show when={index() < column.rows.length - 1}>
+                            <OverlayLineGap config={props.config} tone="command" />
+                          </Show>
+                        </>
+                      )}
+                    </For>
+                  </box>
+                  <Show when={columnIndex() < helpColumnsView().length - 1}>
+                    <box width={helpColumnGap(helpWidth())} flexShrink={0} />
+                  </Show>
+                </>
+              )}
+            </For>
+          </box>
         </OverlayFrame>
       </Show>
     </>
@@ -204,19 +219,66 @@ function OverlayLine(props: { config: ResolvedTuiConfig; tone: TuiOverlayToneNam
   );
 }
 
-function visibleHelpRows(config: ResolvedTuiConfig): Array<{ keys: string; action: string }> {
+type HelpRow = { keys: string; action: string };
+type HelpColumn = { rows: HelpRow[]; width: number; keyWidth: number; actionWidth: number };
+
+function helpColumns(config: ResolvedTuiConfig, width: number, knownWidth: boolean): HelpColumn[] {
   const rows = helpRows(config);
+  if (rows.length === 0) return [];
   const capacity = overlayContentRows(config, "command", config.layout.helpOverlayHeight);
   const spacing = overlayLineSpacing(config, "command");
-  const visible: Array<{ keys: string; action: string }> = [];
-  let usedRows = 0;
-  for (const row of rows) {
-    const nextRows = usedRows + (visible.length > 0 ? spacing : 0) + 1;
-    if (nextRows > capacity) break;
-    visible.push(row);
-    usedRows = nextRows;
+  const rowSlots = helpRowSlots(capacity, spacing);
+  const gap = helpColumnGap(width);
+  const neededColumns = Math.ceil(rows.length / rowSlots);
+  const maxColumns = knownWidth ? Math.max(1, Math.min(3, Math.floor((width + gap) / (24 + gap)))) : 1;
+  const columnCount = Math.max(1, Math.min(neededColumns, maxColumns));
+  const rowsPerColumn = Math.min(rowSlots, Math.ceil(rows.length / columnCount));
+  const chunks: HelpRow[][] = [];
+  for (let start = 0; start < rows.length && chunks.length < columnCount; start += rowsPerColumn) {
+    chunks.push(rows.slice(start, start + rowsPerColumn));
   }
-  return visible;
+  const available = knownWidth ? Math.max(1, width - gap * Math.max(0, chunks.length - 1)) : Number.MAX_SAFE_INTEGER;
+  const naturalWidths = chunks.map((chunk) => naturalHelpColumnWidth(config, chunk, knownWidth));
+  const naturalTotal = naturalWidths.reduce((sum, next) => sum + next, 0);
+  const baseWidth = knownWidth && naturalTotal > available ? Math.max(1, Math.floor(available / chunks.length)) : 0;
+  const remainder = knownWidth && naturalTotal > available ? Math.max(0, available - baseWidth * chunks.length) : 0;
+
+  return chunks.map((chunk, index) => {
+    const widthForColumn = knownWidth
+      ? naturalTotal > available
+        ? baseWidth + (index < remainder ? 1 : 0)
+        : naturalWidths[index] ?? 1
+      : naturalWidths[index] ?? 1;
+    const keyWidth = helpKeyColumnWidth(config, chunk, widthForColumn, knownWidth);
+    return {
+      rows: chunk,
+      width: widthForColumn,
+      keyWidth,
+      actionWidth: Math.max(0, widthForColumn - keyWidth),
+    };
+  });
+}
+
+function helpRowSlots(capacity: number, spacing: number): number {
+  return Math.max(1, Math.floor((Math.max(0, capacity) + Math.max(0, spacing)) / (1 + Math.max(0, spacing))));
+}
+
+function helpColumnGap(width: number): number {
+  return width >= 96 ? 4 : 3;
+}
+
+function naturalHelpColumnWidth(config: ResolvedTuiConfig, rows: HelpRow[], dynamic: boolean): number {
+  const keyWidth = helpKeyColumnWidth(config, rows, Number.MAX_SAFE_INTEGER, dynamic);
+  const actionWidth = Math.max(0, ...rows.map((row) => Array.from(row.action).length));
+  const cappedActionWidth = config.layout.helpOverlayActionMaxWidth > 0 ? Math.min(actionWidth, config.layout.helpOverlayActionMaxWidth) : actionWidth;
+  return Math.max(1, keyWidth + cappedActionWidth);
+}
+
+function helpKeyColumnWidth(config: ResolvedTuiConfig, rows: HelpRow[], columnWidth: number, dynamic: boolean): number {
+  const longestKey = Math.max(1, ...rows.map((row) => Array.from(row.keys).length));
+  const configured = Math.max(1, Math.floor(config.layout.helpKeyWidth));
+  const natural = dynamic ? longestKey + 2 : configured;
+  return Math.max(1, Math.min(natural, configured, Math.max(1, Math.floor(columnWidth))));
 }
 
 function overlayContentRows(config: ResolvedTuiConfig, tone: TuiOverlayToneName, height: number): number {

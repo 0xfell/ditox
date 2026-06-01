@@ -351,7 +351,7 @@ fn runDaemon(allocator: std.mem.Allocator, init: std.process.Init, self_path: []
     defer allocator.free(daemon);
 
     var child = try std.process.spawn(init.io, .{
-        .argv = &.{ daemon, "watch" },
+        .argv = &.{ daemon, "daemon" },
         .stdin = if (wait) .inherit else .ignore,
         .stdout = if (wait) .inherit else .ignore,
         .stderr = if (wait) .inherit else .ignore,
@@ -511,6 +511,19 @@ fn installedTuiCommand(allocator: std.mem.Allocator, init: std.process.Init) !?[
         const entry = try std.fs.path.resolve(allocator, &.{ exe_dir, candidate });
         defer allocator.free(entry);
         if (std.Io.Dir.cwd().access(init.io, entry, .{})) {
+            // When the bundle lives in the Nix install layout under
+            // share/ditox/tui/dist, we have also shipped a matching
+            // node_modules/@opentui tree (populated at build time from the
+            // exact locked 0.2.15 packages). Use --no-install + --cwd so the
+            // TUI process resolves its native FFI libs only from the store
+            // path and never touches the user's global Bun cache. This is the
+            // fix for the Super+V "ditox -enable-real-time" crash.
+            if (std.mem.indexOf(u8, entry, "share/ditox/tui/dist/index.js")) |_| {
+                const tui_root = std.fs.path.dirname(std.fs.path.dirname(entry) orelse entry) orelse entry;
+                const root_quoted = try shellQuote(allocator, tui_root);
+                defer allocator.free(root_quoted);
+                return @as(?[]const u8, try std.fmt.allocPrint(allocator, "bun --no-install --cwd {s} ./dist/index.js", .{root_quoted}));
+            }
             return @as(?[]const u8, try bundledTuiCommand(allocator, entry));
         } else |_| {}
     }

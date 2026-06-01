@@ -129,7 +129,7 @@ describe("OpenTUI golden frames", () => {
       "help-overlay",
       () => (
         <Shell config={config}>
-          <ModeOverlay config={config} state={{ ...initialState(), mode: "help" }} />
+          <ModeOverlay config={config} state={{ ...initialState(), mode: "help" }} width={64} />
         </Shell>
       ),
       64,

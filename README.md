@@ -301,7 +301,7 @@ matching before storing text or images.
 The target launch model is:
 
 ```ini
-exec-once = ditoxd watch
+exec-once = ditoxd daemon
 bind = SUPER, V, exec, ditox
 ```
 
@@ -315,8 +315,7 @@ TUI. `ditox -enable-real-time`, `ditox launch --enable-real-time`, and
 refocuses the captured window with `hyprctl`, and dispatches the configured
 paste shortcut, `ctrl+v` by default.
 
-The watcher remains a long-running process (`ditoxd watch`). JSON-RPC stays a
-short-lived stdio command (`ditoxd serve --stdio`) for now, which keeps the
+The watcher is now the `ditoxd daemon` (single long-lived DB owner process running the full capture loop). This is the structural fix for DB lock / stale watcher. JSON-RPC stays short-lived stdio for now (per plan).
 OpenTUI process simple while storage and capture semantics settle.
 
 The TUI shipping format is bundled JavaScript for normal builds

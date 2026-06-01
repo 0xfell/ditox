@@ -16,6 +16,7 @@ beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "ditox-cli-"));
   env = {
     DITOX_DATA_DIR: join(tempDir, "data"),
+    DITOX_CONFIG: join(tempDir, "config.toml"),
     DITOX_CLIPBOARD_MOCK: join(tempDir, "clipboard.txt"),
   };
 });
@@ -363,6 +364,52 @@ describe("ditox CLI smoke", () => {
     expect(status.config.auto_paste_buffer_ms).toBe(0);
   });
 
+  test("does not wait for a wl-copy clipboard owner that keeps stderr open", () => {
+    expect(run(["add", "clipboard owner text"])).toBe("1");
+
+    const fakeBin = join(tempDir, "owner-bin");
+    const fakeClipboard = join(tempDir, "owner-clipboard.txt");
+    const ownerPidFile = join(tempDir, "owner.pid");
+    mkdirSync(fakeBin);
+    writeFileSync(
+      join(fakeBin, "wl-copy"),
+      [
+        "#!/usr/bin/env sh",
+        'cat > "$DITOX_FAKE_CLIPBOARD"',
+        "(sh -c 'while :; do sleep 60; done' >&2) &",
+        'printf "%s\\n" "$!" > "$DITOX_WL_OWNER_PID_FILE"',
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(join(fakeBin, "wl-copy"), 0o755);
+
+    delete env.DITOX_CLIPBOARD_MOCK;
+    env.PATH = `${fakeBin}:${process.env.PATH ?? ""}`;
+    env.DITOX_FAKE_CLIPBOARD = fakeClipboard;
+    env.DITOX_WL_OWNER_PID_FILE = ownerPidFile;
+
+    const proc = Bun.spawnSync({
+      cmd: ["timeout", "--foreground", "--kill-after=1s", "2s", ditox, "copy", "1"],
+      env: { ...process.env, ...env },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    try {
+      expect(proc.exitCode).toBe(0);
+      expect(readFileSync(fakeClipboard, "utf8")).toBe("clipboard owner text");
+    } finally {
+      if (existsSync(ownerPidFile)) {
+        const pid = Number(readFileSync(ownerPidFile, "utf8").trim());
+        if (Number.isFinite(pid) && pid > 0) {
+          try {
+            process.kill(pid, "SIGTERM");
+          } catch {}
+        }
+      }
+    }
+  });
+
   test("runs bundled TUI from an install layout outside the repo checkout", () => {
     expect(existsSync(join(repoRoot, "zig-out", "share", "ditox", "tui", "dist", "index.js"))).toBe(true);
     expect(existsSync(join(repoRoot, "zig-out", "share", "ditox", "tui", "tui-config.schema.json"))).toBe(true);
@@ -418,7 +465,14 @@ describe("ditox CLI smoke", () => {
     });
 
     expect(proc.exitCode).toBe(0);
-    expect(readFileSync(bunArgs, "utf8").trim()).toBe(join(tuiDist, "index.js"));
+    const capturedBun = readFileSync(bunArgs, "utf8").trim();
+    // The install-layout launch must now use the hermetic form so the TUI
+    // never resolves @opentui from the user's global Bun cache (the root
+    // cause of the Super+V crash with "dumpStdoutBuffer not found").
+    expect(capturedBun).toContain("--no-install");
+    expect(capturedBun).toContain("--cwd");
+    // After --cwd the command uses the relative ./dist/index.js (correct hermetic form)
+    expect(capturedBun).toContain("dist/index.js");
     expect(readFileSync(bunEnv, "utf8").trim()).toBe("0xinstalled|250");
   });
 
@@ -624,7 +678,7 @@ describe("ditox CLI smoke", () => {
     });
 
     expect(proc.exitCode).toBe(124);
-    expect(`${proc.stdout?.toString() ?? ""}${proc.stderr?.toString() ?? ""}`).toContain("▙");
+    expect(`${proc.stdout?.toString() ?? ""}${proc.stderr?.toString() ?? ""}`).toContain("▀");
   });
 
   test("renders file-based TUI customization in the real OpenTUI smoke path", () => {

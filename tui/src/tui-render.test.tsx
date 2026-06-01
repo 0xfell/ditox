@@ -534,7 +534,7 @@ describe("OpenTUI render snapshots", () => {
       config.layout.helpOverlayHeight,
     );
 
-    expect(frame).toContain("clear everything");
+    expect(frame).toContain("clear including pinned");
     expect(frame).toContain("c x");
     expectFrameWithin(frame, 126, config.layout.helpOverlayHeight);
   });
@@ -3905,6 +3905,63 @@ describe("OpenTUI render snapshots", () => {
       const nativeCell = findSpan(openTuiSpans, "▙");
       expect(colorHex(nativeCell)).toBe("#ff0000");
       expect(colorHex(nativeCell, "bg")).toBe("#00ff00");
+
+      const autoRendererConfig = resolveTuiConfig({
+        layout: {
+          imagePreviewMode: "blocks",
+          imagePreviewRenderer: "auto",
+          imagePreviewMaxWidth: 2,
+          imagePreviewMaxRows: 1,
+          imagePreviewBlockGlyph: "▀",
+        },
+      });
+      const autoRendererFrame = await captureFrame(
+        () => (
+          <Shell config={autoRendererConfig}>
+            <PreviewPane config={autoRendererConfig} entry={imageEntry(9, imagePath, bytes.length)} rows={8} width={48} />
+          </Shell>
+        ),
+        58,
+        10,
+      );
+      expect(autoRendererFrame).toContain("▀");
+      expect(autoRendererFrame).not.toContain("▙");
+
+      const nativeRequests: any[] = [];
+      const nativeRendererFrame = await captureFrame(
+        () => (
+          <Shell config={autoRendererConfig}>
+            <PreviewPane
+              config={autoRendererConfig}
+              entry={imageEntry(10, imagePath, bytes.length)}
+              rows={8}
+              width={48}
+              imageTerminal={{
+                columns: 58,
+                rows: 10,
+                resolution: { width: 580, height: 200 },
+                capabilities: { kittyGraphics: true, sixel: false, nativeRenderer: true },
+              }}
+              imageManager={{ queue: (request: any) => nativeRequests.push(request), clear: () => {} }}
+            />
+          </Shell>
+        ),
+        58,
+        10,
+      );
+      expect(nativeRendererFrame).not.toContain("▀");
+      expect(nativeRequests).toHaveLength(1);
+      expect(nativeRequests[0]).toMatchObject({
+        protocol: "kitty",
+        cols: 1,
+        rows: 1,
+        pixelWidth: 10,
+        pixelHeight: 20,
+        contentPixelWidth: 2,
+        contentPixelHeight: 2,
+        contentOffsetX: 4,
+        contentOffsetY: 9,
+      });
 
       const transparentConfig = resolveTuiConfig({
         layout: {

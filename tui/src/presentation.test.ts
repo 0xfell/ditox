@@ -174,6 +174,12 @@ describe("presentation", () => {
     expect(truncateText("alpha\nbeta\tgamma", 12, { textTruncationMarker: "~", textWhitespaceReplacement: "_" })).toBe("alpha_beta_~");
     expect(truncateText("abcdef", 2, { textTruncationMarker: "~~" })).toBe("~~");
     expect(entryPreview({ ...entry, preview: "alpha\nbeta gamma" }, 11, { textTruncationMarker: "~", textWhitespaceReplacement: "_" })).toBe("alpha_beta~");
+    // Defensive: non-string or null/undefined values must not crash (can occur with legacy data or RPC edge cases)
+    expect(truncateText(undefined as any, 10)).toBe("");
+    expect(truncateText(null as any, 5)).toBe("");
+    expect(truncateText(123 as any, 5)).toBe("123");
+    expect(entryPreview({ ...entry, preview: null as any, content: null as any }, 10)).toBe("(empty)");
+    expect(entryPreview({ ...entry, content: undefined as any, preview: undefined as any }, 10, { emptyEntryPreview: 42 as any })).toBe("42");
   });
 
   test("segments row preview text for configurable search highlighting", () => {

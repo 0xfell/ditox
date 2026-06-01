@@ -21,7 +21,7 @@ export type BorderStyle = "single" | "double" | "rounded" | "heavy";
 export const titleAlignmentNames = ["left", "center", "right"] as const;
 export type TitleAlignment = (typeof titleAlignmentNames)[number];
 export const imagePreviewNoticeVisibilityNames = ["never", "protocol", "always"] as const;
-export const imagePreviewRendererNames = ["auto", "opentui", "text"] as const;
+export const imagePreviewRendererNames = ["auto", "native", "opentui", "text"] as const;
 export const imagePreviewAlignNames = ["left", "center", "right"] as const;
 export const verticalAlignNames = ["top", "center", "bottom"] as const;
 export const scrollbarPlacementNames = ["left", "right"] as const;
@@ -805,11 +805,11 @@ const defaultKeyLabels: KeyDisplayLabels = {
   space: "space",
   escape: "esc",
   enter: "enter",
-  backspace: "backspace",
+  backspace: "bksp",
   tab: "tab",
   delete: "delete",
-  pageup: "pageup",
-  pagedown: "pagedown",
+  pageup: "pgup",
+  pagedown: "pgdn",
   up: "up",
   down: "down",
   left: "left",
@@ -1040,7 +1040,7 @@ const defaultLabels: TuiLabels = {
   watcherStoppedTemplate: "{status}",
   watcherErrorTemplate: "{status}{separator}{error}",
   keyAlternativeSeparator: " / ",
-  keyGroupSeparator: " ",
+  keyGroupSeparator: "  ",
   statusHintSeparator: "  ",
   statusHintTemplate:
     "{pasteKeys} {paste}{separator}{copyKeys} {copy}{separator}{previewKeys} {preview}{separator}{searchKeys} {search}{separator}{helpKeys} {help}",
@@ -1101,24 +1101,24 @@ const defaultLabels: TuiLabels = {
   previewModeTitle: "full preview",
   previewBackHint: "preview / esc back",
   helpMoveSelection: "move selection",
-  helpPageSelection: "page selection",
-  helpFirstLastEntry: "first / last entry",
+  helpPageSelection: "page up / down",
+  helpFirstLastEntry: "jump first / last",
   helpQuit: "quit",
   helpPreview: "open preview",
   helpPreviewNavigation: "scroll preview",
   helpPreviewBack: "leave preview",
-  helpPinnedView: "toggle pinned view",
-  helpPaste: "paste into previous Hyprland window",
-  helpCopySet: "copy current / selected set",
-  helpOutput: "output current / selected set",
-  helpMarkSingle: "mark / select / clear marks",
-  helpRangeSelect: "range select",
-  helpSearchFilter: "search / cycle filter",
+  helpPinnedView: "show pinned only",
+  helpPaste: "paste selected",
+  helpCopySet: "copy selected",
+  helpOutput: "print selected",
+  helpMarkSingle: "mark / isolate / clear",
+  helpRangeSelect: "extend selection",
+  helpSearchFilter: "search / next filter",
   helpSearchEdit: "edit / apply / cancel search",
   helpSearchCopyMatches: "copy matched search results",
-  helpPinDelete: "pin / delete",
-  helpClearHistory: "clear history",
-  helpClearAllIncludingPinned: "clear everything",
+  helpPinDelete: "pin or delete",
+  helpClearHistory: "clear all / text / images",
+  helpClearAllIncludingPinned: "clear including pinned",
   helpConfirmChoice: "confirm / cancel",
 };
 
@@ -1127,8 +1127,8 @@ const defaultKeyBindings: TuiKeyBindings = {
   forceQuit: ["ctrl+c"],
   up: ["up", "k"],
   down: ["down", "j"],
-  pageUp: ["left", "pageup"],
-  pageDown: ["right", "pagedown"],
+  pageUp: ["pageup"],
+  pageDown: ["pagedown"],
   home: ["home"],
   end: ["end"],
   nextFilter: ["tab"],
@@ -1153,8 +1153,8 @@ const defaultKeyBindings: TuiKeyBindings = {
   previewBack: ["space", "escape"],
   previewUp: ["up", "k"],
   previewDown: ["down", "j"],
-  previewPageUp: ["left", "pageup"],
-  previewPageDown: ["right", "pagedown"],
+  previewPageUp: ["pageup"],
+  previewPageDown: ["pagedown"],
   togglePinnedView: ["shift+tab"],
   clearAll: ["c a"],
   clearText: ["c t"],
@@ -1173,6 +1173,7 @@ const defaultHelpOrder: TuiHelpActionName[] = [
   "pinnedView",
   "paste",
   "copySet",
+  "output",
   "markSingle",
   "rangeSelect",
   "searchFilter",
@@ -1180,6 +1181,7 @@ const defaultHelpOrder: TuiHelpActionName[] = [
   "pinDelete",
   "clearHistory",
   "clearAllIncludingPinned",
+  "quit",
 ];
 const defaultPreviewImageFields: PreviewImageField[] = ["type", "mime", "size", "dimensions", "hash", "blob"];
 const defaultStartup: TuiStartupConfig = {
@@ -1220,10 +1222,10 @@ const defaultLayout: UiConfig = {
   historyLimit: 100,
   imagePreviewMode: "blocks",
   fullPreviewImageMode: "blocks",
-  imagePreviewMaxWidth: 48,
-  imagePreviewMaxRows: 16,
-  fullPreviewImageMaxWidth: 48,
-  fullPreviewImageMaxRows: 16,
+  imagePreviewMaxWidth: 80,
+  imagePreviewMaxRows: 24,
+  fullPreviewImageMaxWidth: 120,
+  fullPreviewImageMaxRows: 40,
   imagePreviewRenderer: "auto",
   fullPreviewImageRenderer: "auto",
   imagePreviewAlign: "left",
@@ -1256,8 +1258,8 @@ const defaultLayout: UiConfig = {
   fullPreviewContentAlign: "left",
   previewBodyVerticalAlign: "top",
   fullPreviewBodyVerticalAlign: "top",
-  imagePreviewRowInset: 6,
-  fullPreviewImageRowInset: 6,
+  imagePreviewRowInset: 3,
+  fullPreviewImageRowInset: 3,
   fullPreviewScrollInsetRows: 2,
   previewLineNumberWidth: 3,
   previewGutterWidth: 4,
@@ -1588,20 +1590,26 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
     fileConfig.layout?.imagePreviewMode,
     clipseImagePreviewMode(fileConfig.imageDisplay, defaultLayout.imagePreviewMode),
   );
+  const clipseImageMaxWidth = clipseImagePreviewMaxWidth(fileConfig.imageDisplay, defaultLayout.imagePreviewMaxWidth);
+  const hasSplitImageMaxWidthOverride =
+    env.DITOX_TUI_IMAGE_PREVIEW_MAX_WIDTH !== undefined || fileConfig.layout?.imagePreviewMaxWidth !== undefined || clipseImageMaxWidth !== defaultLayout.imagePreviewMaxWidth;
   const imagePreviewMaxWidth = clampNumber(
     envNumber(
       env,
       "DITOX_TUI_IMAGE_PREVIEW_MAX_WIDTH",
-      numberValue(fileConfig.layout?.imagePreviewMaxWidth, clipseImagePreviewMaxWidth(fileConfig.imageDisplay, defaultLayout.imagePreviewMaxWidth)),
+      numberValue(fileConfig.layout?.imagePreviewMaxWidth, clipseImageMaxWidth),
     ),
     8,
     120,
   );
+  const clipseImageMaxRows = clipseImagePreviewMaxRows(fileConfig.imageDisplay, defaultLayout.imagePreviewMaxRows);
+  const hasSplitImageMaxRowsOverride =
+    env.DITOX_TUI_IMAGE_PREVIEW_MAX_ROWS !== undefined || fileConfig.layout?.imagePreviewMaxRows !== undefined || clipseImageMaxRows !== defaultLayout.imagePreviewMaxRows;
   const imagePreviewMaxRows = clampNumber(
     envNumber(
       env,
       "DITOX_TUI_IMAGE_PREVIEW_MAX_ROWS",
-      numberValue(fileConfig.layout?.imagePreviewMaxRows, clipseImagePreviewMaxRows(fileConfig.imageDisplay, defaultLayout.imagePreviewMaxRows)),
+      numberValue(fileConfig.layout?.imagePreviewMaxRows, clipseImageMaxRows),
     ),
     2,
     60,
@@ -1653,7 +1661,7 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
       envNumber(
         env,
         "DITOX_TUI_FULL_PREVIEW_IMAGE_MAX_WIDTH",
-        numberValue(fileConfig.layout?.fullPreviewImageMaxWidth, imagePreviewMaxWidth),
+        numberValue(fileConfig.layout?.fullPreviewImageMaxWidth, hasSplitImageMaxWidthOverride ? imagePreviewMaxWidth : defaultLayout.fullPreviewImageMaxWidth),
       ),
       8,
       120,
@@ -1662,7 +1670,7 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
       envNumber(
         env,
         "DITOX_TUI_FULL_PREVIEW_IMAGE_MAX_ROWS",
-        numberValue(fileConfig.layout?.fullPreviewImageMaxRows, imagePreviewMaxRows),
+        numberValue(fileConfig.layout?.fullPreviewImageMaxRows, hasSplitImageMaxRowsOverride ? imagePreviewMaxRows : defaultLayout.fullPreviewImageMaxRows),
       ),
       2,
       60,
@@ -3065,7 +3073,9 @@ function normalizeKeys(value: string | string[] | undefined): string[] {
 export function normalizeKey(key: string): string {
   if (key === " ") return "space";
   if (/^[A-Z]$/.test(key)) return `shift+${key.toLowerCase()}`;
-  return key.toLowerCase();
+  const parts = key.toLowerCase().split("+");
+  if (parts[parts.length - 1] === "return") parts[parts.length - 1] = "enter";
+  return parts.join("+");
 }
 
 function displayKey(key: string, labels: KeyDisplayLabels): string {

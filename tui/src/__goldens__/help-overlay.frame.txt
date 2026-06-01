@@ -1,17 +1,17 @@
 ╭─bindings─────────────────────────────────────────────────────╮
-│up / k down / j                   move selection              │
-│left / pageup right / pagedown    page selection              │
-│home end                          first / last entry          │
-│space                             open preview                │
-│shift+tab                         toggle pinned view          │
-│ctrl+p                            send selected clip          │
-│ctrl+y y                          copy current / selected set │
-│x s shift+s                       mark / select / clear marks │
-│shift+up shift+down               range select                │
-│/ tab                             search / cycle filter       │
-│ctrl+g                            copy filtered clips         │
-│p d / backspace                   pin / delete                │
-│c a c t c i                       clear history               │
-│c x                               clear everything            │
+│up / k  down / j  move sele...   x  s  shift+s         mark...│
+│pgup  pgdn        page up /...   shift+up  shift+down  exte...│
+│home  end         jump firs...   /  tab                sear...│
+│space             open preview   ctrl+g                copy...│
+│shift+tab         show pinn...   p  d / bksp           pin ...│
+│ctrl+p            send sele...   c a  c t  c i         clea...│
+│ctrl+y  y         copy sele...   c x                   clea...│
+│o                 print sel...   esc / q  ctrl+c       quit   │
+│                                                              │
+│                                                              │
+│                                                              │
+│                                                              │
+│                                                              │
+│                                                              │
 ╰──────────────────────────────────────────────────────────────╯
                                                                 

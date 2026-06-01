@@ -59,6 +59,39 @@ describe("image preview", () => {
     expect(preview.native.alignedBytesPerRow).toBe(8);
   });
 
+  test("downsamples image blocks with area averaging instead of point sampling", () => {
+    const preview = imageBlockPreviewFromBytes(
+      rgbaPng(4, 4, [
+        [0, 0, 0, 255],
+        [255, 255, 255, 255],
+        [0, 0, 0, 255],
+        [255, 255, 255, 255],
+        [255, 255, 255, 255],
+        [0, 0, 0, 255],
+        [255, 255, 255, 255],
+        [0, 0, 0, 255],
+        [0, 0, 0, 255],
+        [255, 255, 255, 255],
+        [0, 0, 0, 255],
+        [255, 255, 255, 255],
+        [255, 255, 255, 255],
+        [0, 0, 0, 255],
+        [255, 255, 255, 255],
+        [0, 0, 0, 255],
+      ]),
+      2,
+      1,
+      "#000000",
+    );
+
+    expect(preview.kind).toBe("rendered");
+    if (preview.kind !== "rendered") return;
+    expect(preview.rows[0]).toEqual([
+      { char: "▀", fg: "#808080", bg: "#808080" },
+      { char: "▀", fg: "#808080", bg: "#808080" },
+    ]);
+  });
+
   test("renders block previews with a configured glyph", () => {
     const preview = imageBlockPreviewFromBytes(
       rgbaPng(2, 2, [

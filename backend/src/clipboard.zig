@@ -153,7 +153,7 @@ fn writeBytesToClipboard(allocator: std.mem.Allocator, init: std.process.Init, b
         .argv = argv,
         .stdin = .pipe,
         .stdout = .ignore,
-        .stderr = .pipe,
+        .stderr = .ignore,
     });
     defer child.kill(init.io);
 
@@ -163,12 +163,6 @@ fn writeBytesToClipboard(allocator: std.mem.Allocator, init: std.process.Init, b
     try stdin_writer.interface.flush();
     child.stdin.?.close(init.io);
     child.stdin = null;
-
-    if (child.stderr) |stderr_file| {
-        var stderr_buffer: [4096]u8 = undefined;
-        var stderr_reader = stderr_file.reader(init.io, &stderr_buffer);
-        _ = stderr_reader.interface.discardAll(4096) catch {};
-    }
 
     const term = try child.wait(init.io);
     switch (term) {

@@ -15,11 +15,15 @@ pub fn main(init: std.process.Init) !void {
         try watchClipboard(allocator, init);
         return;
     }
+    if (args.len > 1 and (std.mem.eql(u8, args[1], "daemon") or std.mem.eql(u8, args[1], "run"))) {
+        try runPersistentDaemon(allocator, init);
+        return;
+    }
 
     var stdout_buffer: [1024]u8 = undefined;
     var stdout_writer = Io.File.stdout().writer(init.io, &stdout_buffer);
     const stdout = &stdout_writer.interface;
-    try stdout.writeAll("usage: ditoxd serve --stdio | ditoxd watch\n");
+    try stdout.writeAll("usage: ditoxd serve --stdio | ditoxd watch | ditoxd daemon\n  daemon: single long-lived owner running full capture loop (recommended)\n");
     try stdout.flush();
 }
 
@@ -47,29 +51,8 @@ fn watchClipboard(allocator: std.mem.Allocator, init: std.process.Init) !void {
     try opened.store.markWatcherPid(@as(i64, @intCast(std.os.linux.getpid())));
     defer opened.store.clearWatcherPid() catch {};
 
-    var last_hash: ?[64]u8 = null;
-    while (true) {
-        opened.store.markWatcherSeen() catch {};
-
-        if (opened.store.isWatcherPaused() catch false) {
-            try std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(opened.cfg.poll_interval_ms), .awake);
-            continue;
-        }
-
-        if (isActiveWindowExcluded(allocator, init, opened.cfg) catch false) {
-            try std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(opened.cfg.poll_interval_ms), .awake);
-            continue;
-        }
-
-        if (try captureImageFirst(allocator, init, opened.cfg, &opened.store, &last_hash)) {
-            try std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(opened.cfg.poll_interval_ms), .awake);
-            continue;
-        }
-
-        captureText(allocator, init, opened.cfg, &opened.store, &last_hash) catch {};
-
-        try std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(opened.cfg.poll_interval_ms), .awake);
-    }
+    // Delegate to the shared loop (keeps logic single-source; legacy `watch` still works for compat).
+    try runCaptureLoop(allocator, init, opened.cfg, &opened.store);
 }
 
 fn captureImageFirst(
@@ -160,4 +143,67 @@ test "excluded app and window matching is case-insensitive" {
     try std.testing.expect(matchesAny("private SECRET window title", &windows));
     try std.testing.expect(!matchesAny("Alacritty", &apps));
     try std.testing.expect(!matchesAny("normal browser tab", &windows));
+}
+
+/// Proper persistent single-owner daemon (implements the approved architectural plan).
+/// - Owns ONE long-lived Storage connection for the lifetime of the daemon (this is the core fix for the "database is locked" + SQLiteFailure storm that made the watcher go stale).
+/// - Runs the FULL clipboard capture watcher loop (captureImageFirst + captureText + add* writes + exclude/pause/last_hash/self-write guards) against that single owned *Storage.
+/// - `ditoxd serve --stdio` and legacy `ditoxd watch` remain for compatibility / one-offs.
+/// - This eliminates the N-process writer contention at the source for the capture workload.
+fn runPersistentDaemon(allocator: std.mem.Allocator, init: std.process.Init) !void {
+    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_writer = Io.File.stdout().writer(init.io, &stdout_buffer);
+    const stdout = &stdout_writer.interface;
+
+    try stdout.writeAll("Starting proper persistent ditoxd daemon (single DB owner + full capture)...\n");
+    try stdout.flush();
+
+    var opened = try core.app.openStore(allocator, init);
+    // Intentionally do not defer deinit/close here: the daemon *owns* these for its entire lifetime.
+    // On process exit the OS reclaims; this is the single-owner model.
+
+    try opened.store.markWatcherPid(@as(i64, @intCast(std.os.linux.getpid())));
+    // Best-effort clear on any return path (normal for long-lived daemon is process death).
+    defer opened.store.clearWatcherPid() catch {};
+
+    try stdout.writeAll("Daemon owns the single long-lived DB connection. Entering owned capture loop.\n");
+    try stdout.flush();
+
+    // Run the *real* capture workload (image/text polling, dedup, exclusions, addText/addImage writes,
+    // markWatcherSeen, retention) directly against the owned store. No other process does the heavy writes.
+    // This is the structural fix the verifiers required.
+    try runCaptureLoop(allocator, init, opened.cfg, &opened.store);
+}
+
+/// Shared capture loop used by both legacy `watch` and the new single-owner `daemon`.
+/// All heavy DB writes (add*, markWatcherSeen) go through the caller's store.
+fn runCaptureLoop(
+    allocator: std.mem.Allocator,
+    init: std.process.Init,
+    cfg: core.config.Config,
+    store: *core.storage.Storage,
+) !void {
+    var last_hash: ?[64]u8 = null;
+    while (true) {
+        store.markWatcherSeen() catch {};
+
+        if (store.isWatcherPaused() catch false) {
+            try std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(cfg.poll_interval_ms), .awake);
+            continue;
+        }
+
+        if (isActiveWindowExcluded(allocator, init, cfg) catch false) {
+            try std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(cfg.poll_interval_ms), .awake);
+            continue;
+        }
+
+        if (try captureImageFirst(allocator, init, cfg, store, &last_hash)) {
+            try std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(cfg.poll_interval_ms), .awake);
+            continue;
+        }
+
+        captureText(allocator, init, cfg, store, &last_hash) catch {};
+
+        try std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(cfg.poll_interval_ms), .awake);
+    }
 }

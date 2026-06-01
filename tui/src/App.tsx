@@ -9,6 +9,7 @@ import {
   type CliRendererConfig,
   type CursorStyleOptions,
   type KittyKeyboardOptions,
+  type PixelResolution,
   type TerminalCapabilities,
 } from "@opentui/core";
 import {
@@ -55,7 +56,13 @@ import { StatusLine } from "./components/StatusLine";
 import { ModeOverlay } from "./components/Overlay";
 import { FullPreview } from "./components/FullPreview";
 import { isBlockPreviewMime, type ImageProtocolCapabilities } from "./image-preview";
+import { TerminalImageManager, type TerminalImageState } from "./terminal-image";
 import type { Entry } from "./types";
+
+type CopyPasteRpc = {
+  copyEntry: typeof copyEntry;
+  pasteEntry: typeof pasteEntry;
+};
 
 function AppRoot(props: { config: ResolvedTuiConfig }) {
   const renderer = useRenderer();
@@ -70,9 +77,12 @@ function AppRoot(props: { config: ResolvedTuiConfig }) {
 export function App(props: { config?: ResolvedTuiConfig } = {}) {
   const config = props.config ?? currentTuiConfig();
   const renderer = useRenderer();
+  const imageManager = new TerminalImageManager();
   const [state, setState] = createSignal<UiState>(initialState(config.startup));
   const [terminalCapabilities, setTerminalCapabilities] = createSignal<TerminalCapabilities | null>(renderer.capabilities);
   const dimensions = useTerminalDimensions();
+  const imageTerminal = (): TerminalImageState =>
+    terminalImageState(dimensions().width, dimensions().height, renderer.resolution, terminalCapabilities());
   const contentWidth = () => Math.max(1, dimensions().width - config.layout.shellPaddingX * 2);
   const contentHeight = () => Math.max(1, dimensions().height - config.layout.shellPaddingY * 2);
   const overlayHeight = () => activeOverlayHeight(state(), config);
@@ -126,10 +136,13 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
     const entry = selectedEntry(state());
     if (!entry) return;
     try {
-      if (paste) await pasteEntry(entry.id, Bun.env.DITOX_TARGET_WINDOW, config.labels);
-      else await copyEntry(entry.id, config.labels);
-      setState((previous) => ({ ...previous, status: paste ? config.labels.statusPasted : config.labels.statusCopied }));
-      exitAfter(paste ? config.behavior.exitAfterPaste : config.behavior.exitAfterCopy, renderer);
+      const result = await copyOrPasteEntry(entry.id, {
+        paste,
+        targetWindow: Bun.env.DITOX_TARGET_WINDOW,
+        labels: config.labels,
+      });
+      setState((previous) => ({ ...previous, status: result === "pasted" ? config.labels.statusPasted : config.labels.statusCopied }));
+      exitAfter(result === "pasted" ? config.behavior.exitAfterPaste : paste ? config.behavior.exitAfterPaste : config.behavior.exitAfterCopy, renderer);
     } catch (error) {
       setState((previous) => ({ ...previous, status: error instanceof Error ? error.message : String(error) }));
     }
@@ -297,6 +310,7 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
     }, config.layout.refreshIntervalMs);
     onCleanup(() => clearInterval(timer));
   });
+  onCleanup(() => imageManager.destroy());
 
   return (
     <AppFrame
@@ -310,7 +324,9 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
             rows={listRows()}
             width={Math.max(config.layout.minPaneWidth, contentWidth() - config.layout.fullPreviewWidthInset)}
             offset={state().previewOffset}
-            imageCapabilities={imageProtocolCapabilities(terminalCapabilities())}
+            imageCapabilities={imageProtocolCapabilities(terminalCapabilities(), renderer.resolution)}
+            imageTerminal={imageTerminal()}
+            imageManager={imageManager}
             onScroll={(direction) =>
               setState((previous) =>
                 movePreview(
@@ -350,7 +366,9 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
                 rows={listRows()}
                 width={previewWidth()}
                 widthPercent={previewPaneWidthPercent()}
-                imageCapabilities={imageProtocolCapabilities(terminalCapabilities())}
+                imageCapabilities={imageProtocolCapabilities(terminalCapabilities(), renderer.resolution)}
+                imageTerminal={imageTerminal()}
+                imageManager={imageManager}
               />
             ) : null}
           </box>
@@ -382,11 +400,27 @@ export function AppFrame(props: {
   );
 }
 
-export function imageProtocolCapabilities(capabilities: TerminalCapabilities | null): ImageProtocolCapabilities {
+export function imageProtocolCapabilities(capabilities: TerminalCapabilities | null, resolution?: PixelResolution | null): ImageProtocolCapabilities {
+  const kittyGraphics = capabilities?.kitty_graphics ?? null;
+  const sixel = capabilities?.sixel ?? null;
   return {
-    kittyGraphics: capabilities?.kitty_graphics ?? null,
-    sixel: capabilities?.sixel ?? null,
-    nativeRenderer: false,
+    kittyGraphics,
+    sixel,
+    nativeRenderer: Boolean(resolution && (kittyGraphics === true || sixel === true)),
+  };
+}
+
+export function terminalImageState(
+  columns: number,
+  rows: number,
+  resolution: PixelResolution | null,
+  capabilities: TerminalCapabilities | null,
+): TerminalImageState {
+  return {
+    columns: Math.max(1, Math.floor(columns)),
+    rows: Math.max(1, Math.floor(rows)),
+    resolution,
+    capabilities: imageProtocolCapabilities(capabilities, resolution),
   };
 }
 
@@ -539,7 +573,28 @@ function useDitoxKeymap(actions: DitoxKeymapActions) {
 }
 
 function bind(keys: string[], cmd: () => void | Promise<void>): Array<{ key: string; cmd: () => void | Promise<void> }> {
-  return keys.map((key) => ({ key, cmd }));
+  return runtimeKeysForBinding(keys).map((key) => ({ key, cmd }));
+}
+
+export function runtimeKeysForBinding(keys: string[]): string[] {
+  const expanded: string[] = [];
+  const seen = new Set<string>();
+  for (const rawKey of keys) {
+    const key = normalizeKey(rawKey);
+    for (const candidate of [key, openTuiRuntimeAlias(key)]) {
+      if (candidate === null || seen.has(candidate)) continue;
+      seen.add(candidate);
+      expanded.push(candidate);
+    }
+  }
+  return expanded;
+}
+
+function openTuiRuntimeAlias(key: string): string | null {
+  const parts = key.split("+");
+  if (parts[parts.length - 1] !== "enter") return null;
+  parts[parts.length - 1] = "return";
+  return parts.join("+");
 }
 
 function matchesAnyKey(event: any, keys: string[]): boolean {
@@ -586,6 +641,36 @@ function liveSearchKey(state: UiState): string {
 function exitAfter(enabled: boolean, renderer: CliRenderer): void {
   if (!enabled) return;
   setTimeout(() => shutdownTui(renderer), 0);
+}
+
+export async function copyOrPasteEntry(
+  entryId: number,
+  options: {
+    paste: boolean;
+    targetWindow?: string;
+    labels: ResolvedTuiConfig["labels"];
+    rpc?: CopyPasteRpc;
+  },
+): Promise<"copied" | "pasted"> {
+  const rpc = options.rpc ?? { copyEntry, pasteEntry };
+  if (!options.paste || !options.targetWindow) {
+    await rpc.copyEntry(entryId, options.labels);
+    return "copied";
+  }
+
+  try {
+    await rpc.pasteEntry(entryId, options.targetWindow, options.labels);
+    return "pasted";
+  } catch (error) {
+    if (!isPasteBackFailure(error, options.labels)) throw error;
+    await rpc.copyEntry(entryId, options.labels);
+    return "copied";
+  }
+}
+
+function isPasteBackFailure(error: unknown, labels: ResolvedTuiConfig["labels"]): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message === labels.errorPasteBackFailed || message.includes("PasteBackFailed");
 }
 
 type TerminalWriter = {

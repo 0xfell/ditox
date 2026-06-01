@@ -39,7 +39,16 @@ export type ImageProtocolCapabilities = {
 };
 
 export type ImageBlockPreview =
-  | { kind: "rendered"; rows: ImageCell[][]; native: ImageNativeBuffer; source: string; notice: string | null; protocol: ImagePreviewProtocol | null }
+  | {
+      kind: "rendered";
+      rows: ImageCell[][];
+      native: ImageNativeBuffer;
+      image: DecodedImage;
+      bounds: { maxCols: number; maxRows: number };
+      source: string;
+      notice: string | null;
+      protocol: ImagePreviewProtocol | null;
+    }
   | { kind: "fallback"; reason: string };
 
 export type ImagePreviewFallbackLabels = Pick<
@@ -479,13 +488,22 @@ export function renderImageBlocks(
   for (let row = 0; row < target.cellRows; row += 1) {
     const cells: ImageCell[] = [];
     for (let col = 0; col < target.cols; col += 1) {
-      const top = samplePixel(image, col, row * 2, target.cols, target.pixelRows, bg);
-      const bottom = samplePixel(image, col, row * 2 + 1, target.cols, target.pixelRows, bg);
+      const top = averagePixel(image, col, row * 2, target.cols, target.pixelRows, bg);
+      const bottom = averagePixel(image, col, row * 2 + 1, target.cols, target.pixelRows, bg);
       cells.push({ char: cellGlyph, fg: rgbToHex(top), bg: rgbToHex(bottom) });
     }
     rows.push(cells);
   }
-  return { kind: "rendered", rows, native, source: `${sourcePrefix} ${target.cols}x${target.cellRows}`, notice, protocol };
+  return {
+    kind: "rendered",
+    rows,
+    native,
+    image,
+    bounds: { maxCols: Math.max(1, Math.floor(maxWidth)), maxRows: Math.max(1, Math.floor(maxRows)) },
+    source: `${sourcePrefix} ${target.cols}x${target.cellRows}`,
+    notice,
+    protocol,
+  };
 }
 
 function imagePreviewProtocol(mode: ImagePreviewMode): ImagePreviewProtocol | null {
@@ -802,14 +820,50 @@ function targetSize(imageWidth: number, imageHeight: number, maxWidth: number, m
   return { cols, pixelRows, cellRows };
 }
 
-function samplePixel(image: DecodedImage, outX: number, outY: number, outWidth: number, outHeight: number, background: Rgba): Rgba {
-  const sourceX = Math.min(image.width - 1, Math.floor(((outX + 0.5) * image.width) / outWidth));
-  const sourceY = Math.min(image.height - 1, Math.floor(((Math.min(outY, outHeight - 1) + 0.5) * image.height) / outHeight));
-  const offset = (sourceY * image.width + sourceX) * 4;
-  return blendOver(
-    { r: image.pixels[offset]!, g: image.pixels[offset + 1]!, b: image.pixels[offset + 2]!, a: image.pixels[offset + 3]! },
-    background,
-  );
+function averagePixel(image: DecodedImage, outX: number, outY: number, outWidth: number, outHeight: number, background: Rgba): Rgba {
+  const clampedY = Math.min(outY, outHeight - 1);
+  const startX = Math.max(0, Math.floor((outX * image.width) / outWidth));
+  const endX = Math.min(image.width, Math.max(startX + 1, Math.ceil(((outX + 1) * image.width) / outWidth)));
+  const startY = Math.max(0, Math.floor((clampedY * image.height) / outHeight));
+  const endY = Math.min(image.height, Math.max(startY + 1, Math.ceil(((clampedY + 1) * image.height) / outHeight)));
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let count = 0;
+  for (let sourceY = startY; sourceY < endY; sourceY += 1) {
+    for (let sourceX = startX; sourceX < endX; sourceX += 1) {
+      const offset = (sourceY * image.width + sourceX) * 4;
+      const alpha = image.pixels[offset + 3]! / 255;
+      r += image.pixels[offset]! * alpha + background.r * (1 - alpha);
+      g += image.pixels[offset + 1]! * alpha + background.g * (1 - alpha);
+      b += image.pixels[offset + 2]! * alpha + background.b * (1 - alpha);
+      count += 1;
+    }
+  }
+  return {
+    r: Math.round(r / count),
+    g: Math.round(g / count),
+    b: Math.round(b / count),
+    a: 255,
+  };
+}
+
+export function scaleImageToRgba(image: DecodedImage, width: number, height: number, background = "#000000"): Uint8Array {
+  const outWidth = Math.max(1, Math.floor(width));
+  const outHeight = Math.max(1, Math.floor(height));
+  const bg = parseHexColor(background) ?? { r: 0, g: 0, b: 0, a: 255 };
+  const pixels = new Uint8Array(outWidth * outHeight * 4);
+  for (let y = 0; y < outHeight; y += 1) {
+    for (let x = 0; x < outWidth; x += 1) {
+      const color = averagePixel(image, x, y, outWidth, outHeight, bg);
+      const offset = (y * outWidth + x) * 4;
+      pixels[offset] = color.r;
+      pixels[offset + 1] = color.g;
+      pixels[offset + 2] = color.b;
+      pixels[offset + 3] = 255;
+    }
+  }
+  return pixels;
 }
 
 function nativeBuffer(
@@ -821,7 +875,7 @@ function nativeBuffer(
   const pixels = new Uint8Array(target.cols * pixelRows * 4);
   for (let y = 0; y < pixelRows; y += 1) {
     for (let x = 0; x < target.cols; x += 1) {
-      const color = samplePixel(image, x, y, target.cols, target.pixelRows, background);
+      const color = averagePixel(image, x, y, target.cols, target.pixelRows, background);
       const offset = (y * target.cols + x) * 4;
       pixels[offset] = color.r;
       pixels[offset + 1] = color.g;

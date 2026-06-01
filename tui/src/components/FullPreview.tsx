@@ -8,6 +8,7 @@ import {
 } from "../image-preview";
 import { entryAccent, previewMetaTemplateValues, previewModel, previewWindow, truncateText } from "../presentation";
 import { visibleFullPreviewLineCapacity } from "../state";
+import { selectNativeImageProtocol, type TerminalImageManagerLike, type TerminalImageState } from "../terminal-image";
 import type { ContentAlign, VerticalAlign } from "../ui-config";
 import {
   formatTemplate,
@@ -29,6 +30,8 @@ export function FullPreview(props: {
   width: number;
   offset: number;
   imageCapabilities?: Partial<ImageProtocolCapabilities>;
+  imageTerminal?: TerminalImageState;
+  imageManager?: TerminalImageManagerLike;
   onScroll: (direction: -1 | 1) => void;
 }) {
   const style = () => surface(props.config, "fullPreview");
@@ -47,7 +50,7 @@ export function FullPreview(props: {
     mode: layout().fullPreviewImageMode,
     labels: labels(),
     blockGlyph: layout().fullPreviewImageBlockGlyph,
-    capabilities: props.imageCapabilities,
+    capabilities: props.imageTerminal?.capabilities ?? props.imageCapabilities,
   }));
   createEffect(() => {
     const request = blockPreviewRequest();
@@ -100,6 +103,19 @@ export function FullPreview(props: {
     const renderedRows = preview.kind === "rendered" ? preview.native.cellRows : 0;
     return renderedRows + imageNoticeSpacingRows() + (imageNoticeText() ? 1 : 0) + (imageFallbackVisible() ? 1 : 0);
   };
+  const nativeImageActive = () => {
+    if (!props.imageManager || props.entry?.kind !== "image" || blockPreview().kind !== "rendered") return false;
+    const terminal = props.imageTerminal;
+    const resolution = terminal?.resolution ?? null;
+    return Boolean(
+      terminal &&
+        resolution &&
+        selectNativeImageProtocol(layout().fullPreviewImageMode, layout().fullPreviewImageRenderer, terminal.capabilities, resolution),
+    );
+  };
+  createEffect(() => {
+    if (!nativeImageActive()) props.imageManager?.clear();
+  });
   const metadataRows = () => (layout().showFullPreviewMetadata && props.entry ? layout().fullPreviewMetaHeight : 0);
   const visibleRows = () => visibleFullPreviewLineCapacity(props.rows, layout().fullPreviewLineSpacing, layout().fullPreviewScrollInsetRows, metadataRows() + imagePreviewRows());
   const visible = () => previewWindow(lines(), props.offset, visibleRows());
@@ -180,9 +196,14 @@ export function FullPreview(props: {
           <ImagePreviewRows
             preview={blockPreview()}
             renderer={layout().fullPreviewImageRenderer}
+            mode={layout().fullPreviewImageMode}
             blockGlyph={layout().fullPreviewImageBlockGlyph}
             align={layout().fullPreviewImageAlign}
             width={textWidth()}
+            background={imagePreviewBackground(props.config, style().bg)}
+            entry={props.entry}
+            terminal={props.imageTerminal}
+            imageManager={props.imageManager}
           />
         </Show>
         <Show when={imageNoticeSpacingRows() > 0}>

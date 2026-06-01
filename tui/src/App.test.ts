@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  copyOrPasteEntry,
   estimatedImagePreviewRows,
   fullPreviewReservedRows,
   imageProtocolCapabilities,
+  runtimeKeysForBinding,
   shutdownTui,
   terminalExitResetSequence,
   writeTerminalExitReset,
@@ -27,30 +29,103 @@ const imageEntry: Entry = {
 };
 
 describe("App helpers", () => {
-  test("maps OpenTUI terminal capabilities into image protocol support", () => {
-    expect(
-      imageProtocolCapabilities({
-        kitty_keyboard: true,
-        kitty_graphics: true,
-        rgb: true,
-        ansi256: true,
-        unicode: "unicode",
-        sgr_pixels: false,
-        color_scheme_updates: false,
-        explicit_width: true,
-        scaled_text: false,
-        sixel: false,
-        focus_tracking: true,
-        sync: true,
-        bracketed_paste: true,
-        hyperlinks: true,
-        osc52: true,
-        notifications: false,
-        explicit_cursor_positioning: true,
-        in_tmux: false,
-        terminal: { name: "kitty", version: "0.40.0", from_xtversion: true },
+  test("expands Enter bindings for OpenTUI return key events", () => {
+    expect(runtimeKeysForBinding(["enter"])).toEqual(["enter", "return"]);
+    expect(runtimeKeysForBinding(["return"])).toEqual(["enter", "return"]);
+    expect(runtimeKeysForBinding(["ctrl+return"])).toEqual(["ctrl+enter", "ctrl+return"]);
+    expect(runtimeKeysForBinding(["enter", "return"])).toEqual(["enter", "return"]);
+  });
+
+  test("uses copy-only when paste is requested without a target window", async () => {
+    const calls: string[] = [];
+    const config = resolveTuiConfig();
+
+    const result = await copyOrPasteEntry(4, {
+      paste: true,
+      labels: config.labels,
+      rpc: {
+        copyEntry: async (id) => {
+          calls.push(`copy:${id}`);
+          return { copied: true };
+        },
+        pasteEntry: async (id) => {
+          calls.push(`paste:${id}`);
+          return { pasted: true };
+        },
+      },
+    });
+
+    expect(result).toBe("copied");
+    expect(calls).toEqual(["copy:4"]);
+  });
+
+  test("falls back to copy when Hyprland paste-back fails", async () => {
+    const calls: string[] = [];
+    const config = resolveTuiConfig();
+
+    const result = await copyOrPasteEntry(5, {
+      paste: true,
+      targetWindow: "0xabc",
+      labels: config.labels,
+      rpc: {
+        copyEntry: async (id) => {
+          calls.push(`copy:${id}`);
+          return { copied: true };
+        },
+        pasteEntry: async (id) => {
+          calls.push(`paste:${id}`);
+          throw new Error(config.labels.errorPasteBackFailed);
+        },
+      },
+    });
+
+    expect(result).toBe("copied");
+    expect(calls).toEqual(["paste:5", "copy:5"]);
+  });
+
+  test("does not hide clipboard write failures behind paste fallback", async () => {
+    const config = resolveTuiConfig();
+
+    await expect(
+      copyOrPasteEntry(6, {
+        paste: true,
+        targetWindow: "0xabc",
+        labels: config.labels,
+        rpc: {
+          copyEntry: async () => ({ copied: true }),
+          pasteEntry: async () => {
+            throw new Error(config.labels.errorClipboardWriteFailed);
+          },
+        },
       }),
-    ).toEqual({ kittyGraphics: true, sixel: false, nativeRenderer: false });
+    ).rejects.toThrow(config.labels.errorClipboardWriteFailed);
+  });
+
+  test("maps OpenTUI terminal capabilities into image protocol support", () => {
+    const capabilities = {
+      kitty_keyboard: true,
+      kitty_graphics: true,
+      rgb: true,
+      ansi256: true,
+      unicode: "unicode",
+      sgr_pixels: false,
+      color_scheme_updates: false,
+      explicit_width: true,
+      scaled_text: false,
+      sixel: false,
+      focus_tracking: true,
+      sync: true,
+      bracketed_paste: true,
+      hyperlinks: true,
+      osc52: true,
+      notifications: false,
+      explicit_cursor_positioning: true,
+      in_tmux: false,
+      terminal: { name: "kitty", version: "0.40.0", from_xtversion: true },
+    } as const;
+
+    expect(imageProtocolCapabilities(capabilities)).toEqual({ kittyGraphics: true, sixel: false, nativeRenderer: false });
+    expect(imageProtocolCapabilities(capabilities, { width: 1200, height: 800 })).toEqual({ kittyGraphics: true, sixel: false, nativeRenderer: true });
   });
 
   test("reserves full preview image notice spacing for scroll capacity", () => {

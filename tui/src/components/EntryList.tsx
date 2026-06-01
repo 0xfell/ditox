@@ -148,7 +148,7 @@ function EntryRow(props: {
     return maxWidth > 0 ? Math.min(availablePreviewWidth(), maxWidth) : availablePreviewWidth();
   };
   const previewSegments = () => entryPreviewSegments(props.entry, previewWidth(), highlightQuery(), props.config.labels);
-  const previewPadding = () => alignmentPadding(layout().rowPreviewAlign, previewWidth(), previewSegments().reduce((length, segment) => length + segment.text.length, 0));
+  const previewPadding = () => alignmentPadding(layout().rowPreviewAlign, previewWidth(), previewSegments().reduce((length, segment) => length + (segment?.text?.length ?? 0), 0));
   return (
     <box height={1} width="100%" flexDirection="row" justifyContent={justifyContent(layout().rowContentAlign)} backgroundColor={bg()} onMouseDown={props.onMouseDown}>
       <text style={textStyle(rowStyle(), listContentColor(props.config, rowStyle(), props.entry, "preview"))}>

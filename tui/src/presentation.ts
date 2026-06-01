@@ -308,7 +308,8 @@ export function fitRowMeta(value: string, width: number, labels: Partial<TextFor
 }
 
 export function entryPreview(entry: Entry, width: number, labels: Partial<Pick<TuiLabels, "emptyEntryPreview"> & TextFormatLabelSet> = {}): string {
-  return truncateText(entry.preview || entry.content || labels.emptyEntryPreview || "(empty)", width, labels);
+  const raw = entry.preview ?? entry.content ?? labels.emptyEntryPreview ?? "(empty)";
+  return truncateText(typeof raw === "string" ? raw : String(raw), width, labels);
 }
 
 export function entryPreviewSegments(
@@ -319,12 +320,12 @@ export function entryPreviewSegments(
 ): TextSegment[] {
   const preview = entryPreview(entry, width, labels);
   const needle = normalizeMatchText(query, labels).trim();
-  if (preview.length === 0 || needle.length === 0) return [{ text: preview, match: false }];
+  if (preview.length === 0 || needle.length === 0) return [{ text: String(preview ?? ""), match: false }];
 
   const literalSegments = literalPreviewSegments(preview, needle);
   if (literalSegments.some((segment) => segment.match)) return literalSegments;
 
-  return fuzzyPreviewSegments(preview, needle) ?? [{ text: preview, match: false }];
+  return fuzzyPreviewSegments(preview, needle) ?? [{ text: String(preview ?? ""), match: false }];
 }
 
 function literalPreviewSegments(preview: string, needle: string): TextSegment[] {
@@ -361,18 +362,19 @@ function fuzzyPreviewSegments(preview: string, needle: string): TextSegment[] | 
 }
 
 function previewSegmentsFromRanges(preview: string, ranges: Array<[number, number]>): TextSegment[] {
-  if (ranges.length === 0) return [{ text: preview, match: false }];
+  const safePreview = String(preview ?? "");
+  if (ranges.length === 0) return [{ text: safePreview, match: false }];
   const segments: TextSegment[] = [];
   let cursor = 0;
   for (const [start, end] of ranges) {
-    if (start > cursor) segments.push({ text: preview.slice(cursor, start), match: false });
+    if (start > cursor) segments.push({ text: safePreview.slice(cursor, start), match: false });
     const previous = segments.at(-1);
-    const text = preview.slice(start, end);
-    if (previous?.match) previous.text += text;
+    const text = safePreview.slice(start, end);
+    if (previous?.match) previous.text = String(previous.text ?? "") + text;
     else segments.push({ text, match: true });
     cursor = end;
   }
-  if (cursor < preview.length) segments.push({ text: preview.slice(cursor), match: false });
+  if (cursor < safePreview.length) segments.push({ text: safePreview.slice(cursor), match: false });
   return segments;
 }
 
@@ -687,7 +689,7 @@ export function truncateText(value: string, width: number, labels: Partial<TextF
   const text = { ...defaultTextFormatLabels, ...labels };
   const whitespaceReplacement = text.textWhitespaceReplacement.length > 0 ? text.textWhitespaceReplacement : defaultTextFormatLabels.textWhitespaceReplacement;
   const marker = text.textTruncationMarker.length > 0 ? text.textTruncationMarker : defaultTextFormatLabels.textTruncationMarker;
-  const clean = value.replace(/\s+/g, whitespaceReplacement);
+  const clean = String(value ?? "").replace(/\s+/g, whitespaceReplacement);
   if (clean.length <= width) return clean;
   if (width <= marker.length) return marker.slice(0, width).padEnd(width, marker[0] ?? ".");
   return `${clean.slice(0, width - marker.length)}${marker}`;
@@ -696,5 +698,5 @@ export function truncateText(value: string, width: number, labels: Partial<TextF
 function normalizeMatchText(value: string, labels: Partial<TextFormatLabelSet>): string {
   const text = { ...defaultTextFormatLabels, ...labels };
   const whitespaceReplacement = text.textWhitespaceReplacement.length > 0 ? text.textWhitespaceReplacement : defaultTextFormatLabels.textWhitespaceReplacement;
-  return value.replace(/\s+/g, whitespaceReplacement);
+  return String(value ?? "").replace(/\s+/g, whitespaceReplacement);
 }

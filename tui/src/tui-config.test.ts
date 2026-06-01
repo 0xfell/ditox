@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { helpRows, loadTuiConfig, resolveTuiConfig, statusHint, surface, templateSegments } from "./tui-config";
+import { helpRows, loadTuiConfig, normalizeKey, resolveTuiConfig, statusHint, surface, templateSegments } from "./tui-config";
 import { themeNames, themes } from "./theme";
 import { terminalCursorStyleOptions, tuiRenderOptions } from "./App";
 
@@ -25,6 +25,12 @@ const defaultTerminalRendererOptions = {
 };
 
 describe("tui config", () => {
+  test("normalizes OpenTUI return key events to logical Enter", () => {
+    expect(normalizeKey("return")).toBe("enter");
+    expect(normalizeKey("Return")).toBe("enter");
+    expect(normalizeKey("ctrl+return")).toBe("ctrl+enter");
+  });
+
   test("uses safe defaults without a config file", () => {
     const config = resolveTuiConfig({}, { HOME: "/tmp/home" }, null);
     expect(config.theme.name).toBe("ditoxDark");
@@ -43,10 +49,10 @@ describe("tui config", () => {
     expect(config.layout.historyLimit).toBe(100);
     expect(config.layout.imagePreviewMode).toBe("blocks");
     expect(config.layout.fullPreviewImageMode).toBe("blocks");
-    expect(config.layout.imagePreviewMaxWidth).toBe(48);
-    expect(config.layout.imagePreviewMaxRows).toBe(16);
-    expect(config.layout.fullPreviewImageMaxWidth).toBe(48);
-    expect(config.layout.fullPreviewImageMaxRows).toBe(16);
+    expect(config.layout.imagePreviewMaxWidth).toBe(80);
+    expect(config.layout.imagePreviewMaxRows).toBe(24);
+    expect(config.layout.fullPreviewImageMaxWidth).toBe(120);
+    expect(config.layout.fullPreviewImageMaxRows).toBe(40);
     expect(config.layout.imagePreviewRenderer).toBe("auto");
     expect(config.layout.fullPreviewImageRenderer).toBe("auto");
     expect(config.layout.imagePreviewAlign).toBe("left");
@@ -74,8 +80,8 @@ describe("tui config", () => {
     expect(config.layout.fullPreviewContentAlign).toBe("left");
     expect(config.layout.previewBodyVerticalAlign).toBe("top");
     expect(config.layout.fullPreviewBodyVerticalAlign).toBe("top");
-    expect(config.layout.imagePreviewRowInset).toBe(6);
-    expect(config.layout.fullPreviewImageRowInset).toBe(6);
+    expect(config.layout.imagePreviewRowInset).toBe(3);
+    expect(config.layout.fullPreviewImageRowInset).toBe(3);
     expect(config.layout.fullPreviewScrollInsetRows).toBe(2);
     expect(config.layout.previewLineNumberWidth).toBe(3);
     expect(config.layout.previewGutterWidth).toBe(4);
@@ -386,6 +392,7 @@ describe("tui config", () => {
       "pinnedView",
       "paste",
       "copySet",
+      "output",
       "markSingle",
       "rangeSelect",
       "searchFilter",
@@ -393,6 +400,7 @@ describe("tui config", () => {
       "pinDelete",
       "clearHistory",
       "clearAllIncludingPinned",
+      "quit",
     ]);
     expect(config.startup).toEqual({ filter: "all", pinnedOnly: false, query: "" });
     expect(config.behavior).toEqual({
@@ -464,7 +472,7 @@ describe("tui config", () => {
     expect(config.labels.errorProcessTemplate).toBe("{message}");
     expect(config.labels.errorRpcTemplate).toBe("{message}");
     expect(config.labels.keyAlternativeSeparator).toBe(" / ");
-    expect(config.labels.keyGroupSeparator).toBe(" ");
+    expect(config.labels.keyGroupSeparator).toBe("  ");
     expect(config.labels.statusHintSeparator).toBe("  ");
     expect(config.labels.statusHintTemplate).toBe(
       "{pasteKeys} {paste}{separator}{copyKeys} {copy}{separator}{previewKeys} {preview}{separator}{searchKeys} {search}{separator}{helpKeys} {help}",
@@ -501,8 +509,8 @@ describe("tui config", () => {
     expect(config.labels.statusClearedTemplate).toBe("{prefix} {count}; {pinned}");
     expect(config.labels.statusEntriesTemplate).toBe("{count} {entries}");
     expect(config.labels.helpSearchCopyMatches).toBe("copy matched search results");
-    expect(config.labels.helpMarkSingle).toBe("mark / select / clear marks");
-    expect(config.labels.helpOutput).toBe("output current / selected set");
+    expect(config.labels.helpMarkSingle).toBe("mark / isolate / clear");
+    expect(config.labels.helpOutput).toBe("print selected");
     expect(config.labels.helpPreviewNavigation).toBe("scroll preview");
     expect(config.labels.helpConfirmChoice).toBe("confirm / cancel");
     expect(config.labels.sizeKibUnit).toBe("KiB");
@@ -2240,17 +2248,17 @@ describe("tui config", () => {
       },
     });
 
-    expect(statusHint(config)).toBe("tab:cycle|shift+tab:saved|d / backspace:remove|o:print|q ctrl+c:exit");
+    expect(statusHint(config)).toBe("tab:cycle|shift+tab:saved|d / bksp:remove|o:print|q  ctrl+c:exit");
     expect(statusHint(config, "search")).toBe("ret:go|bs:erase|ctrl+s:yank|esc:stop");
-    expect(statusHint(config, "preview")).toBe("esc:return|k j u d:move");
+    expect(statusHint(config, "preview")).toBe("esc:return|k  j  u  d:move");
     expect(statusHint(config, "confirm")).toBe("yes:commit|no:abort");
     expect(helpRows(config)).toEqual([
-      { keys: "q ctrl+c", action: "leave picker" },
-      { keys: "k j u d", action: "move preview" },
+      { keys: "q  ctrl+c", action: "leave picker" },
+      { keys: "k  j  u  d", action: "move preview" },
       { keys: "esc", action: "close preview" },
       { keys: "o", action: "print selection" },
-      { keys: "bs ret esc", action: "edit search" },
-      { keys: "yes no", action: "answer dialog" },
+      { keys: "bs  ret  esc", action: "edit search" },
+      { keys: "yes  no", action: "answer dialog" },
     ]);
   });
 
@@ -2776,7 +2784,7 @@ describe("tui config", () => {
     expect(helpRows(config).some((row) => row.keys.includes("tab"))).toBe(true);
     expect(helpRows(config).some((row) => row.keys.includes("ctrl+g") && row.action.includes("matched"))).toBe(true);
     expect(helpRows(config).some((row) => row.keys === "UP | k + DN | j")).toBe(true);
-    expect(helpRows(config).some((row) => row.action.includes("everything"))).toBe(true);
+    expect(helpRows(config).some((row) => row.action.includes("pinned"))).toBe(true);
   });
 
   test("splits configurable text templates into literal and colored placeholder segments", () => {
