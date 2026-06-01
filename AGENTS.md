@@ -1,281 +1,192 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for AI coding agents (and humans) working in this repository.
 
-## Task & Roadmap Workflow
+> This file is the source of truth for the project's architecture. Keep it in
+> sync with the code. The migration blueprint that bootstrapped the rewrite
+> lives at `docs/notes/migration-fresh-start.md`; do not treat its "planned"
+> sections as current behavior.
 
-Documentation lives in `/docs`. After completing work, update the relevant files:
+## What Ditox Is
 
-### Structure
+Ditox is a **terminal-first clipboard manager** for Linux/Wayland (first target:
+Hyprland). It is a fresh rewrite — there is **no desktop GUI, tray, or
+floating window**, and there is no Rust code. The stack is:
+
+- **Backend — Zig** (`backend/`): owns clipboard access, SQLite storage, image
+  blobs, the watcher daemon, config, paste-back, and repair. Builds two
+  binaries: `ditox` (CLI + launcher) and `ditoxd` (daemon + JSON-RPC server).
+- **Frontend — Bun + TypeScript + OpenTUI/Solid** (`tui/`): owns rendering and
+  keyboard workflow only. Bundled to `tui/dist/index.js`.
+- **IPC**: JSON-RPC 2.0 over Content-Length framed stdio. The TUI never opens
+  the database directly.
 
 ```text
-docs/
-├── ROADMAP.md              # Index/summary - update counts and links
-├── tasks/
-│   ├── TEMPLATE.md         # Copy this for new tasks
-│   ├── completed/          # Done tasks (move here when finished)
-│   ├── in-progress/        # Currently working on
-│   └── planned/            # Backlog
-└── notes/                  # Architecture decisions, testing discoveries
+┌──────────────────────────────┐     JSON-RPC 2.0 (Content-Length stdio)
+│  tui/  (Bun + OpenTUI/Solid)  │◀───────────────┐
+│  rendering + keymap only      │                │
+└──────────────────────────────┘                │
+                                      ┌──────────┴───────────┐
+  ditox / ditoxd  (Zig)              │  backend/  (Zig)      │
+  CLI · launcher · daemon  ─────────▶│  storage · clipboard  │
+                                      │  watcher · rpc · cfg  │
+                                      └──────────┬───────────┘
+                                                 │
+                                     SQLite + content-addressed image blobs
+                                     ~/.local/share/ditox/
 ```
 
-### When Starting a Task
+## Build, Test, Run
 
-1. Create task file from `TEMPLATE.md` or move existing from `planned/` to `in-progress/`
-2. Update `docs/ROADMAP.md` status table
-
-### When Completing a Task
-
-1. **Verify tests pass** (`cargo test`) before marking complete
-   - If tests fail due to intentional behavior changes, update the tests
-   - If tests no longer make sense after refactoring, remove or rewrite them
-2. **For new features**: Decide if tests are needed based on:
-   - Complexity (simple CLI flag? probably no. New DB logic? yes)
-   - Risk of regression
-   - If unsure, ask the user
-3. Move task file from `in-progress/` to `completed/`
-4. Update task file: set status to `completed`, add completion date, fill work log
-5. Update `docs/ROADMAP.md`: move to "Recently Completed", update counts
-
-### When Discovering Issues
-
-Add to `docs/notes/` or the relevant task's work log.
-
-### Task File Naming
-
-`NNN-short-description.md` (e.g., `003-image-paste.md`)
-
-## Build & Test Commands
+The repo root has a `package.json` that orchestrates both halves; most commands
+shell out through `nix develop` so the Zig/Bun/SQLite toolchain is pinned.
 
 ```bash
-# Build
-cargo build                              # Debug build (all crates)
-cargo build --release                    # Optimized release build
-cargo build -p ditox-tui                 # Build TUI only
-cargo build -p ditox-gui                 # Build GUI only
+# Dev shell (Zig 0.16, Bun, SQLite, wl-clipboard, hyprland, bun2nix)
+nix develop
 
-# Test
-cargo test                               # Run all tests
-cargo test --test cli_tests              # Run specific test file
-cargo test test_name                     # Run single test by name
-cargo test -p ditox-core                 # Test core library only
+# Build both halves (TUI bundle, then Zig binaries into ./zig-out)
+bun run build           # = build:tui (bun build.ts) + build:backend (zig build)
+
+# Full check: backend tests, builds, CLI smoke, TUI typecheck + tests
+bun run check
+
+# Targeted
+bun run test:backend    # nix develop -c zig build test
+bun run test:cli        # bun test tests/
+bun run --cwd tui test  # TUI unit + golden tests
+bun run --cwd tui typecheck
 
 # Run
-cargo run -p ditox-tui                   # TUI mode
-cargo run -p ditox-tui -- watch          # Daemon mode (Linux)
-cargo run -p ditox-tui -- list --json    # CLI commands
-cargo run -p ditox-gui                   # Cross-platform GUI (Linux/Windows)
-cargo run -p ditox-gui -- --toggle       # Summon the running GUI from a shell
-
-# Development with Nix (Linux only)
-nix develop                              # Enter dev shell
-nix build                                # Build via Nix
+./zig-out/bin/ditox add "hello"     # CLI
+./zig-out/bin/ditox list --json
+./zig-out/bin/ditox                  # launch the TUI
+./zig-out/bin/ditoxd daemon          # clipboard watcher daemon
 ```
 
-## Architecture
+### Nix / packaging
 
-Ditox is a cross-platform clipboard manager (Linux/Wayland + Windows) with a workspace structure:
+```bash
+nix build                 # hermetic build of the whole package (see flake.nix)
+nix run                   # build + run ditox
+```
+
+The Nix build is **fully hermetic** and does not depend on a pre-existing
+`tui/node_modules` or `tui/dist`:
+
+1. `bun2nix` turns `tui/bun.lock` into `tui/bun.nix` (a set of content-addressed
+   fetches). The flake consumes it via `bun2nix.fetchBunDeps`.
+2. The build installs `node_modules` into `tui/` from that offline cache, runs
+   `bun run build` to produce `tui/dist`, then `zig build` to produce the
+   binaries and install the TUI assets under `share/ditox/tui/`.
+3. The matching `@opentui` modules (including the native `libopentui.so`) are
+   vendored into `share/ditox/tui/node_modules/@opentui` so the installed CLI's
+   `bun --no-install --cwd share/ditox/tui ./dist/index.js` resolves its FFI
+   lib from the store, never the user's bun cache.
+
+**If you change TUI dependencies**, regenerate the lock-to-nix file:
+
+```bash
+cd tui && bun install        # update bun.lock
+cd tui && bun2nix -o bun.nix # regenerate bun.nix (bun2nix is in the dev shell)
+```
+
+Commit both `tui/bun.lock` and `tui/bun.nix`.
+
+## Workspace Layout
 
 ```text
-┌─────────────────────────────────────────────────────────────────┐
-│                         Frontends                                │
-├──────────────────┬──────────────────┬──────────────────────────┤
-│  ditox-tui       │  ditox-gui       │  ditox-tui (CLI)         │
-│  (Linux TUI)     │  (Linux + Win)   │  (both platforms)        │
-│  Ratatui+Crossterm  Iced+tray-icon  │  Clap commands           │
-└────────┬─────────┴────────┬─────────┴────────┬─────────────────┘
-         │                  │                  │
-         └──────────────────┼──────────────────┘
-                            │
-              ┌─────────────▼─────────────┐
-              │       ditox-core          │
-              │  - db.rs (SQLite)         │
-              │  - entry.rs (model)       │
-              │  - clipboard.rs (platform)│
-              │  - watcher.rs (daemon)    │
-              │  - config.rs              │
-              └─────────────┬─────────────┘
-                            │
-              ┌─────────────▼─────────────┐
-              │  Platform-specific data:  │
-              │  Linux: ~/.local/share/   │
-              │  Windows: %APPDATA%       │
-              └───────────────────────────┘
+backend/            Zig backend (ditox + ditoxd)
+  build.zig.zon     Zig package manifest (no external deps; links system sqlite3)
+  src/*.zig         see module map below
+build.zig           Root build: builds both binaries + installs TUI assets
+tui/                Bun + OpenTUI/Solid frontend
+  build.ts          Bun.build bundler entry (-> dist/index.js)
+  bun.lock          Bun lockfile (source of truth for deps)
+  bun.nix           Generated by bun2nix from bun.lock (committed, hermetic Nix)
+  src/              TUI source (see module map below)
+contracts/          JSON-RPC schema + fixtures (rpc.schema.json, *.rpc)
+tests/              CLI smoke tests (bun test, via assert-style spawning)
+docs/               ROADMAP, TODO, and design notes
+flake.nix           Hermetic package, devShell, apps, homeManagerModules
+.github/workflows/  CI: dual-arch nix build + push to the 0xfell cachix cache
 ```
 
-**DB access:** all frontends talk to SQLite directly -- no inter-process coordination for clipboard data.
-
-**ditox-gui process model (post-013):** each `ditox-gui` invocation is a **one-shot launcher** -- opens a 420x520 window, exits on copy / Esc / unfocus. The legacy IPC layer (Unix socket on Linux) was removed. The CLI flags `--toggle / --show / --hide / --quit` remain but are no-ops in current code.
-
-> **Phase 4 of the v1.0 master plan reverts this** to a long-running daemon with full IPC restored, layer-shell window on Linux, and per-clip global hotkeys. See `docs/notes/master-plan-v1.md` and `docs/notes/ui-replication.md` for the design we're returning to.
-
-## Workspace Crates
-
-| Crate | Binary | Purpose |
-|-------|--------|---------|
-| `ditox-core` | (library) | Shared business logic, DB, clipboard abstraction |
-| `ditox-tui` | `ditox` | Terminal UI + CLI + watcher daemon |
-| `ditox-gui` | `ditox-gui` | Cross-platform GUI (Linux + Windows). Tray, CLI flags, IPC, optional global hotkey on Windows |
-
-## Key Modules (ditox-core)
+### Backend modules (`backend/src/`)
 
 | Module | Purpose |
 |--------|---------|
-| `db.rs` | SQLite CRUD with rusqlite, collections support |
-| `entry.rs` | Entry model with `sanitized_content()` for safe display |
-| `clipboard.rs` | Platform abstraction: `wl-clipboard-rs` (Linux) / `arboard` (Windows) |
-| `watcher.rs` | Clipboard polling daemon, SHA256 deduplication |
-| `collection.rs` | Named collections for organizing entries |
-| `config.rs` | TOML config loading |
-| `app.rs` | Shared `TabFilter` enum (All, Text, Images, Favorites, Today) used by both TUI and GUI |
+| `cli.zig` | `ditox` CLI: arg parsing, Clipse-style aliases, TUI launch/paste-back |
+| `daemon.zig` | `ditoxd`: watcher daemon + JSON-RPC `serve --stdio` |
+| `rpc.zig` | JSON-RPC 2.0 envelope, method routing, Content-Length framing |
+| `storage.zig` | SQLite schema/migrations, entry CRUD, FTS search, image blobs |
+| `clipboard.zig` | Wayland clipboard read/write (wl-clipboard) |
+| `config.zig` | TOML/JSON config loading + Clipse-compatible aliases |
+| `models.zig` | Entry / RPC data model |
+| `app.zig` | Shared app wiring |
+| `util.zig` | Helpers |
+| `root.zig` | Library module root (`ditox_core`) |
 
-## GUI-Specific Details (ditox-gui)
+### Frontend modules (`tui/src/`)
 
-The GUI uses iced (wgpu + tiny-skia) and shares one codebase across Linux and Windows. Platform-specific behaviour is isolated behind `#[cfg]` gates rather than split crates.
+| Path | Purpose |
+|------|---------|
+| `index.tsx` | TUI entry point |
+| `App.tsx` | Root component / app state |
+| `rpc.ts` | JSON-RPC client to `ditoxd` |
+| `state.ts` | UI state machine (selection, search, filters, multi-select) |
+| `presentation.ts` | Row/preview formatting |
+| `theme.ts`, `ui-config.ts`, `tui-config.ts` | Theming + file-backed config |
+| `image-preview.ts`, `terminal-image.ts` | Image preview (block / protocol) |
+| `components/` | Shell, EntryList, PreviewPane, HeaderBar, StatusLine, Overlay, … |
+| `generated/rpc-schema.d.ts` | Types generated from `contracts/rpc.schema.json` (committed) |
+| `__goldens__/` | Golden TUI text frames (refresh with `DITOX_UPDATE_GOLDENS=1`) |
 
-**Shared (cross-platform) dependencies:**
+## Data Locations (Linux)
 
-- `iced` 0.14 with `image` + `tokio` features
-- `iced_fonts` 0.3 (Bootstrap Icons)
-- `tray-icon` 0.22 (works on Windows via win32 and on Linux via libappindicator / StatusNotifierItem)
-- `clap` 4 for the `--toggle` / `--show` / `--hide` / `--quit` CLI flags
+- Database: `~/.local/share/ditox/ditox.db`
+- Image blobs: `~/.local/share/ditox/images/` (content-addressed `hash[..2]/hash.ext`)
+- Config: `~/.config/ditox/config.toml` (TOML or JSON; `DITOX_CONFIG` overrides)
+- TUI config: `~/.config/ditox/tui.json` (`DITOX_TUI_CONFIG` overrides)
 
-**Windows-only (`#[cfg(windows)]`):**
-
-- `windows` 0.62 -- Win32 focus recovery (`SetForegroundWindow`, `SetWindowPos`, TOPMOST toggle, Win+D workaround)
-- `auto-launch` 0.6 -- run-on-startup via the `Run` registry key
-- `global-hotkey` 0.7 -- Ctrl+Shift+V
-
-**Linux-only (`#[cfg(unix)]`):**
-
-- `libc` -- flock + getuid
-- `gtk` 0.18 -- pumped on a dedicated thread so tray-icon's Linux backend can talk to libappindicator (winit does not run GTK)
-
-**Window management:**
-
-- Windows: borderless, custom draggable title bar & resize zones; Win32 APIs work around Win+D / foreground-lock issues.
-- Linux: native compositor decorations (`settings.decorations = true`); iced + the compositor handle focus, stacking and dragging.
-- Window position/size persisted to `window_state.json` on both.
-
-**Summoning the GUI:**
-
-- Windows: `global-hotkey` registers Ctrl+Shift+V.
-- Linux (current): compositor keybind runs `ditox-gui` per press; each invocation is a fresh process (one-shot mode).
-- Linux (Phase 4 target): compositor keybind runs `ditox-gui --toggle`; long-running daemon receives the IPC command and shows the layer-shell window. See `docs/notes/linux-gui-architecture.md` for the design and `docs/notes/master-plan-v1.md` Phase 4 for the reintroduction plan.
-
-**Run-at-login:**
-
-- Windows: `HKCU\...\Run` registry key (via `auto-launch`).
-- Linux: `~/.config/autostart/ditox-gui.desktop` (`Exec=ditox-gui --hide`).
-- Toggled from the tray "Run at login" checkbox on both.
-
-**Architecture patterns:**
-
-- `OnceLock` statics for clipboard watcher and config (iced 0.14 requires `Fn` boot closure; `Database` isn't `Sync`). **Note:** Phase 0 task `017` introduces a `DbActor` that replaces the mutex pattern with a typed `mpsc` channel -- the `OnceLock<Watcher>` pattern stays.
-- Image thumbnail cache (`HashMap<String, Handle>`) to avoid reloading on every render.
-- Delayed focus task on Windows to avoid capturing "V" from Ctrl+Shift+V.
-
-**Build:**
-
-- `build.rs` generates `ditox.ico` from `ditox.png` always, and on Windows it additionally embeds the icon + version info via `winres`.
-
-## TUI Module Structure (ditox-tui)
-
-The TUI is organized into modular UI components under `src/ui/`:
-
-| Module | Purpose |
-|--------|---------|
-| `mod.rs` | Main TUI app loop, event handling, state management |
-| `list.rs` | Entry list rendering with selection |
-| `preview.rs` | Image preview using ratatui-image protocols |
-| `search.rs` | Fuzzy search input |
-| `tabs.rs` | Tab bar (All, Text, Images, Favorites, Today) |
-| `theme.rs` | Color palette and styling |
-| `help.rs` | Help overlay with keybindings |
-| `confirm.rs` | Confirmation dialog for destructive actions |
-
-## Platform-Specific Code
-
-Uses conditional compilation (`#[cfg(unix)]` / `#[cfg(windows)]`):
-
-- **clipboard.rs**: `wl-clipboard-rs` on Linux, `arboard` on Windows
-- **watcher.rs**: `libc::kill()` on Unix, `sysinfo` on Windows for process checking
-- **GUI app.rs**: Win32 APIs for window management (Windows only)
-
-## Logging
-
-All ditox crates emit structured logs via `tracing`. Initialisation happens in `ditox-core/src/logging.rs::init()`; both `ditox` (TUI/CLI) and `ditox-gui` call it at the top of `main`.
-
-```sh
-# enable debug logs from ditox crates only
-RUST_LOG=ditox=debug,ditox_core=debug,ditox_tui=debug,ditox_gui=debug ditox watch
-
-# trace-level on a specific module
-RUST_LOG=ditox_core::watcher=trace ditox watch
-
-# default (when RUST_LOG unset): info from ditox crates, warn elsewhere
-ditox watch
-```
-
-CLI commands (`list`, `get`, `search`, `count`, `stats`, `status`) write **structured user output** with `println!` -- those are not logs and are not affected by `RUST_LOG`.
+Tests isolate via `XDG_DATA_HOME` / `XDG_CONFIG_HOME` temp dirs.
 
 ## Important Patterns
 
-**Clipboard priority**: Watcher checks images first (PNG, JPEG, etc.), then text. This ensures "Copy image" from browsers captures the image, not the URL.
+- **UI never touches the DB.** All data flows through JSON-RPC to `ditoxd`.
+- **Image-over-text capture priority**: the watcher prefers image formats so
+  "copy image" from a browser stores the image, not the URL.
+- **Deduplication**: entries are SHA-256 hashed; the watcher checks before insert.
+- **Content sanitization**: display/preview text strips control/ANSI sequences.
+- **Image blobs are content-addressed** with atomic writes and a prune queue.
+- **Format names are backend-owned and stable**; the frontend must not invent them.
+- **Machine output is JSON** (`list --json`, RPC); human CLI output is separate.
 
-**Content sanitization**: `entry.rs::sanitized_content()` strips ANSI escapes and control characters before display.
+## Logging
 
-**Deduplication**: All entries are SHA256 hashed. Watcher calls `db.exists_by_hash()` before inserting.
+Backend logs via Zig std logging; control verbosity with env where supported.
+CLI commands that print structured user output (`list`, `get`, …) use stdout and
+are not logs.
 
-**Image handling**: Content-addressed. Images saved to `/images/{hash[..2]}/{hash}.{ext}` (schema v1+). The DB `content` column stores the bare hash; `Entry::image_path()` resolves it to the absolute path. Writes are atomic (`tmp-write -> fsync -> rename -> fsync parent`). Deletes use a persistent `pending_blob_prunes` queue so a crash between row-delete and file-delete is self-healing on the next open. See `docs/notes/image-storage.md` for the full protocol and `ditox repair` for reconciliation.
+## Task & Docs Workflow
 
-## Test Structure
+Docs live in `docs/`:
 
-- `tests/cli_tests.rs` - End-to-end CLI testing via `assert_cmd`
-- `tests/db_tests.rs` - Database operations
-- `tests/entry_tests.rs` - Entry model, hashing, sanitization
-- `tests/clipboard_tests.rs` - Mock-based clipboard priority tests
-
-Tests use `tempfile` for isolated temp directories. Note: CLI tests use `XDG_DATA_HOME` which is Linux-specific.
-
-## Data Locations
-
-**Linux:**
-
-- Database: `~/.local/share/ditox/ditox.db`
-- Images: `~/.local/share/ditox/images/`
-- Config: `~/.config/ditox/config.toml`
-
-**Windows:**
-
-- Database: `%APPDATA%/ditox/ditox.db`
-- Images: `%APPDATA%/ditox/images/`
-- Config: `%APPDATA%/ditox/config.toml`
-
-## Release Process
-
-Distribution channels:
-
-- **GitHub Releases** -- prebuilt tarballs/AppImages/zip for Linux (x86_64 + aarch64) and Windows. Cut automatically by `.github/workflows/release.yml` on `v*.*.*` tag push.
-- **Nix flake** -- `nix run github:0xfell/ditox`. Closures pushed to `cachix.org/ditox` by CI on master and on tag pushes.
-
-Full checklist lives at `docs/RELEASING.md`. Short version:
-
-```sh
-export V=0.3.1
-# bump Cargo.toml, nix/package.nix, ditox-gui/installer/setup.iss
-cargo build --workspace                  # refresh Cargo.lock
-cargo test --workspace --locked
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-nix build .#default
-
-git commit -am "chore(release): v$V"
-git tag -a "v$V" -m "v$V"
-git push origin master "v$V"
+```text
+docs/
+  ROADMAP.md      Index + status
+  TODO.md         Active worklist
+  notes/          Design notes & the migration blueprint
 ```
 
-CI is driven by two workflows:
+When you finish a unit of work: run `bun run check` (or at least the relevant
+`test:*`), update `docs/TODO.md` / `docs/ROADMAP.md`, and add architectural
+findings to `docs/notes/`. Do not let docs describe planned work as if it
+already exists.
 
-- `.github/workflows/ci.yml` -- runs on every push/PR: `fmt --check`, `clippy -D warnings`, `cargo test` (Linux + Windows), `nix build`. Pushes the Nix closure to cachix on master only.
-- `.github/workflows/release.yml` -- runs on tag push. Six parallel build jobs (linux gnu/musl/appimage/arm64/windows/nix), one publish job that aggregates artifacts + `SHA256SUMS` into a GitHub Release. Can also be triggered manually via `workflow_dispatch` for a dry run (no release is cut, artifacts are kept as workflow-run artifacts for 7 days).
+## Release / Distribution
+
+- **Nix flake** — `nix run github:0xfell/ditox`. CI builds x86_64-linux +
+  aarch64-linux and pushes closures to `https://0xfell.cachix.org` so users
+  install prebuilt (see `README.md` → Install).
+- Bump `version` in `flake.nix`; tag `v*` to mark a release. CI runs on tag push.

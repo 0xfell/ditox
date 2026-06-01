@@ -2,7 +2,7 @@
 
 Ditox is a fresh terminal-first clipboard manager.
 
-This rebuild follows the preserved `migration-fresh-start.md` blueprint:
+This rebuild follows the preserved `docs/notes/migration-fresh-start.md` blueprint:
 
 - no desktop GUI, tray, or floating app window
 - Zig backend owns clipboard, storage, paste-back, config, and repair
@@ -10,7 +10,53 @@ This rebuild follows the preserved `migration-fresh-start.md` blueprint:
 - frontend and backend communicate through JSON-RPC 2.0 over Content-Length stdio
 - first target is Linux Wayland on Hyprland
 
-## Quick Start
+## Install (Nix / NixOS)
+
+Ditox ships as a Nix flake with prebuilt closures on a public
+[Cachix](https://cachix.org) cache, so installing does **not** require building
+Zig or bundling the TUI locally. Prebuilt for `x86_64-linux` and `aarch64-linux`.
+
+Trust the binary cache once (otherwise Nix will rebuild from source):
+
+```nix
+# NixOS / nix.conf
+nix.settings = {
+  substituters = [ "https://0xfell.cachix.org" ];
+  trusted-public-keys = [
+    "0xfell.cachix.org-1:9c1Be/MO9FfBo21PPQ6didcE6OG3A5EnrnKP10vCw4c="
+  ];
+};
+```
+
+Or, with the Cachix CLI: `cachix use 0xfell`.
+
+Then run or install:
+
+```sh
+nix run github:0xfell/ditox            # try it without installing
+nix profile install github:0xfell/ditox
+```
+
+### Home Manager
+
+```nix
+{
+  inputs.ditox.url = "github:0xfell/ditox";
+
+  # in your home configuration:
+  imports = [ inputs.ditox.homeManagerModules.default ];
+  programs.ditox = {
+    enable = true;
+    systemd.enable = true;   # run `ditoxd daemon` as a user service
+  };
+}
+```
+
+The flake also advertises the cache via `nixConfig.extra-substituters`, so
+`nix run github:0xfell/ditox` will offer to use it (accept the prompt or pass
+`--accept-flake-config`).
+
+## Quick Start (development)
 
 ```sh
 nix develop
