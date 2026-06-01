@@ -95,13 +95,13 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "clear")) {
         const kind = if (args.len > 2) args[2] else "all";
         try stdout.print("{}\n", .{try opened.store.clearWithOptions(kind, hasFlag(args, "--keep-pinned"))});
-    } else if (isClipseClearPinnedCommand(command)) {
+    } else if (isAliasClearPinnedCommand(command)) {
         try stdout.print("{}\n", .{try opened.store.clearWithOptions("all", true)});
-    } else if (isClipseClearAllCommand(command)) {
+    } else if (isAliasClearAllCommand(command)) {
         try stdout.print("{}\n", .{try opened.store.clearWithOptions("all", false)});
-    } else if (isClipseClearImagesCommand(command)) {
+    } else if (isAliasClearImagesCommand(command)) {
         try stdout.print("{}\n", .{try opened.store.clearWithOptions("images", false)});
-    } else if (isClipseClearTextCommand(command)) {
+    } else if (isAliasClearTextCommand(command)) {
         try stdout.print("{}\n", .{try opened.store.clearWithOptions("text", false)});
     } else if (std.mem.eql(u8, command, "status")) {
         try std.json.Stringify.value(.{
@@ -162,7 +162,7 @@ fn printHelp(stdout: *Io.Writer) !void {
         \\ditox commands:
         \\  -v|--version|version       print version
         \\  add [text]                 add text or stdin to history
-        \\  -a [text]                  Clipse alias for add
+        \\  -a [text]                  short alias for add
         \\  -c [text]                  copy text or stdin directly to clipboard
         \\  -p                         print current text clipboard
         \\  --wl-store                 store wl-paste --watch stdin
@@ -180,19 +180,19 @@ fn printHelp(stdout: *Io.Writer) !void {
         \\                             clear history
         \\  -clear                     clear unpinned history
         \\  -clear-all|-clear-text|-clear-images
-        \\                             Clipse clear aliases
+        \\                             clear aliases
         \\  status                     print config, watcher, and stats
         \\  repair                     run storage repair
-        \\  -clean                     Clipse alias for repair
+        \\  -clean                     short alias for repair
         \\  -kill                      kill stored watcher process
         \\  pause [ms]                 pause capture, 0 pauses until resume
-        \\  -pause <duration>          Clipse alias, accepts ms/s/m/h
+        \\  -pause <duration>          alias, accepts ms/s/m/h
         \\  resume                     resume capture
         \\  output <id>...             print multiple text entries
         \\  --output-all raw|unescaped print all text entries
         \\  -listen-shell              run watcher in this shell
         \\  -listen                    start watcher process
-        \\  -listen-x11|-listen-darwin recognized Clipse listener aliases; unsupported
+        \\  -listen-x11|-listen-darwin recognized listener aliases; unsupported
         \\  keep                       open TUI and keep it open after paste
         \\  -enable-real-time          open TUI with live polling enabled
         \\  launch [--keep]            open configured TUI terminal command
@@ -394,19 +394,19 @@ fn isAutoPasteCommand(command: []const u8) bool {
     return std.mem.eql(u8, command, "-auto-paste") or std.mem.eql(u8, command, "--auto-paste");
 }
 
-fn isClipseClearPinnedCommand(command: []const u8) bool {
+fn isAliasClearPinnedCommand(command: []const u8) bool {
     return std.mem.eql(u8, command, "-clear") or std.mem.eql(u8, command, "--clear");
 }
 
-fn isClipseClearAllCommand(command: []const u8) bool {
+fn isAliasClearAllCommand(command: []const u8) bool {
     return std.mem.eql(u8, command, "-clear-all") or std.mem.eql(u8, command, "--clear-all");
 }
 
-fn isClipseClearImagesCommand(command: []const u8) bool {
+fn isAliasClearImagesCommand(command: []const u8) bool {
     return std.mem.eql(u8, command, "-clear-images") or std.mem.eql(u8, command, "--clear-images");
 }
 
-fn isClipseClearTextCommand(command: []const u8) bool {
+fn isAliasClearTextCommand(command: []const u8) bool {
     return std.mem.eql(u8, command, "-clear-text") or std.mem.eql(u8, command, "--clear-text");
 }
 

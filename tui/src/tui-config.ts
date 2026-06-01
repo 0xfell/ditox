@@ -597,7 +597,7 @@ export type TuiKeyBindings = {
   confirmNo: string[];
 };
 
-export const clipseKeyBindingAliasNames = [
+export const compatKeyBindingAliasNames = [
   "choose",
   "clearSelected",
   "filter",
@@ -610,16 +610,16 @@ export const clipseKeyBindingAliasNames = [
   "yankFilter",
 ] as const;
 
-export type ClipseKeyBindingAlias = (typeof clipseKeyBindingAliasNames)[number];
+export type CompatKeyBindingAlias = (typeof compatKeyBindingAliasNames)[number];
 
-export type ClipseImageDisplayConfig = {
+export type CompatImageDisplayConfig = {
   type?: "basic" | "kitty" | "sixel" | string;
   scaleX?: number;
   scaleY?: number;
   heightCut?: number;
 };
 
-export type ClipseThemeFile = {
+export type CompatThemeFile = {
   UseCustom?: boolean;
   TitleFore?: string;
   TitleBack?: string;
@@ -695,7 +695,7 @@ export type TuiConfigFile = {
   chrome?: Partial<TuiChromeConfig>;
   styles?: Partial<Record<TuiSurfaceName, Partial<TuiSurfaceStyle>>>;
   labels?: Partial<TuiLabels>;
-  keyBindings?: Partial<Record<keyof TuiKeyBindings | ClipseKeyBindingAlias, string | string[]>>;
+  keyBindings?: Partial<Record<keyof TuiKeyBindings | CompatKeyBindingAlias, string | string[]>>;
   keyLabels?: Record<string, string>;
   statusTones?: Partial<Record<keyof TuiStatusToneMatchers, string[]>>;
   headerLineTones?: Partial<Record<TuiHeaderLinePartName, TuiStatusLineToneName>>;
@@ -713,7 +713,7 @@ export type TuiConfigFile = {
   pollInterval?: number;
   enableMouse?: boolean;
   enableDescription?: boolean;
-  imageDisplay?: ClipseImageDisplayConfig;
+  imageDisplay?: CompatImageDisplayConfig;
 };
 
 type EnvMap = Record<string, string | undefined>;
@@ -1200,7 +1200,7 @@ const defaultBehavior: TuiBehaviorConfig = {
   exitAfterSearchCopy: false,
 };
 
-const clipseKeyBindingAliases: Record<ClipseKeyBindingAlias, keyof TuiKeyBindings> = {
+const compatKeyBindingAliases: Record<CompatKeyBindingAlias, keyof TuiKeyBindings> = {
   choose: "copyPaste",
   clearSelected: "clearSelection",
   filter: "search",
@@ -1463,7 +1463,7 @@ export function loadTuiConfig(
   } catch {
     fileConfig = {};
   }
-  fileConfig = mergeClipseThemeFile(fileConfig, sourcePath, env, readFile);
+  fileConfig = mergeCompatThemeFile(fileConfig, sourcePath, env, readFile);
   return resolveTuiConfig(fileConfig, env, sourcePath);
 }
 
@@ -1588,28 +1588,28 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
   const imagePreviewMode = imagePreviewModeValue(
     env.DITOX_TUI_IMAGE_PREVIEW,
     fileConfig.layout?.imagePreviewMode,
-    clipseImagePreviewMode(fileConfig.imageDisplay, defaultLayout.imagePreviewMode),
+    compatImagePreviewMode(fileConfig.imageDisplay, defaultLayout.imagePreviewMode),
   );
-  const clipseImageMaxWidth = clipseImagePreviewMaxWidth(fileConfig.imageDisplay, defaultLayout.imagePreviewMaxWidth);
+  const compatImageMaxWidth = compatImagePreviewMaxWidth(fileConfig.imageDisplay, defaultLayout.imagePreviewMaxWidth);
   const hasSplitImageMaxWidthOverride =
-    env.DITOX_TUI_IMAGE_PREVIEW_MAX_WIDTH !== undefined || fileConfig.layout?.imagePreviewMaxWidth !== undefined || clipseImageMaxWidth !== defaultLayout.imagePreviewMaxWidth;
+    env.DITOX_TUI_IMAGE_PREVIEW_MAX_WIDTH !== undefined || fileConfig.layout?.imagePreviewMaxWidth !== undefined || compatImageMaxWidth !== defaultLayout.imagePreviewMaxWidth;
   const imagePreviewMaxWidth = clampNumber(
     envNumber(
       env,
       "DITOX_TUI_IMAGE_PREVIEW_MAX_WIDTH",
-      numberValue(fileConfig.layout?.imagePreviewMaxWidth, clipseImageMaxWidth),
+      numberValue(fileConfig.layout?.imagePreviewMaxWidth, compatImageMaxWidth),
     ),
     8,
     120,
   );
-  const clipseImageMaxRows = clipseImagePreviewMaxRows(fileConfig.imageDisplay, defaultLayout.imagePreviewMaxRows);
+  const compatImageMaxRows = compatImagePreviewMaxRows(fileConfig.imageDisplay, defaultLayout.imagePreviewMaxRows);
   const hasSplitImageMaxRowsOverride =
-    env.DITOX_TUI_IMAGE_PREVIEW_MAX_ROWS !== undefined || fileConfig.layout?.imagePreviewMaxRows !== undefined || clipseImageMaxRows !== defaultLayout.imagePreviewMaxRows;
+    env.DITOX_TUI_IMAGE_PREVIEW_MAX_ROWS !== undefined || fileConfig.layout?.imagePreviewMaxRows !== undefined || compatImageMaxRows !== defaultLayout.imagePreviewMaxRows;
   const imagePreviewMaxRows = clampNumber(
     envNumber(
       env,
       "DITOX_TUI_IMAGE_PREVIEW_MAX_ROWS",
-      numberValue(fileConfig.layout?.imagePreviewMaxRows, clipseImageMaxRows),
+      numberValue(fileConfig.layout?.imagePreviewMaxRows, compatImageMaxRows),
     ),
     2,
     60,
@@ -2267,22 +2267,22 @@ function configPath(env: EnvMap): string {
   return join(configHome, "ditox", "tui.json");
 }
 
-function mergeClipseThemeFile(
+function mergeCompatThemeFile(
   fileConfig: TuiConfigFile,
   sourcePath: string,
   env: EnvMap,
   readFile: (path: string) => string,
 ): TuiConfigFile {
   if (!fileConfig.themeFile) return fileConfig;
-  let clipseTheme: ClipseThemeFile;
+  let compatTheme: CompatThemeFile;
   try {
-    clipseTheme = JSON.parse(readFile(resolveExternalConfigPath(fileConfig.themeFile, sourcePath, env))) as ClipseThemeFile;
+    compatTheme = JSON.parse(readFile(resolveExternalConfigPath(fileConfig.themeFile, sourcePath, env))) as CompatThemeFile;
   } catch {
     return fileConfig;
   }
-  if (clipseTheme.UseCustom === false) return fileConfig;
+  if (compatTheme.UseCustom === false) return fileConfig;
 
-  const derived = configFromClipseTheme(clipseTheme, fileConfig.theme);
+  const derived = configFromCompatTheme(compatTheme, fileConfig.theme);
   return {
     ...fileConfig,
     theme: derived.theme,
@@ -2299,17 +2299,17 @@ function resolveExternalConfigPath(path: string, sourcePath: string, env: EnvMap
   return resolve(dirname(sourcePath), path);
 }
 
-function configFromClipseTheme(clipseTheme: ClipseThemeFile, existingTheme: TuiConfigFile["theme"]): Pick<TuiConfigFile, "theme" | "styles"> {
+function configFromCompatTheme(compatTheme: CompatThemeFile, existingTheme: TuiConfigFile["theme"]): Pick<TuiConfigFile, "theme" | "styles"> {
   const existingPreset = typeof existingTheme === "string" ? existingTheme : existingTheme?.preset;
   const existingColors = typeof existingTheme === "object" ? existingTheme.colors : undefined;
-  const colors = { ...themeColorsFromClipseTheme(clipseTheme), ...existingColors };
+  const colors = { ...themeColorsFromCompatTheme(compatTheme), ...existingColors };
   return {
     theme: { preset: existingPreset, colors },
-    styles: surfaceStylesFromClipseTheme(clipseTheme),
+    styles: surfaceStylesFromCompatTheme(compatTheme),
   };
 }
 
-function themeColorsFromClipseTheme(theme: ClipseThemeFile): Partial<ThemeColors> {
+function themeColorsFromCompatTheme(theme: CompatThemeFile): Partial<ThemeColors> {
   const colors: Partial<ThemeColors> = {};
   assignColor(colors, "bgPanel", colorValue(theme, "TitleBack"));
   assignColor(colors, "bgSelected", colorValue(theme, "SelectedDesc"));
@@ -2330,7 +2330,7 @@ function themeColorsFromClipseTheme(theme: ClipseThemeFile): Partial<ThemeColors
   return colors;
 }
 
-function surfaceStylesFromClipseTheme(theme: ClipseThemeFile): TuiConfigFile["styles"] {
+function surfaceStylesFromCompatTheme(theme: CompatThemeFile): TuiConfigFile["styles"] {
   return {
     header: compactStyle({
       bg: colorValue(theme, "TitleBack"),
@@ -2451,7 +2451,7 @@ function compactStyle(style: Partial<TuiSurfaceStyle>): Partial<TuiSurfaceStyle>
   return out;
 }
 
-function colorValue(theme: ClipseThemeFile, key: keyof ClipseThemeFile): string | undefined {
+function colorValue(theme: CompatThemeFile, key: keyof CompatThemeFile): string | undefined {
   const value = theme[key];
   return typeof value === "string" && isColor(value) ? value : undefined;
 }
@@ -2685,7 +2685,7 @@ function overlayPlacementValue(value: unknown, fallback: OverlayPlacement): Over
   return fallback;
 }
 
-function clipseImagePreviewMode(display: ClipseImageDisplayConfig | undefined, fallback: ImagePreviewMode): ImagePreviewMode {
+function compatImagePreviewMode(display: CompatImageDisplayConfig | undefined, fallback: ImagePreviewMode): ImagePreviewMode {
   if (!display) return fallback;
   if (display.type === "basic") return "blocks";
   if (display.type === "kitty" || display.type === "sixel") return display.type;
@@ -2702,12 +2702,12 @@ function imagePreviewBackgroundValue(value: unknown, fallback: string): string {
   return fallback;
 }
 
-function clipseImagePreviewMaxWidth(display: ClipseImageDisplayConfig | undefined, fallback: number): number {
+function compatImagePreviewMaxWidth(display: CompatImageDisplayConfig | undefined, fallback: number): number {
   if (!display || typeof display.scaleX !== "number" || !Number.isFinite(display.scaleX) || display.scaleX <= 0) return fallback;
   return Math.round(display.scaleX * 5);
 }
 
-function clipseImagePreviewMaxRows(display: ClipseImageDisplayConfig | undefined, fallback: number): number {
+function compatImagePreviewMaxRows(display: CompatImageDisplayConfig | undefined, fallback: number): number {
   if (!display || typeof display.scaleY !== "number" || !Number.isFinite(display.scaleY) || display.scaleY <= 0) return fallback;
   const heightCut = typeof display.heightCut === "number" && Number.isFinite(display.heightCut) ? Math.max(0, display.heightCut) : 0;
   return Math.round(display.scaleY * 2 - heightCut);
@@ -2884,7 +2884,7 @@ function mergeKeyBindings(bindings: TuiConfigFile["keyBindings"]): TuiKeyBinding
     const normalized = normalizeKeys(value);
     if (normalized.length > 0) merged[action] = normalized;
   }
-  for (const [alias, action] of Object.entries(clipseKeyBindingAliases) as Array<[ClipseKeyBindingAlias, keyof TuiKeyBindings]>) {
+  for (const [alias, action] of Object.entries(compatKeyBindingAliases) as Array<[CompatKeyBindingAlias, keyof TuiKeyBindings]>) {
     if (rawBindings[action] !== undefined) continue;
     const normalized = normalizeKeys(rawBindings[alias]);
     if (normalized.length > 0) merged[action] = normalized;

@@ -91,8 +91,8 @@ describe("ditox CLI smoke", () => {
     expect(listed.entries.map((entry: { content: string }) => entry.content)).toEqual(["network latency error"]);
   });
 
-  test("accepts Clipse-style backend config aliases for duplicates and history limits", () => {
-    env.DITOX_CONFIG = join(tempDir, "clipse-aliases.toml");
+  test("accepts backend config aliases for duplicates and history limits", () => {
+    env.DITOX_CONFIG = join(tempDir, "compat-aliases.toml");
     writeFileSync(
       env.DITOX_CONFIG,
       [
@@ -120,8 +120,8 @@ describe("ditox CLI smoke", () => {
     expect(listed.entries[1].preview).toBe("duplicat...");
   });
 
-  test("accepts Clipse-style backend path aliases relative to the config file", () => {
-    const configDir = join(tempDir, "clipse-config");
+  test("accepts backend path aliases relative to the config file", () => {
+    const configDir = join(tempDir, "compat-config");
     const expectedDb = join(configDir, "history", "clipboard.sqlite");
     const expectedImageDir = join(configDir, "tmp_files");
     mkdirSync(configDir, { recursive: true });
@@ -135,7 +135,7 @@ describe("ditox CLI smoke", () => {
       ].join("\n"),
     );
 
-    expect(run(["add", "stored in clipse history path"])).toBe("1");
+    expect(run(["add", "stored in compat history path"])).toBe("1");
     expect(existsSync(expectedDb)).toBe(true);
     let status = JSON.parse(run(["status"]));
     expect(status.config.db_path).toBe(expectedDb);
@@ -152,8 +152,8 @@ describe("ditox CLI smoke", () => {
     expect(existsSync(listed.entries[0].blob_path)).toBe(true);
   });
 
-  test("loads Clipse-style configuration.json backend settings", () => {
-    const configDir = join(tempDir, "clipse-json");
+  test("loads configuration.json backend settings", () => {
+    const configDir = join(tempDir, "compat-json");
     const expectedDb = join(configDir, "history", "clipboard.sqlite");
     const expectedImageDir = join(configDir, "tmp_files");
     mkdirSync(configDir, { recursive: true });
@@ -208,7 +208,7 @@ describe("ditox CLI smoke", () => {
     expect(listed.entries[1].preview).toBe("duplica...");
   });
 
-  test("accepts Clipse-style CLI aliases for supported operations", () => {
+  test("accepts short CLI aliases for supported operations", () => {
     expect(run(["-v"])).toBe("ditox 0.1.0");
     expect(run(["--version"])).toBe("ditox 0.1.0");
     expect(run(["version"])).toBe("ditox 0.1.0");
@@ -248,12 +248,12 @@ describe("ditox CLI smoke", () => {
     expect(clean.removed_missing_images).toBe(0);
   });
 
-  test("recognizes unsupported platform-specific Clipse listener aliases", () => {
+  test("recognizes unsupported platform-specific listener aliases", () => {
     expect(run(["-listen-x11"])).toContain("currently supports Wayland listening");
     expect(run(["--listen-darwin"])).toContain("currently supports Wayland listening");
   });
 
-  test("stores wl-paste watch stdin through the Clipse wl-store alias", () => {
+  test("stores wl-paste watch stdin through the wl-store alias", () => {
     expect(runWithStdin(["--wl-store"], "stored from wl watch")).toBe("");
     let listed = JSON.parse(run(["list"]));
     expect(listed.entries).toHaveLength(1);
@@ -476,7 +476,7 @@ describe("ditox CLI smoke", () => {
     expect(readFileSync(bunEnv, "utf8").trim()).toBe("0xinstalled|250");
   });
 
-  test("kills the stored watcher process through the Clipse kill alias", async () => {
+  test("kills the stored watcher process through the kill alias", async () => {
     env.DITOX_CONFIG = join(tempDir, "watcher.toml");
     writeFileSync(env.DITOX_CONFIG, "[watch]\npoll_interval_ms = 50\n");
 

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { themeNames, themes } from "./theme";
 import {
-  clipseKeyBindingAliasNames,
+  compatKeyBindingAliasNames,
   headerLinePartNames,
   helpActionNames,
   imagePreviewAlignNames,
@@ -91,7 +91,7 @@ describe("tui config schema", () => {
 
     expect(sorted(themeSchemaKeys)).toEqual(sorted(themeColorKeys));
     expect(sorted(themeSchemaNames)).toEqual(sorted(themeNames));
-    expect(sorted(keyBindingSchemaNames)).toEqual(sorted([...Object.keys(config.keyBindings), ...clipseKeyBindingAliasNames]));
+    expect(sorted(keyBindingSchemaNames)).toEqual(sorted([...Object.keys(config.keyBindings), ...compatKeyBindingAliasNames]));
   });
 
   test("keeps help action names in sync", () => {

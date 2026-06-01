@@ -3772,7 +3772,7 @@ describe("OpenTUI render snapshots", () => {
     expect(lineContaining(frame, "left scroll 2").startsWith("..left scroll 2")).toBe(true);
   });
 
-  test("caps row preview text with Clipse maxEntryLength", async () => {
+  test("caps row preview text with maxEntryLength", async () => {
     const config = resolveTuiConfig({
       maxEntryLength: 10,
       layout: {

@@ -55,7 +55,7 @@
     },
     "themeFile": {
       "type": "string",
-      "description": "Optional Clipse custom_theme.json-compatible file. Relative paths resolve next to this config file."
+      "description": "Optional external custom_theme.json color file. Relative paths resolve next to this config file."
     },
     "terminal": {
       "type": "object",
@@ -182,20 +182,20 @@
     "maxEntryLength": {
       "type": "integer",
       "minimum": 0,
-      "description": "Clipse-compatible row preview character cap alias."
+      "description": "Compatibility alias: row preview character cap."
     },
     "pollInterval": {
       "type": "integer",
       "minimum": 0,
-      "description": "Clipse-compatible TUI refresh interval alias in milliseconds."
+      "description": "Compatibility alias: TUI refresh interval in milliseconds."
     },
     "enableMouse": {
       "type": "boolean",
-      "description": "Clipse-compatible mouse enablement alias."
+      "description": "Compatibility alias: mouse enablement."
     },
     "enableDescription": {
       "type": "boolean",
-      "description": "Clipse-compatible metadata visibility alias."
+      "description": "Compatibility alias: metadata visibility."
     },
     "imageDisplay": {
       "type": "object",
@@ -203,7 +203,7 @@
       "properties": {
         "type": {
           "enum": ["basic", "kitty", "sixel"],
-          "description": "Clipse-compatible image mode. Kitty and Sixel currently fall back to block previews."
+          "description": "Compatibility alias: image mode. Kitty and Sixel currently fall back to block previews."
         },
         "scaleX": { "type": "number", "exclusiveMinimum": 0 },
         "scaleY": { "type": "number", "exclusiveMinimum": 0 },

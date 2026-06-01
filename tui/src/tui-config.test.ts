@@ -2578,7 +2578,7 @@ describe("tui config", () => {
     });
   });
 
-  test("accepts Clipse top-level TUI config aliases", () => {
+  test("accepts top-level TUI config aliases", () => {
     const config = resolveTuiConfig({
       maxEntryLength: 65,
       pollInterval: 50,
@@ -2607,14 +2607,14 @@ describe("tui config", () => {
     expect(config.keyBindings.delete).toEqual(["d", "backspace"]);
   });
 
-  test("preserves Clipse Kitty and Sixel image display modes as explicit fallbacks", () => {
+  test("preserves Kitty and Sixel image display modes as explicit fallbacks", () => {
     expect(resolveTuiConfig({ imageDisplay: { type: "kitty" } }).layout.imagePreviewMode).toBe("kitty");
     expect(resolveTuiConfig({ imageDisplay: { type: "sixel" } }).layout.imagePreviewMode).toBe("sixel");
     expect(resolveTuiConfig({ layout: { imagePreviewMode: "sixel" } }).layout.imagePreviewMode).toBe("sixel");
     expect(resolveTuiConfig({}, { DITOX_TUI_IMAGE_PREVIEW: "kitty" }).layout.imagePreviewMode).toBe("kitty");
   });
 
-  test("Ditox layout and env settings take precedence over Clipse aliases", () => {
+  test("Ditox layout and env settings take precedence over compatibility aliases", () => {
     const config = resolveTuiConfig(
       {
         maxEntryLength: 65,
@@ -2664,7 +2664,7 @@ describe("tui config", () => {
     expect(config.keyBindings.preview).toEqual(["space", "ctrl+o"]);
   });
 
-  test("loads Clipse custom theme files relative to the TUI config file", () => {
+  test("loads external custom theme files relative to the TUI config file", () => {
     const config = loadTuiConfig({ DITOX_TUI_CONFIG: "/tmp/ditox/configuration.json" }, (path) => {
       if (path === "/tmp/ditox/configuration.json") {
         return JSON.stringify({
@@ -2716,7 +2716,7 @@ describe("tui config", () => {
     expect(surface(config, "scrollbar").muted).toBe("#123456");
   });
 
-  test("ignores disabled Clipse custom theme files", () => {
+  test("ignores disabled external custom theme files", () => {
     const config = loadTuiConfig({ DITOX_TUI_CONFIG: "/tmp/ditox/configuration.json" }, (path) => {
       if (path === "/tmp/ditox/configuration.json") return JSON.stringify({ themeFile: "custom_theme.json" });
       return JSON.stringify({ UseCustom: false, TitleFore: "#eeeeee" });
@@ -2725,7 +2725,7 @@ describe("tui config", () => {
     expect(surface(config, "header").fg).toBe(config.theme.textPrimary);
   });
 
-  test("accepts Clipse keybinding aliases without overriding explicit Ditox keys", () => {
+  test("accepts keybinding aliases without overriding explicit Ditox keys", () => {
     const config = resolveTuiConfig({
       keyBindings: {
         choose: "ctrl+p",
