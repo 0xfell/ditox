@@ -3,9 +3,8 @@
 Guidance for AI coding agents (and humans) working in this repository.
 
 > This file is the source of truth for the project's architecture. Keep it in
-> sync with the code. The migration blueprint that bootstrapped the rewrite
-> lives at `docs/notes/migration-fresh-start.md`; do not treat its "planned"
-> sections as current behavior.
+> sync with the code. For active and deferred work, see `docs/ROADMAP.md` and
+> `docs/TODO.md`; do not treat their "planned" sections as current behavior.
 
 ## What Ditox Is
 
@@ -109,19 +108,19 @@ contracts/          JSON-RPC schema + fixtures (rpc.schema.json, *.rpc)
 tests/              CLI smoke tests (bun test, via assert-style spawning)
 docs/               ROADMAP, TODO, and design notes
 flake.nix           Hermetic package, devShell, apps, homeManagerModules
-.github/workflows/  CI: dual-arch nix build + push to the ditox cachix cache
+.github/workflows/  CI: dual-arch nix build + push to the 0xfell cachix cache
 ```
 
 ### Backend modules (`backend/src/`)
 
 | Module | Purpose |
 |--------|---------|
-| `cli.zig` | `ditox` CLI: arg parsing, Clipse-style aliases, TUI launch/paste-back |
+| `cli.zig` | `ditox` CLI: arg parsing, short/compat aliases, TUI launch/paste-back |
 | `daemon.zig` | `ditoxd`: watcher daemon + JSON-RPC `serve --stdio` |
 | `rpc.zig` | JSON-RPC 2.0 envelope, method routing, Content-Length framing |
 | `storage.zig` | SQLite schema/migrations, entry CRUD, FTS search, image blobs |
 | `clipboard.zig` | Wayland clipboard read/write (wl-clipboard) |
-| `config.zig` | TOML/JSON config loading + Clipse-compatible aliases |
+| `config.zig` | TOML/JSON config loading + compatibility aliases |
 | `models.zig` | Entry / RPC data model |
 | `app.zig` | Shared app wiring |
 | `util.zig` | Helpers |
@@ -176,17 +175,15 @@ Docs live in `docs/`:
 docs/
   ROADMAP.md      Index + status
   TODO.md         Active worklist
-  notes/          Design notes & the migration blueprint
 ```
 
 When you finish a unit of work: run `bun run check` (or at least the relevant
-`test:*`), update `docs/TODO.md` / `docs/ROADMAP.md`, and add architectural
-findings to `docs/notes/`. Do not let docs describe planned work as if it
-already exists.
+`test:*`) and update `docs/TODO.md` / `docs/ROADMAP.md`. Do not let docs
+describe planned work as if it already exists.
 
 ## Release / Distribution
 
 - **Nix flake** — `nix run github:0xfell/ditox`. CI builds x86_64-linux +
-  aarch64-linux and pushes closures to `https://ditox.cachix.org` so users
+  aarch64-linux and pushes closures to `https://0xfell.cachix.org` so users
   install prebuilt (see `README.md` → Install).
 - Bump `version` in `flake.nix`; tag `v*` to mark a release. CI runs on tag push.
