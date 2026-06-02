@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createSignal } from "solid-js";
 import { TextAttributes } from "@opentui/core";
 import { testRender } from "@opentui/solid";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -2683,7 +2684,10 @@ describe("OpenTUI render snapshots", () => {
       78,
       7,
     );
-    expect(fullFrame).toContain("1>abc...");
+    // Full preview now soft-wraps at the tuned text width (6 cols here) instead
+    // of hard-truncating, so the whole string is visible across rows while the
+    // per-row width is still capped (no 7-char run on a single line).
+    expect(fullFrame).toContain("1>abcdef");
     expect(fullFrame).not.toContain("abcdefg");
   });
 
@@ -3038,7 +3042,7 @@ describe("OpenTUI render snapshots", () => {
     expect(frame).toContain("q:geo");
     expect(frame).toContain("enter send");
     expect(frame).toContain("ctrl+y clip");
-    expect(frame).toContain("space read");
+    expect(frame).toContain("space / right read");
   });
 
   test("renders configurable vertical padding for header, status, and overlays", async () => {
@@ -4006,6 +4010,70 @@ describe("OpenTUI render snapshots", () => {
       );
       expect(webpFrame).toContain("PIC #6");
       expect(webpFrame).toContain("█");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("upgrades the first image from block fallback to native once resolution arrives", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ditox-tui-resolution-"));
+    try {
+      const imagePath = join(dir, "first.png");
+      const bytes = rgbaPng(2, 2, [
+        [255, 0, 0, 255],
+        [0, 255, 0, 255],
+        [0, 0, 255, 255],
+        [255, 255, 255, 255],
+      ]);
+      writeFileSync(imagePath, bytes);
+
+      const config = resolveTuiConfig({
+        layout: {
+          imagePreviewMode: "blocks",
+          imagePreviewRenderer: "auto",
+          imagePreviewMaxWidth: 2,
+          imagePreviewMaxRows: 1,
+          imagePreviewBlockGlyph: "▀",
+        },
+      });
+
+      const nativeRequests: any[] = [];
+      const [resolution, setResolution] = createSignal<{ width: number; height: number } | null>(null);
+      const view = await testRender(
+        () => (
+          <Shell config={config}>
+            <PreviewPane
+              config={config}
+              entry={imageEntry(11, imagePath, bytes.length)}
+              rows={8}
+              width={48}
+              imageTerminal={{
+                columns: 58,
+                rows: 10,
+                resolution: resolution(),
+                capabilities: { kittyGraphics: true, sixel: false, nativeRenderer: true },
+              }}
+              imageManager={{ queue: (request: any) => nativeRequests.push(request), clear: () => {} }}
+            />
+          </Shell>
+        ),
+        { width: 58, height: 10 },
+      );
+
+      // First paint: the terminal has not reported its pixel resolution yet, so
+      // the image must fall back to the low-res block renderer.
+      await view.renderOnce();
+      expect(view.captureCharFrame()).toContain("▀");
+      expect(nativeRequests).toHaveLength(0);
+
+      // Resolution arrives asynchronously: the same image upgrades to the native
+      // renderer in place (no navigation required).
+      setResolution({ width: 580, height: 200 });
+      await view.renderOnce();
+      expect(view.captureCharFrame()).not.toContain("▀");
+      expect(nativeRequests.length).toBeGreaterThan(0);
+
+      view.renderer.destroy();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -5110,6 +5178,7 @@ function textEntry(id: number, content: string, favorite: boolean): Entry {
     hash: `text-${id}`.padEnd(64, "0"),
     favorite,
     created_at_ms: Date.now() - id * 1000,
+    last_used_at_ms: null,
     byte_len: Buffer.byteLength(content),
     source_app: null,
     blob_path: null,
@@ -5128,6 +5197,7 @@ function imageEntry(id: number, blobPath: string | null = null, byteLength = 204
     hash: `image-${id}`.padEnd(64, "0"),
     favorite: false,
     created_at_ms: Date.now() - id * 1000,
+    last_used_at_ms: null,
     byte_len: byteLength,
     source_app: null,
     blob_path: blobPath,

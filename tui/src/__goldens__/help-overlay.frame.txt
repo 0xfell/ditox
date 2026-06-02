@@ -2,7 +2,7 @@
 │up / k  down / j  move sele...   x  s  shift+s         mark...│
 │pgup  pgdn        page up /...   shift+up  shift+down  exte...│
 │home  end         jump firs...   /  tab                sear...│
-│space             open preview   ctrl+g                copy...│
+│space / right     open preview   ctrl+g                copy...│
 │shift+tab         show pinn...   p  d / bksp           pin ...│
 │ctrl+p            send sele...   c a  c t  c i         clea...│
 │ctrl+y  y         copy sele...   c x                   clea...│

@@ -184,7 +184,7 @@ describe("tui config", () => {
     expect(config.layout.rowMarkerAlign).toBe("left");
     expect(config.layout.rowMarkerGap).toBe(1);
     expect(config.layout.rowMetaPreviewGap).toBe(2);
-    expect(config.layout.rowPreviewReservedWidth).toBe(28);
+    expect(config.layout.rowPreviewReservedWidth).toBe(20);
     expect(config.layout.rowPreviewMaxWidth).toBe(0);
     expect(config.layout.rowSpacing).toBe(0);
     expect(config.layout.alternateRows).toBe(true);
@@ -285,7 +285,7 @@ describe("tui config", () => {
     expect(surface(config, "status").success).toBe(config.theme.accentSuccess);
     expect(surface(config, "splitPaneGap").bg).toBe(surface(config, "shell").bg);
     expect(config.keyBindings.copyPaste).toEqual(["enter"]);
-    expect(config.keyBindings.preview).toEqual(["space"]);
+    expect(config.keyBindings.preview).toEqual(["space", "right"]);
     expect(config.keyBindings.searchCopyMatches).toEqual(["ctrl+s"]);
     expect(config.keyBindings.clearSelection).toEqual(["shift+s"]);
     expect(config.keyLabels.space).toBe("space");
@@ -2590,7 +2590,7 @@ describe("tui config", () => {
       },
     });
 
-    expect(config.layout.rowPreviewReservedWidth).toBe(28);
+    expect(config.layout.rowPreviewReservedWidth).toBe(20);
     expect(config.layout.rowPreviewMaxWidth).toBe(65);
     expect(config.layout.refreshIntervalMs).toBe(50);
     expect(config.layout.mouseEnabled).toBe(false);

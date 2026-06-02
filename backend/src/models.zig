@@ -27,6 +27,7 @@ pub const Entry = struct {
     hash: []const u8,
     favorite: bool,
     created_at_ms: i64,
+    last_used_at_ms: ?i64 = null,
     byte_len: i64,
     source_app: ?[]const u8 = null,
     blob_path: ?[]const u8 = null,

@@ -17,7 +17,10 @@ See `AGENTS.md` (repo root) for the authoritative architecture overview.
 - Method-specific JSON-RPC contracts over Content-Length stdio.
 - `ditoxd daemon` watcher (single long-lived DB owner) + Hyprland paste-back.
 - File-backed OpenTUI customization, configurable keymap, multi-select,
-  pinned-only view, full preview, mouse selection, live polling.
+  pinned-only view, full preview (soft-wrapped, arrow-key toggle), mouse
+  selection, live polling.
+- Recency-ordered history: copy/paste records `last_used_at_ms` so re-used
+  clips move to the top; row age reflects most-recent activity.
 - Short/compatibility CLI aliases and config aliases for easy migration.
 
 ## Deferred (intentionally not built yet)

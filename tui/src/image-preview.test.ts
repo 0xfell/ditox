@@ -339,6 +339,7 @@ function imageEntry(overrides: Partial<Entry> = {}): Entry {
     hash: "hash",
     favorite: false,
     created_at_ms: Date.now(),
+    last_used_at_ms: null,
     byte_len: 10,
     source_app: null,
     blob_path: null,

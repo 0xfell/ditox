@@ -253,6 +253,7 @@ export interface Entry {
   hash: string;
   favorite: boolean;
   created_at_ms: number;
+  last_used_at_ms: number | null;
   byte_len: number;
   source_app: string | null;
   blob_path: string | null;

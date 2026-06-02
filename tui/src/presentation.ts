@@ -262,10 +262,17 @@ export function entryKindLabel(entry: Entry, labels: Partial<EntryLabelSet> = {}
   return entry.kind === "image" ? (labels.kindImage ?? defaultEntryLabels.kindImage) : (labels.kindText ?? defaultEntryLabels.kindText);
 }
 
+/** Most recent activity time for an entry: the later of when it was added and
+ * when it was last used (copied/pasted). Drives both list ordering (backend)
+ * and the displayed age so a re-used entry reads as recent. */
+export function entryActivityMs(entry: Entry): number {
+  return Math.max(entry.created_at_ms, entry.last_used_at_ms ?? 0);
+}
+
 export function entryMeta(entry: Entry, now = Date.now(), labels: Partial<EntryLabelSet> = {}, layout: Partial<EntryMetaLayout> = {}): string {
   const text = { ...defaultEntryLabels, ...labels };
   const metrics = { ...defaultEntryMetaLayout, ...layout };
-  const age = fitText(formatAge(entry.created_at_ms, now, text), metrics.rowAgeWidth, metrics.rowAgeAlign, false);
+  const age = fitText(formatAge(entryActivityMs(entry), now, text), metrics.rowAgeWidth, metrics.rowAgeAlign, false);
   const size = fitText(formatBytes(entry.byte_len, text), metrics.rowSizeWidth, metrics.rowSizeAlign, false);
   const pinnedRaw = text.rowPinnedLabel;
   const pinned = fitText(pinnedRaw, metrics.rowPinnedWidth, metrics.rowPinnedAlign, true);
@@ -548,6 +555,7 @@ export function previewModel(
   maxLines: number,
   labels: Partial<PreviewLabelSet> = {},
   layout: Partial<PreviewLayoutSet> | number = {},
+  wrapWidth = 0,
 ): PreviewLine[] {
   const text = { ...defaultPreviewLabels, ...labels };
   const previewLayout: PreviewLayoutSet =
@@ -579,17 +587,45 @@ export function previewModel(
     return previewLayout.previewImageFields.map((field) => rows[field]).slice(0, maxLines);
   }
 
-  const lines = entry.content.split(/\r?\n/);
-  if (lines.length === 0) return [{ gutter: "1", text: "", tone: "primary" }];
-  return lines.slice(0, maxLines).map<PreviewLine>((line, index) => {
+  const sourceLines = entry.content.split(/\r?\n/);
+  if (sourceLines.length === 0) return [{ gutter: "1", text: "", tone: "primary" }];
+  const rows: PreviewLine[] = [];
+  for (let index = 0; index < sourceLines.length && rows.length < maxLines; index += 1) {
     const lineNumber = String(index + 1);
     const linePadded = lineNumber.padStart(Math.max(1, previewLayout.previewLineNumberWidth), " ");
-    return {
-      gutter: applyTemplate(text.previewTextGutterTemplate, { line: lineNumber, lineNumber, linePadded, lineNumberPadded: linePadded }),
-      text: line,
-      tone: "primary",
-    };
-  });
+    const gutter = applyTemplate(text.previewTextGutterTemplate, { line: lineNumber, lineNumber, linePadded, lineNumberPadded: linePadded });
+    // Soft-wrap long lines so the full string is visible instead of being
+    // hard-truncated at the pane edge. Continuation rows keep a blank gutter so
+    // the line number only shows once.
+    const segments = wrapWidth > 0 ? wrapPreviewText(sourceLines[index] ?? "", wrapWidth) : [sourceLines[index] ?? ""];
+    for (let segment = 0; segment < segments.length && rows.length < maxLines; segment += 1) {
+      rows.push({ gutter: segment === 0 ? gutter : "", text: segments[segment] ?? "", tone: "primary" });
+    }
+  }
+  return rows;
+}
+
+/** Soft-wrap a single logical line to `width` columns, breaking on spaces when
+ * possible and hard-splitting words that are longer than the width. */
+export function wrapPreviewText(value: string, width: number): string[] {
+  const target = Math.max(1, Math.floor(width));
+  const text = String(value ?? "");
+  if (text.length <= target) return [text];
+  const segments: string[] = [];
+  let remaining = text;
+  while (remaining.length > target) {
+    const window = remaining.slice(0, target + 1);
+    const lastSpace = window.lastIndexOf(" ");
+    if (lastSpace <= 0) {
+      segments.push(remaining.slice(0, target));
+      remaining = remaining.slice(target);
+    } else {
+      segments.push(remaining.slice(0, lastSpace));
+      remaining = remaining.slice(lastSpace + 1);
+    }
+  }
+  if (remaining.length > 0) segments.push(remaining);
+  return segments.length > 0 ? segments : [""];
 }
 
 export function previewMetaTemplateValues(
@@ -622,7 +658,7 @@ export function previewMetaTemplateValues(
     hashFull: entry.hash,
     mime: entry.mime,
     size: formatBytes(entry.byte_len, text),
-    age: formatAge(entry.created_at_ms, now, text),
+    age: formatAge(entryActivityMs(entry), now, text),
     dimensions,
     sourceApp: entry.source_app ?? "",
     blob: entry.blob_path ?? text.previewBlobMissing,

@@ -80,9 +80,15 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
   const imageManager = new TerminalImageManager();
   const [state, setState] = createSignal<UiState>(initialState(config.startup));
   const [terminalCapabilities, setTerminalCapabilities] = createSignal<TerminalCapabilities | null>(renderer.capabilities);
+  // The terminal answers the pixel-resolution query asynchronously, so
+  // renderer.resolution is a plain (non-reactive) getter that is null on first
+  // paint. Mirror it into a signal (synced in onMount) so image previews
+  // re-render to full resolution the moment the resolution lands, instead of
+  // staying on the low-res block fallback until the selection changes.
+  const [resolution, setResolution] = createSignal<PixelResolution | null>(renderer.resolution);
   const dimensions = useTerminalDimensions();
   const imageTerminal = (): TerminalImageState =>
-    terminalImageState(dimensions().width, dimensions().height, renderer.resolution, terminalCapabilities());
+    terminalImageState(dimensions().width, dimensions().height, resolution(), terminalCapabilities());
   const contentWidth = () => Math.max(1, dimensions().width - config.layout.shellPaddingX * 2);
   const contentHeight = () => Math.max(1, dimensions().height - config.layout.shellPaddingY * 2);
   const overlayHeight = () => activeOverlayHeight(state(), config);
@@ -101,6 +107,11 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
       ? Math.max(config.layout.minPaneWidth, Math.floor((splitPaneAvailableWidth() * config.layout.listWidthPercent) / 100) - config.layout.splitPaneWidthInset)
       : Math.max(config.layout.minPaneWidth, contentWidth());
   const previewWidth = () => Math.max(config.layout.minPaneWidth, Math.floor((splitPaneAvailableWidth() * config.layout.previewWidthPercent) / 100) - config.layout.splitPaneWidthInset);
+  // Mirror FullPreview's own width math so wrapped-line counts used for scroll
+  // bounds match what FullPreview actually renders.
+  const fullPreviewWidth = () => Math.max(config.layout.minPaneWidth, contentWidth() - config.layout.fullPreviewWidthInset);
+  const fullPreviewTextWidth = () =>
+    Math.max(1, fullPreviewWidth() - (config.layout.showFullPreviewGutter ? config.layout.fullPreviewTextWidthInset : config.layout.fullPreviewPaddingX * 2));
   const previewVisibleRows = () =>
     visibleFullPreviewLineCapacity(
       listRows(),
@@ -141,8 +152,21 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
         targetWindow: Bun.env.DITOX_TARGET_WINDOW,
         labels: config.labels,
       });
-      setState((previous) => ({ ...previous, status: result === "pasted" ? config.labels.statusPasted : config.labels.statusCopied }));
-      exitAfter(result === "pasted" ? config.behavior.exitAfterPaste : paste ? config.behavior.exitAfterPaste : config.behavior.exitAfterCopy, renderer);
+      const status = result === "pasted" ? config.labels.statusPasted : config.labels.statusCopied;
+      const shouldExit = result === "pasted" ? config.behavior.exitAfterPaste : paste ? config.behavior.exitAfterPaste : config.behavior.exitAfterCopy;
+      if (shouldExit) {
+        setState((previous) => ({ ...previous, status }));
+        exitAfter(true, renderer);
+        return;
+      }
+      // The backend bumps last_used on copy/paste and re-sorts the entry to the
+      // top. Refresh so the reorder is visible immediately, then keep the cursor
+      // on the entry we just used wherever it landed.
+      await refresh({ status });
+      setState((previous) => {
+        const index = previous.entries.findIndex((candidate) => candidate.id === entry.id);
+        return index >= 0 ? clampSelection({ ...previous, selectedIndex: index, previewOffset: 0 }) : previous;
+      });
     } catch (error) {
       setState((previous) => ({ ...previous, status: error instanceof Error ? error.message : String(error) }));
     }
@@ -274,6 +298,7 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
     config,
     browsePageRows: visibleListEntries,
     previewRows: listRows,
+    previewWrapWidth: fullPreviewTextWidth,
   });
 
   createEffect(() => {
@@ -298,6 +323,41 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
     const updateCapabilities = (capabilities: TerminalCapabilities) => setTerminalCapabilities(capabilities);
     renderer.on(CliRenderEvents.CAPABILITIES, updateCapabilities);
     onCleanup(() => renderer.off(CliRenderEvents.CAPABILITIES, updateCapabilities));
+
+    // Pull renderer.resolution into the reactive signal once the terminal
+    // replies. The reply arrives shortly after setup (and again after a
+    // resize), so poll briefly and re-arm on resize; syncResolution only
+    // writes the signal when the value actually changes.
+    const syncResolution = (): boolean => {
+      const current = renderer.resolution;
+      if (!current || current.width <= 0 || current.height <= 0) return false;
+      setResolution((previous) => (previous && previous.width === current.width && previous.height === current.height ? previous : current));
+      return true;
+    };
+    let resolutionPoll: ReturnType<typeof setInterval> | null = null;
+    const stopResolutionPoll = () => {
+      if (resolutionPoll) {
+        clearInterval(resolutionPoll);
+        resolutionPoll = null;
+      }
+    };
+    const armResolutionSync = (durationMs = 3000, intervalMs = 100) => {
+      stopResolutionPoll();
+      syncResolution();
+      const deadline = Date.now() + durationMs;
+      resolutionPoll = setInterval(() => {
+        syncResolution();
+        if (Date.now() >= deadline) stopResolutionPoll();
+      }, intervalMs);
+    };
+    armResolutionSync();
+    const onResize = () => armResolutionSync();
+    renderer.on(CliRenderEvents.RESIZE, onResize);
+    onCleanup(() => {
+      renderer.off(CliRenderEvents.RESIZE, onResize);
+      stopResolutionPoll();
+    });
+
     void refresh();
     if (config.layout.refreshIntervalMs <= 0) return;
     let polling = false;
@@ -322,9 +382,9 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
             config={config}
             entry={selectedEntry(state())}
             rows={listRows()}
-            width={Math.max(config.layout.minPaneWidth, contentWidth() - config.layout.fullPreviewWidthInset)}
+            width={fullPreviewWidth()}
             offset={state().previewOffset}
-            imageCapabilities={imageProtocolCapabilities(terminalCapabilities(), renderer.resolution)}
+            imageCapabilities={imageProtocolCapabilities(terminalCapabilities(), resolution())}
             imageTerminal={imageTerminal()}
             imageManager={imageManager}
             onScroll={(direction) =>
@@ -332,7 +392,7 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
                 movePreview(
                   previous,
                   direction * config.layout.mouseScrollRows,
-                  previewModel(selectedEntry(previous), config.layout.maxFullPreviewLines, config.labels, config.layout).length,
+                  previewModel(selectedEntry(previous), config.layout.maxFullPreviewLines, config.labels, config.layout, fullPreviewTextWidth()).length,
                   previewVisibleRows(),
                 ),
               )
@@ -366,7 +426,7 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
                 rows={listRows()}
                 width={previewWidth()}
                 widthPercent={previewPaneWidthPercent()}
-                imageCapabilities={imageProtocolCapabilities(terminalCapabilities(), renderer.resolution)}
+                imageCapabilities={imageProtocolCapabilities(terminalCapabilities(), resolution())}
                 imageTerminal={imageTerminal()}
                 imageManager={imageManager}
               />
@@ -447,6 +507,7 @@ type DitoxKeymapActions = {
   config: ResolvedTuiConfig;
   browsePageRows: () => number;
   previewRows: () => number;
+  previewWrapWidth: () => number;
 };
 
 function useDitoxKeymap(actions: DitoxKeymapActions) {
@@ -499,6 +560,7 @@ function useDitoxKeymap(actions: DitoxKeymapActions) {
           actions.config.layout.maxFullPreviewLines,
           actions.config.labels,
           actions.config.layout,
+          actions.previewWrapWidth(),
         ).length;
       return {
         priority: 100,

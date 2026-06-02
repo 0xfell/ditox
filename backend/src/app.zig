@@ -98,6 +98,7 @@ pub fn copyEntry(allocator: std.mem.Allocator, init: std.process.Init, store: *s
         try clipboard.writeText(allocator, init, entry.content);
     }
     try store.markSelfWrite(entry.hash);
+    _ = try store.markUsed(entry.id);
     return true;
 }
 
@@ -108,6 +109,7 @@ pub fn copyEntries(allocator: std.mem.Allocator, init: std.process.Init, store: 
     try clipboard.writeText(allocator, init, content);
     const hash = @import("util.zig").sha256Hex(content);
     try store.markSelfWrite(&hash);
+    for (ids) |id| _ = try store.markUsed(id);
     return true;
 }
 
@@ -130,15 +132,18 @@ pub fn pasteEntry(
             try clipboard.pasteBytes(allocator, init, bytes, entry.mime, target_window, cfg.paste_buffer_ms, cfg.auto_paste_keybind);
         }
         try store.markSelfWrite(entry.hash);
+        _ = try store.markUsed(entry.id);
         return true;
     }
     if (!cfg.paste_enabled) {
         try clipboard.writeText(allocator, init, entry.content);
         try store.markSelfWrite(entry.hash);
+        _ = try store.markUsed(entry.id);
         return true;
     }
     try clipboard.pasteText(allocator, init, entry.content, target_window, cfg.paste_buffer_ms, cfg.auto_paste_keybind);
     try store.markSelfWrite(entry.hash);
+    _ = try store.markUsed(entry.id);
     return true;
 }
 

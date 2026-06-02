@@ -12,4 +12,4 @@
 │                                              ││                                                          │
 │                                              ││                                                          │
 └──────────────────────────────────────────────┘└─#1───────────────────────────────────────────────────────┘
-enter paste ctrl+y copy space preview / search ? help / watcher paused / stored 2                           
+enter paste ctrl+y copy space / right preview / search ? help / watcher paused / stored 2                   

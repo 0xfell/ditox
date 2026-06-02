@@ -667,6 +667,7 @@
         "hash",
         "favorite",
         "created_at_ms",
+        "last_used_at_ms",
         "byte_len",
         "source_app",
         "blob_path",
@@ -701,6 +702,12 @@
         },
         "created_at_ms": {
           "type": "integer"
+        },
+        "last_used_at_ms": {
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "byte_len": {
           "type": "integer"

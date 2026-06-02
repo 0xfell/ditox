@@ -121,6 +121,7 @@ export function PreviewPane(props: {
       visibleTextRows(),
       labels(),
       layout(),
+      textWidth(),
     );
   return (
     <box

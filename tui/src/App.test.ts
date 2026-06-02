@@ -21,6 +21,7 @@ const imageEntry: Entry = {
   hash: "abc",
   favorite: false,
   created_at_ms: 1000,
+  last_used_at_ms: null,
   byte_len: 11,
   source_app: null,
   blob_path: "/tmp/ditox-image.png",

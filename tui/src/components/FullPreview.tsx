@@ -92,7 +92,7 @@ export function FullPreview(props: {
     );
   };
   const lines = () =>
-    previewModel(props.entry, layout().maxFullPreviewLines, labels(), layout());
+    previewModel(props.entry, layout().maxFullPreviewLines, labels(), layout(), textWidth());
   const imageNoticeText = () => imagePreviewNotice(props.config, blockPreview());
   const imageFallbackVisible = () => props.entry?.kind === "image" && blockPreview().kind === "fallback" && layout().fullPreviewImageMode !== "metadata";
   const imageNoticeSpacingRows = () =>

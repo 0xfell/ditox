@@ -79,7 +79,7 @@ Initial visual polish is implemented:
 - Page up/down, home/end, select-single, and range select are available from the keymap.
 - Delete confirmation handles selected entries and warns when pinned entries are included.
 - Pinned-only view is available from the keymap.
-- Scrollable full-preview mode is available from the keymap and supports copy/paste.
+- Scrollable full-preview mode is available from the keymap and supports copy/paste; it opens with `space` or `right` and returns to the split layout with `space`, `escape`, or `left`.
 - Row metadata visibility is configurable for content-first list layouts.
 - Row content, metadata, and preview text alignment are configurable independently.
 - Row marker, metadata age, size, and pinned slots can align independently inside their configured widths.
@@ -99,6 +99,7 @@ Initial visual polish is implemented:
 - Split/full preview metadata height, header/detail line spacing, horizontal/vertical padding, horizontal/vertical body alignment, and hash lengths are configurable for compact one-line or roomier metadata rows.
 - Split/full preview body horizontal alignment and vertical placement are configurable separately from metadata alignment, so sparse preview content can sit left/center/right and top/center/bottom independently.
 - Split/full preview gutter visibility, width, alignment, and separator text are configurable for cleaner reader layouts.
+- Split and full preview soft-wrap long lines at the pane text width (continuation rows keep a blank gutter) so the full string stays visible instead of being hard-truncated at the pane edge.
 - Empty-state helper copy visibility is configurable for quieter empty/search-miss views.
 - The split preview pane can be hidden from config for list-only picker layouts.
 - Realtime TUI polling is configurable through `refreshIntervalMs` / `DITOX_TUI_REFRESH_MS`.
@@ -117,6 +118,7 @@ Initial visual polish is implemented:
 - Pin/unpin actions keep configurable success status text after the history refresh.
 - PNG, JPEG, GIF first frames, WebP, and uncompressed BMP image entries can render as OpenTUI-supersampled or text-span block previews with configurable source labels, source-notice spacing, and metadata fallback; Kitty/Sixel requests keep their configured mode and currently use capability-aware labeled block fallbacks with configurable protocol display names.
 - Image preview rows, protocol/source notices, notice spacing, and fallback rows reserve space before text metadata is windowed, so image-heavy panes stay bounded instead of crowding later preview lines.
+- The first image preview upgrades from the low-res block fallback to the native renderer as soon as the terminal reports its pixel resolution (tracked in a reactive signal), instead of staying blurry until another entry is selected.
 - The image preview renderer is configurable (`auto`, `opentui`, `text`); split/full preview image alignment, custom text block glyphs, and transparent-pixel background colors remain configurable for terminals or themes that render alternate block cells more cleanly.
 - Image copy/paste restores the stored blob to the clipboard with its MIME type instead of copying the storage hash as text.
 - TUI smoke tests now verify the real OpenTUI render path outputs image block cells, including the OpenTUI supersampled renderer.
@@ -132,7 +134,8 @@ Initial visual polish is implemented:
 - Storage repair/clean sanitizes persisted text content, recomputes previews/hashes/byte lengths, removes image rows with missing blob files, and drains pending blob-prune records.
 - Search uses SQLite FTS plus escaped literal substring fallback and relevance-tiered ordering so exact and prefix matches beat incidental matches.
 - Search also includes fuzzy subsequence matches through a SQLite scoring function, with contiguous, acronym, path, and camel-case boundary matches ranked above weaker fuzzy hits.
-- SQLite now has explicit `PRAGMA user_version` schema versioning with a tested v1-to-v2 migration path.
+- SQLite now has explicit `PRAGMA user_version` schema versioning with tested v1-to-v3 migration paths, including the v3 `last_used_at_ms` column.
+- Copying or pasting an entry (CLI or TUI) records `last_used_at_ms`; history is ordered by the most recent of capture time and last-use, so re-used clips jump to the top, the displayed row age reflects that most-recent activity, and retention/pruning treat recently-used entries as fresh. The TUI refreshes after copy/paste and keeps the cursor on the entry it just used.
 - JSON-RPC contracts now expose method-specific request and success schemas, generated TypeScript discriminated unions, and backend method-specific param validation.
 
 Remaining polish:

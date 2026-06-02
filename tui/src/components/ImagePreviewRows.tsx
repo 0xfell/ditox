@@ -1,10 +1,12 @@
 import type { BoxRenderable, OptimizedBuffer } from "@opentui/core";
-import { For, onCleanup } from "solid-js";
+import { createMemo, For, onCleanup, Show } from "solid-js";
 import type { ImageBlockPreview as ImageBlockPreviewModel } from "../image-preview";
 import type { TerminalImageManagerLike, TerminalImageState } from "../terminal-image";
 import { computeNativeImagePlacement, selectNativeImageProtocol } from "../terminal-image";
 import type { Entry } from "../types";
 import type { ImagePreviewAlign, ImagePreviewMode, ImagePreviewRenderer } from "../ui-config";
+
+type RenderedPreview = Extract<ImageBlockPreviewModel, { kind: "rendered" }>;
 
 export function ImagePreviewRows(props: {
   preview: ImageBlockPreviewModel;
@@ -18,10 +20,27 @@ export function ImagePreviewRows(props: {
   terminal?: TerminalImageState;
   imageManager?: TerminalImageManagerLike;
 }) {
-  if (props.preview.kind !== "rendered") return null;
-  const nativeRows = nativeImageRows(props);
-  if (nativeRows) return nativeRows;
+  // Decide native-vs-block reactively. The terminal's pixel resolution arrives
+  // asynchronously, so on first paint it can be null and the native path is
+  // unavailable; this memo re-runs once the resolution lands so the first image
+  // upgrades from the low-res block fallback to full resolution in place,
+  // without needing to navigate to another entry and back.
+  const nativeRows = createMemo(() => nativeImageRows(props));
+  return (
+    <Show when={props.preview.kind === "rendered" ? (props.preview as RenderedPreview) : null}>
+      {(preview) => (
+        <Show
+          when={nativeRows()}
+          fallback={<BlockImageRows preview={preview()} renderer={props.renderer} blockGlyph={props.blockGlyph} align={props.align} width={props.width} />}
+        >
+          {(rows) => rows()}
+        </Show>
+      )}
+    </Show>
+  );
+}
 
+function BlockImageRows(props: { preview: RenderedPreview; renderer: ImagePreviewRenderer; blockGlyph: string; align?: ImagePreviewAlign; width?: number }) {
   const imageWidth = props.preview.native.cols;
   const contentWidth = Math.max(imageWidth, Math.floor(props.width ?? imageWidth));
   const imageHeight = props.preview.native.cellRows;

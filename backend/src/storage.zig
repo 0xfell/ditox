@@ -21,7 +21,7 @@ const sqlite3_bind_text_opaque = @extern(
 );
 const sqlite_transient: ?*const anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
 
-pub const current_schema_version: i64 = 2;
+pub const current_schema_version: i64 = 3;
 
 pub const Stats = struct {
     entries: i64,
@@ -145,7 +145,7 @@ pub const Storage = struct {
         const has_query = fts_query != null and fts_query.?.len > 0;
 
         try w.writeAll(
-            \\SELECT entries.id, entries.kind, entries.mime, entries.content, entries.preview, entries.hash, entries.favorite, entries.created_at_ms, entries.byte_len, entries.source_app, entries.blob_path, entries.image_width, entries.image_height
+            \\SELECT entries.id, entries.kind, entries.mime, entries.content, entries.preview, entries.hash, entries.favorite, entries.created_at_ms, entries.byte_len, entries.source_app, entries.blob_path, entries.image_width, entries.image_height, entries.last_used_at_ms
             \\FROM entries
         );
 
@@ -175,10 +175,10 @@ pub const Storage = struct {
                 \\   ELSE 5
                 \\ END ASC,
                 \\ max(ditox_fuzzy_score(entries.content, ?), ditox_fuzzy_score(entries.preview, ?)) DESC,
-                \\ created_at_ms DESC, id DESC LIMIT ?
+                \\ max(entries.created_at_ms, COALESCE(entries.last_used_at_ms, 0)) DESC, id DESC LIMIT ?
             );
         } else {
-            try w.writeAll(" ORDER BY favorite DESC, created_at_ms DESC, id DESC LIMIT ?");
+            try w.writeAll(" ORDER BY favorite DESC, max(created_at_ms, COALESCE(last_used_at_ms, 0)) DESC, id DESC LIMIT ?");
         }
 
         const stmt = try self.prepare(sql_writer.written());
@@ -237,7 +237,7 @@ pub const Storage = struct {
 
     pub fn get(self: *Storage, id: i64) !?models.Entry {
         const stmt = try self.prepare(
-            \\SELECT id, kind, mime, content, preview, hash, favorite, created_at_ms, byte_len, source_app, blob_path, image_width, image_height
+            \\SELECT id, kind, mime, content, preview, hash, favorite, created_at_ms, byte_len, source_app, blob_path, image_width, image_height, last_used_at_ms
             \\FROM entries WHERE id = ?
         );
         defer _ = c.sqlite3_finalize(stmt);
@@ -264,6 +264,18 @@ pub const Storage = struct {
         defer _ = c.sqlite3_finalize(stmt);
         try bindInt64(stmt, 1, if (value) 1 else 0);
         try bindInt64(stmt, 2, id);
+        try self.stepDone(stmt);
+        return c.sqlite3_changes(self.db) > 0;
+    }
+
+    /// Records that an entry was used (copied/pasted) so it sorts to the top of
+    /// the history ahead of older, unused entries. Uses millisecond precision
+    /// (created_at_ms is only second-granular) so a re-used entry reliably sorts
+    /// above siblings captured in the same second.
+    pub fn markUsed(self: *Storage, id: i64) !bool {
+        const stmt = try self.prepare("UPDATE entries SET last_used_at_ms = CAST((julianday('now') - 2440587.5) * 86400000.0 AS INTEGER) WHERE id = ?");
+        defer _ = c.sqlite3_finalize(stmt);
+        try bindInt64(stmt, 1, id);
         try self.stepDone(stmt);
         return c.sqlite3_changes(self.db) > 0;
     }
@@ -412,6 +424,7 @@ pub const Storage = struct {
 
             if (version < 1) try self.migrateToV1();
             if (version < 2) try self.migrateToV2();
+            if (version < 3) try self.migrateToV3();
             try self.setSchemaVersion(current_schema_version);
 
             try self.exec("COMMIT");
@@ -432,6 +445,10 @@ pub const Storage = struct {
         try self.ensureColumn("entries", "image_width", "ALTER TABLE entries ADD COLUMN image_width INTEGER");
         try self.ensureColumn("entries", "image_height", "ALTER TABLE entries ADD COLUMN image_height INTEGER");
         try self.resetSearchSchema();
+    }
+
+    fn migrateToV3(self: *Storage) !void {
+        try self.ensureColumn("entries", "last_used_at_ms", "ALTER TABLE entries ADD COLUMN last_used_at_ms INTEGER");
     }
 
     fn resetSearchSchema(self: *Storage) !void {
@@ -588,7 +605,7 @@ pub const Storage = struct {
             \\DELETE FROM entries
             \\WHERE favorite = 0
             \\  AND id NOT IN (
-            \\    SELECT id FROM entries ORDER BY favorite DESC, created_at_ms DESC, id DESC LIMIT ?
+            \\    SELECT id FROM entries ORDER BY favorite DESC, max(created_at_ms, COALESCE(last_used_at_ms, 0)) DESC, id DESC LIMIT ?
             \\  )
         );
         defer _ = c.sqlite3_finalize(stmt);
@@ -602,7 +619,7 @@ pub const Storage = struct {
         const stmt = try self.prepare(
             \\DELETE FROM entries
             \\WHERE favorite = 0
-            \\  AND created_at_ms < ?
+            \\  AND max(created_at_ms, COALESCE(last_used_at_ms, 0)) < ?
         );
         defer _ = c.sqlite3_finalize(stmt);
         try bindInt64(stmt, 1, cutoff);
@@ -784,6 +801,7 @@ pub const Storage = struct {
             .blob_path = try columnTextDupOptional(self.allocator, stmt, 10),
             .image_width = columnNullableInt64(stmt, 11),
             .image_height = columnNullableInt64(stmt, 12),
+            .last_used_at_ms = columnNullableInt64(stmt, 13),
         };
     }
 
@@ -1260,6 +1278,7 @@ test "storage migrates v1 database to current schema" {
         try std.testing.expect(entry.blob_path == null);
         try std.testing.expect(entry.image_width == null);
         try std.testing.expect(entry.image_height == null);
+        try std.testing.expect(entry.last_used_at_ms == null);
     }
     {
         const entries = try store.list("legacy", "all", 10);
@@ -1543,4 +1562,66 @@ test "storage runtime state supports watcher pause and self-write guard" {
     defer allocator.free(hash);
     try std.testing.expectEqualStrings("abc", hash);
     try std.testing.expect((try store.takeSelfWriteHash()) == null);
+}
+
+test "storage markUsed promotes an older entry above newer ones" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const data_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(data_dir);
+
+    var cfg = try config.testConfig(allocator, data_dir);
+    defer cfg.deinit();
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, cfg.image_dir);
+
+    var store = try Storage.open(allocator, cfg, std.testing.io);
+    defer store.close();
+
+    const older_id = try store.addText(cfg, "older entry");
+    const newer_id = try store.addText(cfg, "newer entry");
+
+    // Pin distinct creation timestamps so ordering is deterministic regardless
+    // of the test running within a single wall-clock second.
+    const base = try store.nowMs() - 60_000;
+    {
+        const stmt = try store.prepare("UPDATE entries SET created_at_ms = ? WHERE id = ?");
+        defer _ = c.sqlite3_finalize(stmt);
+        try bindInt64(stmt, 1, base);
+        try bindInt64(stmt, 2, older_id);
+        try store.stepDone(stmt);
+    }
+    {
+        const stmt = try store.prepare("UPDATE entries SET created_at_ms = ? WHERE id = ?");
+        defer _ = c.sqlite3_finalize(stmt);
+        try bindInt64(stmt, 1, base + 1000);
+        try bindInt64(stmt, 2, newer_id);
+        try store.stepDone(stmt);
+    }
+
+    {
+        const entries = try store.list("", "all", 10);
+        defer {
+            for (entries) |entry| entry.deinit(allocator);
+            allocator.free(entries);
+        }
+        try std.testing.expectEqual(@as(usize, 2), entries.len);
+        try std.testing.expectEqual(newer_id, entries[0].id);
+        try std.testing.expectEqual(older_id, entries[1].id);
+        try std.testing.expect(entries[0].last_used_at_ms == null);
+    }
+
+    try std.testing.expect(try store.markUsed(older_id));
+
+    {
+        const entries = try store.list("", "all", 10);
+        defer {
+            for (entries) |entry| entry.deinit(allocator);
+            allocator.free(entries);
+        }
+        try std.testing.expectEqual(older_id, entries[0].id);
+        try std.testing.expectEqual(newer_id, entries[1].id);
+        try std.testing.expect(entries[0].last_used_at_ms != null);
+    }
 }
