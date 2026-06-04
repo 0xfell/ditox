@@ -96,11 +96,17 @@ function OpenTuiImageRows(props: { preview: Extract<ImageBlockPreviewModel, { ki
   // renderer knows the cell->pixel mapping, but neither the preview model nor the
   // box geometry changes when the resolution lands, so the first image would stay
   // at its initial (blurry) draw until an unrelated re-render (e.g. moving the
-  // selection) happened. Request a fresh render whenever the resolution arrives
-  // or changes so the supersample buffer is redrawn in place.
+  // selection) happened. Request a single fresh render only when the resolution
+  // VALUE actually changes (it arrives as a new object reference on every tick),
+  // otherwise requestRender feeds back into itself and the image flickers.
+  let lastResolutionKey: string | null = null;
   createEffect(() => {
     const res = props.resolution;
-    if (res && res.width > 0 && res.height > 0) renderer.requestRender();
+    const key = res && res.width > 0 && res.height > 0 ? `${res.width}x${res.height}` : null;
+    if (key !== null && key !== lastResolutionKey) {
+      lastResolutionKey = key;
+      renderer.requestRender();
+    }
   });
   const drawImage = function (this: BoxRenderable, buffer: OptimizedBuffer) {
     const image = props.preview.native;
