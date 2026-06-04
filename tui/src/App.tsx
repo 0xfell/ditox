@@ -642,7 +642,7 @@ export function runtimeKeysForBinding(keys: string[]): string[] {
   const expanded: string[] = [];
   const seen = new Set<string>();
   for (const rawKey of keys) {
-    const key = normalizeKey(rawKey);
+    const key = runtimeSequenceKey(rawKey);
     for (const candidate of [key, openTuiRuntimeAlias(key)]) {
       if (candidate === null || seen.has(candidate)) continue;
       seen.add(candidate);
@@ -650,6 +650,18 @@ export function runtimeKeysForBinding(keys: string[]): string[] {
     }
   }
   return expanded;
+}
+
+// Ditox spells multi-stroke chords with spaces (e.g. "c a", "ctrl+x s") for
+// readability, but @opentui/keymap reads a literal space as the `space` key and
+// otherwise matches strokes greedily from contiguous characters. Normalize each
+// stroke and concatenate so "c a" -> "ca" (strokes [c, a]) and "ctrl+x s" ->
+// "ctrl+xs" (strokes [ctrl+x, s]). Single-stroke bindings (including the literal
+// "space"/" " preview key) have no inter-stroke whitespace and pass through.
+export function runtimeSequenceKey(rawKey: string): string {
+  const strokes = rawKey.trim().split(/\s+/).filter(Boolean);
+  if (strokes.length <= 1) return normalizeKey(rawKey);
+  return strokes.map((stroke) => normalizeKey(stroke)).join("");
 }
 
 function openTuiRuntimeAlias(key: string): string | null {

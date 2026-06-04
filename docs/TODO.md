@@ -48,6 +48,7 @@ Initial visual polish is implemented:
 - Improved layout sizing, list scrolling, row truncation, preview behavior, and empty states.
 - Semantic status colors and clearer runtime error templates for `ditoxd`, `wl-copy`, `hyprctl`, paste failures, unknown backend exit status, and generic backend/RPC failures.
 - `@opentui/keymap` is the default key handling layer.
+- Multi-stroke chord bindings (spelled with spaces in config, e.g. `c a`/`c t`/`c i`/`c x`) are normalized to the contiguous form `@opentui/keymap` expects before registration, so the clear-history chords actually fire; previously the literal space was read as the `space` key, leaving the clear chords dead. Covered by App + render regression tests.
 - Search, help, delete, and clear confirmations now share overlay structure while each overlay mode can override its own surface styling.
 - Presentation helpers have direct Bun test coverage.
 - File-backed TUI customization is implemented through `DITOX_TUI_CONFIG` or `~/.config/ditox/tui.json`.
@@ -100,6 +101,7 @@ Initial visual polish is implemented:
 - Split/full preview body horizontal alignment and vertical placement are configurable separately from metadata alignment, so sparse preview content can sit left/center/right and top/center/bottom independently.
 - Split/full preview gutter visibility, width, alignment, and separator text are configurable for cleaner reader layouts.
 - Split and full preview soft-wrap long lines at the pane text width (continuation rows keep a blank gutter) so the full string stays visible instead of being hard-truncated at the pane edge.
+- Split preview metadata header/detail rows hard-truncate to the pane width (with the truncation marker) instead of soft-wrapping, so at narrow widths a long header (e.g. the hash) can no longer bleed an accent-colored fragment into the detail row. Covered by a narrow-width render regression test.
 - Empty-state helper copy visibility is configurable for quieter empty/search-miss views.
 - The split preview pane can be hidden from config for list-only picker layouts.
 - Realtime TUI polling is configurable through `refreshIntervalMs` / `DITOX_TUI_REFRESH_MS`.
@@ -118,7 +120,7 @@ Initial visual polish is implemented:
 - Pin/unpin actions keep configurable success status text after the history refresh.
 - PNG, JPEG, GIF first frames, WebP, and uncompressed BMP image entries can render as OpenTUI-supersampled or text-span block previews with configurable source labels, source-notice spacing, and metadata fallback; Kitty/Sixel requests keep their configured mode and currently use capability-aware labeled block fallbacks with configurable protocol display names.
 - Image preview rows, protocol/source notices, notice spacing, and fallback rows reserve space before text metadata is windowed, so image-heavy panes stay bounded instead of crowding later preview lines.
-- The first image preview upgrades from the low-res block fallback to the native renderer as soon as the terminal reports its pixel resolution (tracked in a reactive signal), instead of staying blurry until another entry is selected.
+- The first image preview upgrades from the low-res block fallback to the native renderer as soon as the terminal reports its pixel resolution (tracked in a reactive signal), instead of staying blurry until another entry is selected. The OpenTUI supersampled block renderer also re-requests a render when the pixel resolution lands, so a first/selected image redraws at full fidelity in place instead of staying at its initial blurry draw until the selection moves.
 - The image preview renderer is configurable (`auto`, `opentui`, `text`); split/full preview image alignment, custom text block glyphs, and transparent-pixel background colors remain configurable for terminals or themes that render alternate block cells more cleanly.
 - Image copy/paste restores the stored blob to the clipboard with its MIME type instead of copying the storage hash as text.
 - TUI smoke tests now verify the real OpenTUI render path outputs image block cells, including the OpenTUI supersampled renderer.

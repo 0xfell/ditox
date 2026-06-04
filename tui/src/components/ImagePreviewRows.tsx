@@ -1,5 +1,6 @@
 import type { BoxRenderable, OptimizedBuffer } from "@opentui/core";
-import { createMemo, For, onCleanup, Show } from "solid-js";
+import { useRenderer } from "@opentui/solid";
+import { createEffect, createMemo, For, onCleanup, Show } from "solid-js";
 import type { ImageBlockPreview as ImageBlockPreviewModel } from "../image-preview";
 import type { TerminalImageManagerLike, TerminalImageState } from "../terminal-image";
 import { computeNativeImagePlacement, selectNativeImageProtocol } from "../terminal-image";
@@ -31,7 +32,16 @@ export function ImagePreviewRows(props: {
       {(preview) => (
         <Show
           when={nativeRows()}
-          fallback={<BlockImageRows preview={preview()} renderer={props.renderer} blockGlyph={props.blockGlyph} align={props.align} width={props.width} />}
+          fallback={
+            <BlockImageRows
+              preview={preview()}
+              renderer={props.renderer}
+              blockGlyph={props.blockGlyph}
+              align={props.align}
+              width={props.width}
+              resolution={props.terminal?.resolution ?? null}
+            />
+          }
         >
           {(rows) => rows()}
         </Show>
@@ -40,12 +50,23 @@ export function ImagePreviewRows(props: {
   );
 }
 
-function BlockImageRows(props: { preview: RenderedPreview; renderer: ImagePreviewRenderer; blockGlyph: string; align?: ImagePreviewAlign; width?: number }) {
+function BlockImageRows(props: {
+  preview: RenderedPreview;
+  renderer: ImagePreviewRenderer;
+  blockGlyph: string;
+  align?: ImagePreviewAlign;
+  width?: number;
+  resolution?: { width: number; height: number } | null;
+}) {
   const imageWidth = props.preview.native.cols;
   const contentWidth = Math.max(imageWidth, Math.floor(props.width ?? imageWidth));
   const imageHeight = props.preview.native.cellRows;
   const leftPad = imageAlignPadding(contentWidth, imageWidth, props.align ?? "left");
-  const imageRows = shouldUseOpenTuiRenderer(props.renderer, props.blockGlyph) ? <OpenTuiImageRows preview={props.preview} /> : <TextImageRows preview={props.preview} />;
+  const imageRows = shouldUseOpenTuiRenderer(props.renderer, props.blockGlyph) ? (
+    <OpenTuiImageRows preview={props.preview} resolution={props.resolution ?? null} />
+  ) : (
+    <TextImageRows preview={props.preview} />
+  );
 
   return (
     <box flexDirection="row" width={contentWidth} height={imageHeight} flexShrink={0}>
@@ -68,7 +89,19 @@ function imageAlignPadding(width: number, imageWidth: number, align: ImagePrevie
   return 0;
 }
 
-function OpenTuiImageRows(props: { preview: Extract<ImageBlockPreviewModel, { kind: "rendered" }> }) {
+function OpenTuiImageRows(props: { preview: Extract<ImageBlockPreviewModel, { kind: "rendered" }>; resolution?: { width: number; height: number } | null }) {
+  const renderer = useRenderer();
+  // The terminal reports its pixel resolution asynchronously, several frames
+  // after the first paint. drawSuperSampleBuffer renders correctly only once the
+  // renderer knows the cell->pixel mapping, but neither the preview model nor the
+  // box geometry changes when the resolution lands, so the first image would stay
+  // at its initial (blurry) draw until an unrelated re-render (e.g. moving the
+  // selection) happened. Request a fresh render whenever the resolution arrives
+  // or changes so the supersample buffer is redrawn in place.
+  createEffect(() => {
+    const res = props.resolution;
+    if (res && res.width > 0 && res.height > 0) renderer.requestRender();
+  });
   const drawImage = function (this: BoxRenderable, buffer: OptimizedBuffer) {
     const image = props.preview.native;
     const pixels = image.pixels as unknown as Parameters<OptimizedBuffer["drawSuperSampleBuffer"]>[2];

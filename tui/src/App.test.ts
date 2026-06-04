@@ -5,10 +5,12 @@ import {
   fullPreviewReservedRows,
   imageProtocolCapabilities,
   runtimeKeysForBinding,
+  runtimeSequenceKey,
   shutdownTui,
   terminalExitResetSequence,
   writeTerminalExitReset,
 } from "./App";
+import { createTestKeymap } from "@opentui/keymap/testing";
 import { resolveTuiConfig } from "./tui-config";
 import type { Entry } from "./types";
 
@@ -35,6 +37,45 @@ describe("App helpers", () => {
     expect(runtimeKeysForBinding(["return"])).toEqual(["enter", "return"]);
     expect(runtimeKeysForBinding(["ctrl+return"])).toEqual(["ctrl+enter", "ctrl+return"]);
     expect(runtimeKeysForBinding(["enter", "return"])).toEqual(["enter", "return"]);
+  });
+
+  test("collapses multi-stroke chord whitespace into contiguous keymap sequences", () => {
+    // Regression: "c a" was handed to @opentui/keymap verbatim, which reads the
+    // space as the `space` key (strokes [c, space, a]), so the clear chords never
+    // fired. Each stroke must be normalized and concatenated.
+    expect(runtimeSequenceKey("c a")).toBe("ca");
+    expect(runtimeSequenceKey("c t")).toBe("ct");
+    expect(runtimeSequenceKey("c i")).toBe("ci");
+    expect(runtimeSequenceKey("c x")).toBe("cx");
+    expect(runtimeSequenceKey("ctrl+x s")).toBe("ctrl+xs");
+    // Single strokes (including the literal space preview key) pass through.
+    expect(runtimeSequenceKey("space")).toBe("space");
+    expect(runtimeSequenceKey(" ")).toBe("space");
+    expect(runtimeSequenceKey("shift+tab")).toBe("shift+tab");
+    expect(runtimeSequenceKey("enter")).toBe("enter");
+    expect(runtimeKeysForBinding(["c a"])).toEqual(["ca"]);
+  });
+
+  test("default clear chords parse into two-stroke sequences in the real keymap", () => {
+    const config = resolveTuiConfig();
+    const km = createTestKeymap({ defaultKeys: true });
+    const parseSequence = (km.keymap as unknown as { parseKeySequence: (key: string) => unknown }).parseKeySequence.bind(km.keymap);
+    type SeqPart = { display?: string; stroke?: { name?: string } };
+    const strokeNames = (key: string): string[] => {
+      const parsed = parseSequence(key) as SeqPart[] | { parts?: SeqPart[] };
+      const parts = Array.isArray(parsed) ? parsed : (parsed.parts ?? []);
+      return parts.map((part) => part.display ?? part.stroke?.name ?? "?");
+    };
+    for (const binding of [config.keyBindings.clearAll, config.keyBindings.clearText, config.keyBindings.clearImages, config.keyBindings.clearAllIncludingPinned]) {
+      const runtime = runtimeKeysForBinding(binding);
+      expect(runtime.length).toBeGreaterThan(0);
+      // Each default clear chord is "c <letter>" -> two strokes [c, <letter>].
+      const names = strokeNames(runtime[0]!);
+      expect(names.length).toBe(2);
+      expect(names[0]).toBe("c");
+      expect(names).not.toContain("space");
+    }
+    km.cleanup();
   });
 
   test("uses copy-only when paste is requested without a target window", async () => {

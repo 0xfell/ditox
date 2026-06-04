@@ -1820,6 +1820,34 @@ describe("OpenTUI render snapshots", () => {
     expect(columnOf(fullFrame, "BODY")).toBe(36);
   });
 
+  test("truncates split preview metadata at narrow width instead of wrapping into the next row", async () => {
+    // Regression: at very narrow preview widths the metadata header (which holds
+    // the hash) wrapped, bleeding a stray accent-colored fragment onto the detail
+    // row. Each metadata line must hard-truncate to the pane width and stay on its
+    // own row.
+    const config = resolveTuiConfig();
+    const entry = textEntry(11, "alpha short clip", false);
+    const frame = await captureFrame(
+      () => <PreviewPane config={config} entry={entry} rows={6} width={24} widthPercent={100} />,
+      24,
+      6,
+    );
+    const lines = frame.replace(/\n$/, "").split("\n");
+    // The header line carries kind + id + hash label; with a 12-char hash it must
+    // be clipped with the truncation marker rather than wrapping.
+    const headerLine = lines.find((line) => line.includes("hash"));
+    expect(headerLine, "header line").toBeDefined();
+    expect(headerLine!).toContain("...");
+    // The mime detail must appear on a different row than the header, and the
+    // header row must not contain any of the mime text (no wrap bleed).
+    const mimeLine = lines.find((line) => line.includes("text/plain"));
+    expect(mimeLine, "mime line").toBeDefined();
+    expect(headerLine!).not.toContain("text/plain");
+    expect(lines.indexOf(headerLine!)).not.toBe(lines.indexOf(mimeLine!));
+    // Every rendered line stays within the pane width (no overflow).
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(24);
+  });
+
   test("can vertically align split and full preview metadata", async () => {
     const config = resolveTuiConfig({
       labels: {

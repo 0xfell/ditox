@@ -40,6 +40,11 @@ export function PreviewPane(props: {
   const labels = () => props.config.labels;
   const [loadedBlockPreview, setLoadedBlockPreview] = createSignal<ImageBlockPreviewModel | null>(null);
   const textWidth = () => Math.max(1, props.width - (layout().showPreviewGutter ? layout().previewTextWidthInset : layout().previewPaddingX * 2));
+  // Width available to the metadata header/detail text once the preview border,
+  // preview padding, and metadata padding are subtracted. Used to hard-truncate
+  // each line so a long header (e.g. full hash) cannot wrap into the detail row.
+  const metaTextWidth = () =>
+    Math.max(1, props.width - (props.config.chrome.previewBorder ? 2 : 0) - layout().previewPaddingX * 2 - layout().previewMetaPaddingX * 2);
   const blockPreviewRequest = createMemo(() => ({
     entry: props.entry,
     maxWidth: Math.min(textWidth(), layout().imagePreviewMaxWidth),
@@ -146,7 +151,7 @@ export function PreviewPane(props: {
       bottomTitleAlignment={props.config.chrome.previewBottomTitleAlignment}
     >
       <Show when={layout().showMetadata ? props.entry : undefined}>
-        {(entry) => <PreviewMeta config={props.config} entry={entry()} />}
+        {(entry) => <PreviewMeta config={props.config} entry={entry()} width={metaTextWidth()} />}
       </Show>
       <box width="100%" flexGrow={1} flexDirection="column" justifyContent={verticalJustify(layout().previewBodyVerticalAlign)}>
         <Show when={props.entry?.kind === "image" && blockPreview().kind === "rendered"}>
@@ -231,14 +236,29 @@ function imagePreviewNotice(config: ResolvedTuiConfig, preview: ImageBlockPrevie
   return null;
 }
 
-function PreviewMeta(props: { config: ResolvedTuiConfig; entry: Entry }) {
+// Clip a single metadata line to the available width without wrapping. Unlike
+// truncateText this preserves the template's intentional spacing (e.g. the
+// double-space field separators) and only collapses newlines that would force a
+// soft wrap into the adjacent metadata row.
+export function clipMetaLine(value: string, width: number, marker: string): string {
+  const target = Math.max(0, Math.floor(width));
+  if (target === 0) return "";
+  const oneLine = String(value ?? "").replace(/[\r\n]+/g, " ");
+  const chars = Array.from(oneLine);
+  if (chars.length <= target) return oneLine;
+  const mark = marker.length > 0 ? marker : "...";
+  if (target <= mark.length) return chars.slice(0, target).join("");
+  return `${chars.slice(0, target - mark.length).join("")}${mark}`;
+}
+
+function PreviewMeta(props: { config: ResolvedTuiConfig; entry: Entry; width: number }) {
   const style = () => surface(props.config, "previewMeta");
   const labels = () => props.config.labels;
   const values = () => previewMetaTemplateValues(props.entry, labels(), props.config.layout.previewMetaHashLength);
   const header = () =>
-    formatTemplate(labels().previewMetaHeaderTemplate, values());
+    clipMetaLine(formatTemplate(labels().previewMetaHeaderTemplate, values()), props.width, labels().textTruncationMarker);
   const details = () =>
-    formatTemplate(labels().previewMetaDetailsTemplate, values());
+    clipMetaLine(formatTemplate(labels().previewMetaDetailsTemplate, values()), props.width, labels().textTruncationMarker);
   const detailsVisible = () => props.config.layout.previewMetaHeight >= 2 + props.config.layout.previewMetaLineSpacing;
   return (
     <box
