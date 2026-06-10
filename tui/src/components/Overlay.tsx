@@ -229,25 +229,64 @@ function helpColumns(config: ResolvedTuiConfig, width: number, knownWidth: boole
     chunks.push(rows.slice(start, start + rowsPerColumn));
   }
   const available = knownWidth ? Math.max(1, width - gap * Math.max(0, chunks.length - 1)) : Number.MAX_SAFE_INTEGER;
-  const naturalWidths = chunks.map((chunk) => naturalHelpColumnWidth(config, chunk, knownWidth));
+  const naturalKeyWidths = chunks.map((chunk) => helpKeyColumnWidth(config, chunk, Number.MAX_SAFE_INTEGER, knownWidth));
+  const naturalActionWidths = chunks.map((chunk) => naturalHelpActionWidth(config, chunk));
+  const naturalWidths = chunks.map((_, index) => Math.max(1, (naturalKeyWidths[index] ?? 1) + (naturalActionWidths[index] ?? 0)));
   const naturalTotal = naturalWidths.reduce((sum, next) => sum + next, 0);
-  const baseWidth = knownWidth && naturalTotal > available ? Math.max(1, Math.floor(available / chunks.length)) : 0;
-  const remainder = knownWidth && naturalTotal > available ? Math.max(0, available - baseWidth * chunks.length) : 0;
 
+  if (!knownWidth || naturalTotal <= available) {
+    return chunks.map((chunk, index) => {
+      const widthForColumn = naturalWidths[index] ?? 1;
+      const keyWidth = helpKeyColumnWidth(config, chunk, widthForColumn, knownWidth);
+      return { rows: chunk, width: widthForColumn, keyWidth, actionWidth: Math.max(0, widthForColumn - keyWidth) };
+    });
+  }
+
+  // Not enough room for every column's natural width. Key strings are the
+  // whole point of a keymap, so they keep their natural width and the action
+  // texts share the remaining space by need (an equal whole-column split used
+  // to waste space in short columns while truncating long ones).
+  const keysTotal = naturalKeyWidths.reduce((sum, next) => sum + next, 0);
+  if (keysTotal < available) {
+    const actionWidths = distributeByNeed(naturalActionWidths, available - keysTotal);
+    return chunks.map((chunk, index) => {
+      const keyWidth = naturalKeyWidths[index] ?? 1;
+      const actionWidth = actionWidths[index] ?? 0;
+      return { rows: chunk, width: Math.max(1, keyWidth + actionWidth), keyWidth, actionWidth };
+    });
+  }
+
+  // Extreme narrow terminals: even the keys alone overflow; fall back to an
+  // equal split so every column shows something.
+  const baseWidth = Math.max(1, Math.floor(available / chunks.length));
+  const remainder = Math.max(0, available - baseWidth * chunks.length);
   return chunks.map((chunk, index) => {
-    const widthForColumn = knownWidth
-      ? naturalTotal > available
-        ? baseWidth + (index < remainder ? 1 : 0)
-        : naturalWidths[index] ?? 1
-      : naturalWidths[index] ?? 1;
+    const widthForColumn = baseWidth + (index < remainder ? 1 : 0);
     const keyWidth = helpKeyColumnWidth(config, chunk, widthForColumn, knownWidth);
-    return {
-      rows: chunk,
-      width: widthForColumn,
-      keyWidth,
-      actionWidth: Math.max(0, widthForColumn - keyWidth),
-    };
+    return { rows: chunk, width: widthForColumn, keyWidth, actionWidth: Math.max(0, widthForColumn - keyWidth) };
   });
+}
+
+/** Distributes `available` cells across columns, never granting more than a
+ * column's need; surplus from short columns flows to longer ones. */
+function distributeByNeed(needs: number[], available: number): number[] {
+  const out = needs.map(() => 0);
+  let remaining = Math.max(0, Math.floor(available));
+  let active = needs.map((_, index) => index).filter((index) => (needs[index] ?? 0) > 0);
+  while (remaining > 0 && active.length > 0) {
+    const share = Math.max(1, Math.floor(remaining / active.length));
+    let granted = 0;
+    for (const index of active) {
+      if (remaining - granted <= 0) break;
+      const grant = Math.min((needs[index] ?? 0) - (out[index] ?? 0), share, remaining - granted);
+      out[index] = (out[index] ?? 0) + grant;
+      granted += grant;
+    }
+    remaining -= granted;
+    active = active.filter((index) => (out[index] ?? 0) < (needs[index] ?? 0));
+    if (granted === 0) break;
+  }
+  return out;
 }
 
 function helpRowSlots(capacity: number, spacing: number): number {
@@ -258,11 +297,9 @@ function helpColumnGap(width: number): number {
   return width >= 96 ? 4 : 3;
 }
 
-function naturalHelpColumnWidth(config: ResolvedTuiConfig, rows: HelpRow[], dynamic: boolean): number {
-  const keyWidth = helpKeyColumnWidth(config, rows, Number.MAX_SAFE_INTEGER, dynamic);
+function naturalHelpActionWidth(config: ResolvedTuiConfig, rows: HelpRow[]): number {
   const actionWidth = Math.max(0, ...rows.map((row) => Array.from(row.action).length));
-  const cappedActionWidth = config.layout.helpOverlayActionMaxWidth > 0 ? Math.min(actionWidth, config.layout.helpOverlayActionMaxWidth) : actionWidth;
-  return Math.max(1, keyWidth + cappedActionWidth);
+  return config.layout.helpOverlayActionMaxWidth > 0 ? Math.min(actionWidth, config.layout.helpOverlayActionMaxWidth) : actionWidth;
 }
 
 function helpKeyColumnWidth(config: ResolvedTuiConfig, rows: HelpRow[], columnWidth: number, dynamic: boolean): number {

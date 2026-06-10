@@ -2832,6 +2832,11 @@ describe("OpenTUI render snapshots", () => {
         copyPaste: "ctrl+p,enter",
         searchCopyMatches: "ctrl+g",
       },
+      layout: {
+        // This scene renders the help overlay as a single column (the overlay
+        // has no measured width here); keep enough rows for the whole keymap.
+        helpOverlayHeight: 18,
+      },
     });
     const clearState = {
       ...initialState(),

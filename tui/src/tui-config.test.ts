@@ -69,7 +69,7 @@ describe("tui config", () => {
     expect(config.layout.confirmOverlayHeight).toBe(3);
     expect(config.layout.confirmPinnedExtraRows).toBe(1);
     expect(config.layout.clearOverlayHeight).toBe(4);
-    expect(config.layout.helpOverlayHeight).toBe(16);
+    expect(config.layout.helpOverlayHeight).toBe(12);
     expect(config.layout.minPaneWidth).toBe(24);
     expect(config.layout.splitPaneGap).toBe(1);
     expect(config.layout.splitPaneWidthInset).toBe(6);
@@ -513,7 +513,7 @@ describe("tui config", () => {
     expect(config.labels.statusPinTemplate).toBe("{prefix} {entryIdPrefix}{id}");
     expect(config.labels.statusClearedTemplate).toBe("{prefix} {count}; {pinned}");
     expect(config.labels.statusEntriesTemplate).toBe("{count} {entries}");
-    expect(config.labels.helpSearchCopyMatches).toBe("copy matched search results");
+    expect(config.labels.helpSearchCopyMatches).toBe("copy search matches");
     expect(config.labels.helpMarkSingle).toBe("mark / isolate / clear");
     expect(config.labels.helpOutput).toBe("print selected");
     expect(config.labels.helpPreviewNavigation).toBe("scroll preview");
@@ -2792,7 +2792,7 @@ describe("tui config", () => {
     expect(statusHint(config)).toBe("/:find :: ctrl+o | SPC:inspect :: ctrl+p:send :: f1:keys");
     expect(helpRows(config).some((row) => row.keys.includes("ctrl+p"))).toBe(true);
     expect(helpRows(config).some((row) => row.keys.includes("tab"))).toBe(true);
-    expect(helpRows(config).some((row) => row.keys.includes("ctrl+g") && row.action.includes("matched"))).toBe(true);
+    expect(helpRows(config).some((row) => row.keys.includes("ctrl+g") && row.action.includes("search matches"))).toBe(true);
     expect(helpRows(config).some((row) => row.keys === "UP | k + DN | j")).toBe(true);
     expect(helpRows(config).some((row) => row.action.includes("pinned"))).toBe(true);
   });

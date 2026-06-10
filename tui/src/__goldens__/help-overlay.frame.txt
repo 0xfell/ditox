@@ -1,17 +1,17 @@
 ╭─bindings─────────────────────────────────────────────────────╮
-│up / k  down / j  move sele...   x  s  shift+s         mark...│
-│pgup  pgdn        page up /...   shift+up  shift+down  exte...│
-│home  end         jump firs...   /  tab                sear...│
-│space / right     open preview   ctrl+g                copy...│
-│shift+tab         show pinn...   p  d / bksp           pin ...│
-│ctrl+p            send sele...   c a  c t  c i         clea...│
-│ctrl+y  y         copy sele...   c x                   clea...│
-│o                 print sel...   esc / q  ctrl+c       quit   │
-│                                                              │
-│                                                              │
-│                                                              │
-│                                                              │
+│up / k  down / j   move s...   x  s  shift+s         mark /...│
+│pgup  pgdn         page u...   shift+up  shift+down  extend...│
+│home / g  end / G  jump f...   /  tab                search...│
+│space / right      open p...   ctrl+g                copy f...│
+│shift+tab          show p...   p  d / bksp           pin or...│
+│ctrl+p             send s...   c a  c t  c i         clear ...│
+│ctrl+y  y          copy s...   c x                   clear ...│
+│o                  print ...   esc / q  ctrl+c       quit     │
 │                                                              │
 │                                                              │
 ╰──────────────────────────────────────────────────────────────╯
+                                                                
+                                                                
+                                                                
+                                                                
                                                                 
