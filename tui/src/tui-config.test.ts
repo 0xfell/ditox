@@ -33,7 +33,7 @@ describe("tui config", () => {
 
   test("uses safe defaults without a config file", () => {
     const config = resolveTuiConfig({}, { HOME: "/tmp/home" }, null);
-    expect(config.theme.name).toBe("ditoxDark");
+    expect(config.theme.name).toBe("grokbuild");
     expect(config.terminal).toEqual({
       altScreen: "auto",
       screenMode: "alternate-screen",
@@ -253,9 +253,13 @@ describe("tui config", () => {
     expect(config.chrome.searchOverlayTitleAlignment).toBe("left");
     expect(config.chrome.dangerOverlayTitleAlignment).toBe("left");
     expect(config.chrome.helpOverlayTitleAlignment).toBe("left");
-    expect(config.chrome.selectedMarker).toBe(">");
-    expect(config.chrome.selectedMarkedMarker).toBe("*");
-    expect(config.chrome.markedMarker).toBe("+");
+    expect(config.chrome.selectedMarker).toBe("▌");
+    expect(config.chrome.selectedMarkedMarker).toBe("█");
+    expect(config.chrome.markedMarker).toBe("▎");
+    expect(config.chrome.normalMarker).toBe(" ");
+    expect(config.chrome.scrollbarThumb).toBe("┃");
+    expect(config.chrome.scrollbarTrack).toBe("│");
+    expect(config.chrome.statusSeparator).toBe("·");
     expect(surface(config, "header").bg).toBe(config.theme.bgPanel);
     expect(surface(config, "header").search).toBe(config.theme.accentSearch);
     expect(surface(config, "header").favorite).toBe(config.theme.accentFavorite);

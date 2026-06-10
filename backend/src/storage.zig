@@ -2,10 +2,11 @@ const std = @import("std");
 const models = @import("models.zig");
 const util = @import("util.zig");
 const config = @import("config.zig");
+const fuzzy = @import("fuzzy.zig");
+const blob = @import("blob.zig");
 
 const c = @cImport({
     @cInclude("sqlite3.h");
-    @cInclude("unistd.h");
 });
 
 // SQLITE_TRANSIENT is `((sqlite3_destructor_type)-1)`. Translating that macro
@@ -35,12 +36,16 @@ pub const RepairResult = struct {
     pruned_blobs: i64,
     sanitized_text: i64,
     removed_missing_images: i64,
+    removed_orphan_blobs: i64,
 };
 
 pub const Storage = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     db: *c.sqlite3,
+    /// Latest sqlite3_errmsg captured by sqliteError; replaced on each failure
+    /// and freed on close. Read it through lastSqliteMessage.
+    last_sqlite_message: ?[]u8 = null,
 
     pub fn open(allocator: std.mem.Allocator, cfg: config.Config, io: std.Io) !Storage {
         var db: ?*c.sqlite3 = null;
@@ -58,7 +63,18 @@ pub const Storage = struct {
     }
 
     pub fn close(self: *Storage) void {
+        if (self.last_sqlite_message) |message| {
+            self.allocator.free(message);
+            self.last_sqlite_message = null;
+        }
         _ = c.sqlite3_close(self.db);
+    }
+
+    /// Returns the message from the most recent SQLite failure, if any. The
+    /// slice is owned by the Storage and is invalidated by the next failure or
+    /// by close().
+    pub fn lastSqliteMessage(self: *const Storage) ?[]const u8 {
+        return self.last_sqlite_message;
     }
 
     pub fn addText(self: *Storage, cfg: config.Config, text: []const u8) !i64 {
@@ -99,6 +115,11 @@ pub const Storage = struct {
         const ext = imageExtension(mime);
         const blob_path = try self.writeImageBlob(cfg, &hash, ext, bytes);
         defer self.allocator.free(blob_path);
+        // A crash between an entry delete and the prune-queue drain can leave
+        // this content-addressed path queued; re-adding the same image would
+        // then lose its freshly written blob to the next drain. Re-adding
+        // makes the path live again, so drop any stale prune record for it.
+        try self.cancelPendingBlobPrune(blob_path);
 
         const entry_preview = try imagePreview(self.allocator, mime, bytes.len, metadata);
         defer self.allocator.free(entry_preview);
@@ -144,21 +165,35 @@ pub const Storage = struct {
         }
         const has_query = fts_query != null and fts_query.?.len > 0;
 
+        // Each text bind value is appended at the same time its `?` placeholder
+        // is written into the SQL, so placeholder order and bind order cannot
+        // drift apart. The trailing LIMIT placeholder is bound separately as an
+        // integer.
+        var binds: std.ArrayList([]const u8) = .empty;
+        defer binds.deinit(self.allocator);
+
         try w.writeAll(
             \\SELECT entries.id, entries.kind, entries.mime, entries.content, entries.preview, entries.hash, entries.favorite, entries.created_at_ms, entries.byte_len, entries.source_app, entries.blob_path, entries.image_width, entries.image_height, entries.last_used_at_ms
             \\FROM entries
         );
 
         try w.writeAll(" WHERE 1 = 1");
-        if (has_query) try w.writeAll(
-            \\ AND (
-            \\   entries.id IN (SELECT rowid FROM entry_fts WHERE entry_fts MATCH ?)
-            \\   OR LOWER(entries.content) LIKE LOWER(?) ESCAPE '\'
-            \\   OR LOWER(entries.preview) LIKE LOWER(?) ESCAPE '\'
-            \\   OR ditox_fuzzy_score(entries.content, ?) > 0
-            \\   OR ditox_fuzzy_score(entries.preview, ?) > 0
-            \\ )
-        );
+        if (has_query) {
+            try w.writeAll(
+                \\ AND (
+                \\   entries.id IN (SELECT rowid FROM entry_fts WHERE entry_fts MATCH ?)
+                \\   OR LOWER(entries.content) LIKE LOWER(?) ESCAPE '\'
+                \\   OR LOWER(entries.preview) LIKE LOWER(?) ESCAPE '\'
+                \\   OR ditox_fuzzy_score(entries.content, ?) > 0
+                \\   OR ditox_fuzzy_score(entries.preview, ?) > 0
+                \\ )
+            );
+            try binds.append(self.allocator, fts_query.?);
+            try binds.append(self.allocator, like_query.?);
+            try binds.append(self.allocator, like_query.?);
+            try binds.append(self.allocator, trimmed_query);
+            try binds.append(self.allocator, trimmed_query);
+        }
         if (std.mem.eql(u8, filter, "text")) try w.writeAll(" AND kind = 'text'");
         if (std.mem.eql(u8, filter, "images")) try w.writeAll(" AND kind = 'image'");
         if (std.mem.eql(u8, filter, "favorites")) try w.writeAll(" AND favorite = 1");
@@ -177,6 +212,16 @@ pub const Storage = struct {
                 \\ max(ditox_fuzzy_score(entries.content, ?), ditox_fuzzy_score(entries.preview, ?)) DESC,
                 \\ max(entries.created_at_ms, COALESCE(entries.last_used_at_ms, 0)) DESC, id DESC LIMIT ?
             );
+            try binds.append(self.allocator, trimmed_query);
+            try binds.append(self.allocator, trimmed_query);
+            try binds.append(self.allocator, prefix_query.?);
+            try binds.append(self.allocator, prefix_query.?);
+            try binds.append(self.allocator, like_query.?);
+            try binds.append(self.allocator, like_query.?);
+            try binds.append(self.allocator, trimmed_query);
+            try binds.append(self.allocator, trimmed_query);
+            try binds.append(self.allocator, trimmed_query);
+            try binds.append(self.allocator, trimmed_query);
         } else {
             try w.writeAll(" ORDER BY favorite DESC, max(created_at_ms, COALESCE(last_used_at_ms, 0)) DESC, id DESC LIMIT ?");
         }
@@ -185,36 +230,8 @@ pub const Storage = struct {
         defer _ = c.sqlite3_finalize(stmt);
 
         var bind_index: c_int = 1;
-        if (has_query) {
-            try bindText(stmt, bind_index, fts_query.?);
-            bind_index += 1;
-            try bindText(stmt, bind_index, like_query.?);
-            bind_index += 1;
-            try bindText(stmt, bind_index, like_query.?);
-            bind_index += 1;
-            try bindText(stmt, bind_index, trimmed_query);
-            bind_index += 1;
-            try bindText(stmt, bind_index, trimmed_query);
-            bind_index += 1;
-            try bindText(stmt, bind_index, trimmed_query);
-            bind_index += 1;
-            try bindText(stmt, bind_index, trimmed_query);
-            bind_index += 1;
-            try bindText(stmt, bind_index, prefix_query.?);
-            bind_index += 1;
-            try bindText(stmt, bind_index, prefix_query.?);
-            bind_index += 1;
-            try bindText(stmt, bind_index, like_query.?);
-            bind_index += 1;
-            try bindText(stmt, bind_index, like_query.?);
-            bind_index += 1;
-            try bindText(stmt, bind_index, trimmed_query);
-            bind_index += 1;
-            try bindText(stmt, bind_index, trimmed_query);
-            bind_index += 1;
-            try bindText(stmt, bind_index, trimmed_query);
-            bind_index += 1;
-            try bindText(stmt, bind_index, trimmed_query);
+        for (binds.items) |value| {
+            try bindText(stmt, bind_index, value);
             bind_index += 1;
         }
         try bindInt64(stmt, bind_index, limit);
@@ -317,12 +334,46 @@ pub const Storage = struct {
     pub fn repair(self: *Storage, cfg: config.Config) !RepairResult {
         const sanitized_text = try self.sanitizeTextEntries(cfg);
         const removed_missing_images = try self.removeMissingImageEntries();
+        const pruned_blobs = try self.prunePendingBlobs();
         return .{
             .ok = true,
-            .pruned_blobs = try self.prunePendingBlobs(),
+            .pruned_blobs = pruned_blobs,
             .sanitized_text = sanitized_text,
             .removed_missing_images = removed_missing_images,
+            .removed_orphan_blobs = try self.removeOrphanBlobs(cfg),
         };
+    }
+
+    /// GC sweep for blob files no entry references: blobs written before a
+    /// failed insert, files left by crashed processes (including stale
+    /// `.tmp-*` files), or anything else stranded under the image dir. Runs
+    /// after `prunePendingBlobs` so queued paths have already been settled;
+    /// still-queued and still-referenced paths are left alone.
+    fn removeOrphanBlobs(self: *Storage, cfg: config.Config) !i64 {
+        const files = try blob.listBlobFiles(self.allocator, self.io, cfg.image_dir);
+        defer {
+            for (files) |path| self.allocator.free(path);
+            self.allocator.free(files);
+        }
+
+        var removed: i64 = 0;
+        for (files) |path| {
+            if (try self.blobPathReferenced(path)) continue;
+            if (try self.blobPathQueued(path)) continue;
+            blob.deleteFilePath(self.io, path);
+            removed += 1;
+        }
+        return removed;
+    }
+
+    fn blobPathQueued(self: *Storage, path: []const u8) !bool {
+        const stmt = try self.prepare("SELECT 1 FROM pending_blob_prunes WHERE path = ? LIMIT 1");
+        defer _ = c.sqlite3_finalize(stmt);
+        try bindText(stmt, 1, path);
+        const rc = c.sqlite3_step(stmt);
+        if (rc == c.SQLITE_DONE) return false;
+        if (rc == c.SQLITE_ROW) return true;
+        return self.sqliteError();
     }
 
     pub fn schemaVersion(self: *Storage) !i64 {
@@ -361,6 +412,19 @@ pub const Storage = struct {
 
     pub fn watcherLastSeen(self: *Storage) !?i64 {
         return try self.getRuntimeInt("watcher_last_seen_ms");
+    }
+
+    pub fn setWatcherError(self: *Storage, message: []const u8) !void {
+        try self.setRuntimeText("watcher_last_error", message);
+    }
+
+    pub fn clearWatcherError(self: *Storage) !void {
+        try self.deleteRuntime("watcher_last_error");
+    }
+
+    /// Caller owns the returned slice.
+    pub fn watcherLastError(self: *Storage) !?[]const u8 {
+        return try self.getRuntimeText("watcher_last_error");
     }
 
     pub fn markWatcherPid(self: *Storage, pid: i64) !void {
@@ -521,38 +585,7 @@ pub const Storage = struct {
     }
 
     fn writeImageBlob(self: *Storage, cfg: config.Config, hash: []const u8, ext: []const u8, bytes: []const u8) ![]u8 {
-        const shard = hash[0..2];
-        const dir_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ cfg.image_dir, shard });
-        defer self.allocator.free(dir_path);
-        try std.Io.Dir.cwd().createDirPath(self.io, dir_path);
-
-        const final_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}.{s}", .{ dir_path, hash, ext });
-        errdefer self.allocator.free(final_path);
-        const tmp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp-{}", .{ final_path, try self.nowMs() });
-        defer self.allocator.free(tmp_path);
-        errdefer deleteFilePath(self.io, tmp_path);
-
-        {
-            var file = try std.Io.Dir.createFileAbsolute(self.io, tmp_path, .{ .exclusive = true });
-            defer file.close(self.io);
-            try file.writeStreamingAll(self.io, bytes);
-            try file.sync(self.io);
-        }
-
-        if (std.fs.path.isAbsolute(tmp_path)) {
-            try std.Io.Dir.renameAbsolute(tmp_path, final_path, self.io);
-        } else {
-            const cwd = std.Io.Dir.cwd();
-            try cwd.rename(tmp_path, cwd, final_path, self.io);
-        }
-
-        var parent_dir = if (std.fs.path.isAbsolute(dir_path))
-            try std.Io.Dir.openDirAbsolute(self.io, dir_path, .{})
-        else
-            try std.Io.Dir.cwd().openDir(self.io, dir_path, .{});
-        defer parent_dir.close(self.io);
-        _ = c.fsync(parent_dir.handle);
-        return final_path;
+        return blob.writeImageBlob(self.allocator, self.io, cfg.image_dir, hash, ext, bytes);
     }
 
     fn setRuntimeText(self: *Storage, key: []const u8, value: []const u8) !void {
@@ -647,7 +680,11 @@ pub const Storage = struct {
 
         var pruned: i64 = 0;
         for (paths.items) |path| {
-            deleteFilePath(self.io, path);
+            // With duplicates allowed, several rows can share one
+            // content-addressed blob, and deleting any of them queues the
+            // shared path. Only unlink files no live entry still references;
+            // the queue row is dropped either way.
+            if (!try self.blobPathReferenced(path)) blob.deleteFilePath(self.io, path);
             const stmt = try self.prepare("DELETE FROM pending_blob_prunes WHERE path = ?");
             defer _ = c.sqlite3_finalize(stmt);
             try bindText(stmt, 1, path);
@@ -655,6 +692,23 @@ pub const Storage = struct {
             pruned += c.sqlite3_changes(self.db);
         }
         return pruned;
+    }
+
+    fn blobPathReferenced(self: *Storage, path: []const u8) !bool {
+        const stmt = try self.prepare("SELECT 1 FROM entries WHERE blob_path = ? LIMIT 1");
+        defer _ = c.sqlite3_finalize(stmt);
+        try bindText(stmt, 1, path);
+        const rc = c.sqlite3_step(stmt);
+        if (rc == c.SQLITE_DONE) return false;
+        if (rc == c.SQLITE_ROW) return true;
+        return self.sqliteError();
+    }
+
+    fn cancelPendingBlobPrune(self: *Storage, path: []const u8) !void {
+        const stmt = try self.prepare("DELETE FROM pending_blob_prunes WHERE path = ?");
+        defer _ = c.sqlite3_finalize(stmt);
+        try bindText(stmt, 1, path);
+        try self.stepDone(stmt);
     }
 
     fn sanitizeTextEntries(self: *Storage, cfg: config.Config) !i64 {
@@ -761,7 +815,7 @@ pub const Storage = struct {
         var removed: i64 = 0;
         for (rows.items) |row| {
             const path = row.blob_path orelse "";
-            if (path.len > 0 and fileExists(self.io, path)) continue;
+            if (path.len > 0 and blob.fileExists(self.io, path)) continue;
             if (try self.delete(row.id)) removed += 1;
         }
         return removed;
@@ -826,7 +880,10 @@ pub const Storage = struct {
 
     fn sqliteError(self: *Storage) error{SQLiteFailure} {
         const message = std.mem.span(c.sqlite3_errmsg(self.db));
-        std.debug.print("sqlite: {s}\n", .{message});
+        const copy: ?[]u8 = self.allocator.dupe(u8, message) catch null;
+        if (self.last_sqlite_message) |old| self.allocator.free(old);
+        self.last_sqlite_message = copy;
+        std.log.debug("sqlite: {s}", .{message});
         return error.SQLiteFailure;
     }
 };
@@ -924,7 +981,7 @@ fn fuzzyScoreSqlite(context: ?*c.sqlite3_context, argc: c_int, argv: [*c]?*c.sql
         c.sqlite3_result_int64(context, 0);
         return;
     };
-    c.sqlite3_result_int64(context, fuzzyScore(haystack, needle));
+    c.sqlite3_result_int64(context, fuzzy.fuzzyScore(haystack, needle));
 }
 
 fn sqliteValueText(value: ?*c.sqlite3_value) ?[]const u8 {
@@ -933,106 +990,6 @@ fn sqliteValueText(value: ?*c.sqlite3_value) ?[]const u8 {
     const len = c.sqlite3_value_bytes(actual);
     if (len <= 0) return "";
     return @as([*]const u8, @ptrCast(ptr))[0..@intCast(len)];
-}
-
-fn fuzzyScore(haystack: []const u8, needle_raw: []const u8) i64 {
-    const needle = std.mem.trim(u8, needle_raw, " \t\r\n");
-    if (haystack.len == 0 or needle.len == 0) return 0;
-    return @max(fuzzyScoreMode(haystack, needle, false), fuzzyScoreMode(haystack, needle, true));
-}
-
-fn fuzzyScoreMode(haystack: []const u8, needle: []const u8, prefer_boundaries: bool) i64 {
-    var search_start: usize = 0;
-    var previous_match: ?usize = null;
-    var first_match: ?usize = null;
-    var last_match: ?usize = null;
-    var run: i64 = 0;
-    var longest_run: i64 = 0;
-    var boundary_matches: i64 = 0;
-    var score: i64 = 0;
-
-    for (needle) |needle_byte| {
-        const wanted = asciiLower(needle_byte);
-        const found = findFuzzyMatch(haystack, wanted, search_start, previous_match, prefer_boundaries);
-
-        const match_index = found orelse return 0;
-        if (first_match == null) first_match = match_index;
-
-        if (previous_match != null and match_index == previous_match.? + 1) {
-            run += 1;
-        } else {
-            run = 1;
-        }
-        longest_run = @max(longest_run, run);
-
-        score += 10 + (run * 12);
-        const boundary_match = isMatchBoundary(haystack, match_index);
-        if (boundary_match) {
-            score += 18;
-            boundary_matches += 1;
-        }
-        if (match_index < 8) score += @intCast(8 - match_index);
-        if (previous_match) |previous| {
-            const gap: i64 = @intCast(match_index - previous - 1);
-            const gap_penalty = if (boundary_match) @min(gap * 2, 16) else @min(gap * 5, 32);
-            score -= gap_penalty;
-        }
-
-        previous_match = match_index;
-        last_match = match_index;
-        search_start = match_index + 1;
-    }
-
-    if (first_match) |index| score -= @min(@as(i64, @intCast(index)), 24);
-    if (first_match != null and last_match != null) {
-        const span = last_match.? - first_match.? + 1;
-        const span_extra: i64 = @intCast(span - needle.len);
-        score -= @min(span_extra * 2, 40);
-    }
-    if (boundary_matches == @as(i64, @intCast(needle.len))) {
-        score += 40 + (@as(i64, @intCast(needle.len)) * 4);
-    }
-    if (longest_run == @as(i64, @intCast(needle.len))) score += 80;
-    score -= @min(@as(i64, @intCast(haystack.len / 24)), 12);
-    return @max(score, 1);
-}
-
-fn findFuzzyMatch(haystack: []const u8, wanted: u8, search_start: usize, previous_match: ?usize, prefer_boundaries: bool) ?usize {
-    var first: ?usize = null;
-    var first_boundary: ?usize = null;
-    var index = search_start;
-    while (index < haystack.len) : (index += 1) {
-        if (asciiLower(haystack[index]) != wanted) continue;
-        if (previous_match) |previous| {
-            if (index == previous + 1) return index;
-        }
-        if (first == null) first = index;
-        if (prefer_boundaries and first_boundary == null and isMatchBoundary(haystack, index)) first_boundary = index;
-    }
-    return first_boundary orelse first;
-}
-
-fn asciiLower(byte: u8) u8 {
-    return if (byte >= 'A' and byte <= 'Z') byte + ('a' - 'A') else byte;
-}
-
-fn isMatchBoundary(haystack: []const u8, index: usize) bool {
-    if (index == 0) return true;
-    const previous = haystack[index - 1];
-    const current = haystack[index];
-    return isWordBoundary(previous) or (isAsciiLower(previous) and isAsciiUpper(current));
-}
-
-fn isAsciiLower(byte: u8) bool {
-    return byte >= 'a' and byte <= 'z';
-}
-
-fn isAsciiUpper(byte: u8) bool {
-    return byte >= 'A' and byte <= 'Z';
-}
-
-fn isWordBoundary(byte: u8) bool {
-    return byte == ' ' or byte == '\t' or byte == '\n' or byte == '\r' or byte == '-' or byte == '_' or byte == '/' or byte == '\\' or byte == '.' or byte == ':';
 }
 
 fn imageExtension(mime: []const u8) []const u8 {
@@ -1051,23 +1008,6 @@ fn imagePreview(allocator: std.mem.Allocator, mime: []const u8, byte_len: usize,
     return std.fmt.allocPrint(allocator, "Image {s} {} bytes", .{ mime, byte_len });
 }
 
-fn deleteFilePath(io: std.Io, path: []const u8) void {
-    if (std.fs.path.isAbsolute(path)) {
-        std.Io.Dir.deleteFileAbsolute(io, path) catch {};
-    } else {
-        std.Io.Dir.cwd().deleteFile(io, path) catch {};
-    }
-}
-
-fn fileExists(io: std.Io, path: []const u8) bool {
-    if (std.fs.path.isAbsolute(path)) {
-        std.Io.Dir.accessAbsolute(io, path, .{}) catch return false;
-    } else {
-        std.Io.Dir.cwd().access(io, path, .{}) catch return false;
-    }
-    return true;
-}
-
 fn execRawSqlite(allocator: std.mem.Allocator, db_path: []const u8, sql: []const u8) !void {
     const path_z = try allocator.dupeZ(u8, db_path);
     defer allocator.free(path_z);
@@ -1079,7 +1019,7 @@ fn execRawSqlite(allocator: std.mem.Allocator, db_path: []const u8, sql: []const
     defer allocator.free(sql_z);
     if (c.sqlite3_exec(db.?, sql_z.ptr, null, null, null) != c.SQLITE_OK) {
         const message = std.mem.span(c.sqlite3_errmsg(db.?));
-        std.debug.print("sqlite: {s}\n", .{message});
+        std.log.debug("sqlite: {s}", .{message});
         return error.SQLiteFailure;
     }
 }
@@ -1234,6 +1174,35 @@ test "storage covers add list search get favorite delete clear repair and images
     _ = try store.addText(cfg, "final clear target");
     try std.testing.expectEqual(@as(i64, 1), try store.clear("all"));
     _ = try store.repair(cfg);
+}
+
+test "storage carries the latest sqlite error message instead of printing" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const data_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(data_dir);
+
+    var cfg = try config.testConfig(allocator, data_dir);
+    defer cfg.deinit();
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, cfg.image_dir);
+
+    var store = try Storage.open(allocator, cfg, std.testing.io);
+    defer store.close();
+
+    try std.testing.expect(store.lastSqliteMessage() == null);
+    try std.testing.expectError(error.SQLiteFailure, store.exec("definitely not sql"));
+    {
+        const message = store.lastSqliteMessage() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(message.len > 0);
+    }
+    // A newer failure replaces the previous message without leaking it.
+    try std.testing.expectError(error.SQLiteFailure, store.exec("SELECT * FROM no_such_table"));
+    {
+        const message = store.lastSqliteMessage() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(std.mem.indexOf(u8, message, "no_such_table") != null);
+    }
 }
 
 test "storage LIKE search escapes wildcard input" {
@@ -1418,14 +1387,6 @@ test "storage search ranks realistic clipboard history samples predictably" {
     try expectSearchOrder(&store, "ditox tui", &.{ terminal_id, env_id });
 }
 
-test "fuzzyScore rewards contiguous, acronym, path, and camel-case matches" {
-    try std.testing.expect(fuzzyScore("network latency error", "nle") > 0);
-    try std.testing.expectEqual(@as(i64, 0), fuzzyScore("totally separate", "nle"));
-    try std.testing.expect(fuzzyScore("needle", "nee") > fuzzyScore("n-e-e", "nee"));
-    try std.testing.expect(fuzzyScore("network latency error", "nle") > fuzzyScore("annular low effect", "nle"));
-    try std.testing.expect(fuzzyScore("src/components/PreviewPane.tsx", "ppt") > fuzzyScore("support pipeline target", "ppt"));
-}
-
 test "storage retention deletes expired non-pinned entries and prunes image blobs" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -1562,6 +1523,167 @@ test "storage runtime state supports watcher pause and self-write guard" {
     defer allocator.free(hash);
     try std.testing.expectEqualStrings("abc", hash);
     try std.testing.expect((try store.takeSelfWriteHash()) == null);
+}
+
+test "storage keeps shared blobs until the last referencing entry is gone" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const data_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(data_dir);
+
+    var cfg = try config.testConfig(allocator, data_dir);
+    defer cfg.deinit();
+    cfg.allow_duplicates = true;
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, cfg.image_dir);
+
+    var store = try Storage.open(allocator, cfg, std.testing.io);
+    defer store.close();
+
+    // With duplicates allowed, both rows share one content-addressed blob.
+    const first_id = try store.addImage(cfg, "image/png", "shared-image-bytes", .{});
+    const second_id = try store.addImage(cfg, "image/png", "shared-image-bytes", .{});
+    try std.testing.expect(first_id != second_id);
+
+    const blob_path = blk: {
+        const entry = (try store.get(first_id)) orelse return error.TestUnexpectedResult;
+        defer entry.deinit(allocator);
+        break :blk try allocator.dupe(u8, entry.blob_path.?);
+    };
+    defer allocator.free(blob_path);
+
+    // Deleting one row must not unlink the blob the surviving row points at.
+    try std.testing.expect(try store.delete(first_id));
+    try std.Io.Dir.cwd().access(std.testing.io, blob_path, .{});
+    {
+        const survivor = (try store.get(second_id)) orelse return error.TestUnexpectedResult;
+        defer survivor.deinit(allocator);
+        try std.testing.expectEqualStrings(blob_path, survivor.blob_path.?);
+    }
+
+    // Deleting the last referencing row prunes the blob for real.
+    try std.testing.expect(try store.delete(second_id));
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, blob_path, .{}));
+}
+
+test "storage re-adding an image cancels a stale pending blob prune" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const data_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(data_dir);
+
+    var cfg = try config.testConfig(allocator, data_dir);
+    defer cfg.deinit();
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, cfg.image_dir);
+
+    var store = try Storage.open(allocator, cfg, std.testing.io);
+    defer store.close();
+
+    const image_id = try store.addImage(cfg, "image/png", "raced-image-bytes", .{});
+    const blob_path = blk: {
+        const entry = (try store.get(image_id)) orelse return error.TestUnexpectedResult;
+        defer entry.deinit(allocator);
+        break :blk try allocator.dupe(u8, entry.blob_path.?);
+    };
+    defer allocator.free(blob_path);
+
+    // Simulate a crash between an entry delete and the prune drain: the row is
+    // gone and its blob path is still queued for pruning.
+    {
+        const stmt = try store.prepare("DELETE FROM entries WHERE id = ?");
+        defer _ = c.sqlite3_finalize(stmt);
+        try bindInt64(stmt, 1, image_id);
+        try store.stepDone(stmt);
+    }
+    try std.testing.expectEqual(@as(i64, 1), try store.scalarCount("SELECT COUNT(*) FROM pending_blob_prunes"));
+
+    // Re-adding the same image must drop the stale prune record so the next
+    // drain cannot delete the live blob out from under the new row.
+    const readded_id = try store.addImage(cfg, "image/png", "raced-image-bytes", .{});
+    try std.testing.expectEqual(@as(i64, 0), try store.scalarCount("SELECT COUNT(*) FROM pending_blob_prunes"));
+    _ = try store.prunePendingBlobs();
+    try std.Io.Dir.cwd().access(std.testing.io, blob_path, .{});
+    {
+        const entry = (try store.get(readded_id)) orelse return error.TestUnexpectedResult;
+        defer entry.deinit(allocator);
+        try std.testing.expectEqualStrings(blob_path, entry.blob_path.?);
+    }
+}
+
+test "storage repair removes orphan blobs but keeps referenced and queued ones" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const data_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(data_dir);
+
+    var cfg = try config.testConfig(allocator, data_dir);
+    defer cfg.deinit();
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, cfg.image_dir);
+
+    var store = try Storage.open(allocator, cfg, std.testing.io);
+    defer store.close();
+
+    // A live image whose blob must survive the sweep.
+    const live_id = try store.addImage(cfg, "image/png", "live-image-bytes", .{});
+    const live_blob = blk: {
+        const entry = (try store.get(live_id)) orelse return error.TestUnexpectedResult;
+        defer entry.deinit(allocator);
+        break :blk try allocator.dupe(u8, entry.blob_path.?);
+    };
+    defer allocator.free(live_blob);
+
+    // An orphan blob (no referencing row) and a stale tmp file.
+    const orphan_blob = try blob.writeImageBlob(allocator, std.testing.io, cfg.image_dir, "feedfacefeedface", "png", "orphan-bytes");
+    defer allocator.free(orphan_blob);
+    const stale_tmp = try std.fmt.allocPrint(allocator, "{s}.tmp-deadbeef", .{orphan_blob});
+    defer allocator.free(stale_tmp);
+    {
+        var file = try std.Io.Dir.createFileAbsolute(std.testing.io, stale_tmp, .{});
+        defer file.close(std.testing.io);
+        try file.writeStreamingAll(std.testing.io, "stale");
+    }
+
+    const result = try store.repair(cfg);
+    try std.testing.expect(result.ok);
+    try std.testing.expectEqual(@as(i64, 2), result.removed_orphan_blobs);
+    try std.Io.Dir.cwd().access(std.testing.io, live_blob, .{});
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, orphan_blob, .{}));
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, stale_tmp, .{}));
+
+    // A second sweep finds nothing.
+    const second = try store.repair(cfg);
+    try std.testing.expectEqual(@as(i64, 0), second.removed_orphan_blobs);
+}
+
+test "storage records and clears the watcher error state" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const data_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(data_dir);
+
+    var cfg = try config.testConfig(allocator, data_dir);
+    defer cfg.deinit();
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, cfg.image_dir);
+
+    var store = try Storage.open(allocator, cfg, std.testing.io);
+    defer store.close();
+
+    try std.testing.expect((try store.watcherLastError()) == null);
+    try store.setWatcherError("image capture failed: SQLiteFailure");
+    {
+        const message = (try store.watcherLastError()) orelse return error.TestUnexpectedResult;
+        defer allocator.free(message);
+        try std.testing.expectEqualStrings("image capture failed: SQLiteFailure", message);
+    }
+    try store.clearWatcherError();
+    try std.testing.expect((try store.watcherLastError()) == null);
 }
 
 test "storage markUsed promotes an older entry above newer ones" {

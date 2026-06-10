@@ -17,8 +17,10 @@ floating window**, and there is no Rust code. The stack is:
   binaries: `ditox` (CLI + launcher) and `ditoxd` (daemon + JSON-RPC server).
 - **Frontend — Bun + TypeScript + OpenTUI/Solid** (`tui/`): owns rendering and
   keyboard workflow only. Bundled to `tui/dist/index.js`.
-- **IPC**: JSON-RPC 2.0 over Content-Length framed stdio. The TUI never opens
-  the database directly.
+- **IPC**: JSON-RPC 2.0 over Content-Length framed stdio. The TUI holds one
+  long-lived `ditoxd serve --stdio` session per process (requests answered in
+  order over a single store); unframed one-shot input still works for
+  compatibility. The TUI never opens the database directly.
 
 ```text
 ┌──────────────────────────────┐     JSON-RPC 2.0 (Content-Length stdio)
@@ -115,36 +117,45 @@ flake.nix           Hermetic package, devShell, apps, homeManagerModules
 
 | Module | Purpose |
 |--------|---------|
-| `cli.zig` | `ditox` CLI: arg parsing, short/compat aliases, TUI launch/paste-back |
-| `daemon.zig` | `ditoxd`: watcher daemon + JSON-RPC `serve --stdio` |
+| `cli.zig` | `ditox` CLI: arg parsing, alias table, TUI launch/paste-back |
+| `daemon.zig` | `ditoxd`: watcher daemon + framed JSON-RPC `serve --stdio` loop |
 | `rpc.zig` | JSON-RPC 2.0 envelope, method routing, Content-Length framing |
-| `storage.zig` | SQLite schema/migrations, entry CRUD, FTS search, image blobs |
+| `storage.zig` | SQLite schema/migrations, entry CRUD, FTS search, prune queue |
+| `blob.zig` | Content-addressed blob filesystem (atomic write, delete, exists) |
+| `fuzzy.zig` | Fuzzy-search scoring engine (registered as a SQLite UDF) |
 | `clipboard.zig` | Wayland clipboard read/write (wl-clipboard) |
 | `config.zig` | TOML/JSON config loading + compatibility aliases |
 | `models.zig` | Entry / RPC data model |
 | `app.zig` | Shared app wiring |
-| `util.zig` | Helpers |
-| `root.zig` | Library module root (`ditox_core`) |
+| `util.zig` | Helpers incl. `detectImageMime` (capture-format source of truth) |
+| `root.zig` | Library module root (`ditox_core`) + test aggregation |
 
 ### Frontend modules (`tui/src/`)
 
 | Path | Purpose |
 |------|---------|
 | `index.tsx` | TUI entry point |
-| `App.tsx` | Root component / app state |
-| `rpc.ts` | JSON-RPC client to `ditoxd` |
+| `App.tsx` | Root component (initial state preload, wiring, render options) |
+| `keymap.ts` | `useDitoxKeymap` + key normalization/chord handling |
+| `layout.ts` | Single source for preview width/row math (App + components) |
+| `terminal-lifecycle.ts` | Exit reset sequence, shutdown, exit-after-action |
+| `rpc.ts` | Persistent JSON-RPC client (one framed `ditoxd serve` session) |
 | `state.ts` | UI state machine (selection, search, filters, multi-select) |
 | `presentation.ts` | Row/preview formatting |
-| `theme.ts`, `ui-config.ts`, `tui-config.ts` | Theming + file-backed config |
-| `image-preview.ts`, `terminal-image.ts` | Image preview (block / protocol) |
+| `theme.ts`, `ui-config.ts` | Theme palettes + layout knob types |
+| `tui-config.ts` | Facade over `config/{types,resolve,style,format}.ts` |
+| `image-preview.ts` | Image decode + half-block rendering (bounded LRU caches) |
+| `use-image-block-preview.ts` | Shared Solid hook: decode effect w/ semantic request equality |
+| `terminal-image.ts` | Native Kitty/Sixel placement (placement-diffed, flicker-free) |
 | `components/` | Shell, EntryList, PreviewPane, HeaderBar, StatusLine, Overlay, … |
+| `components/style-utils.ts`, `components/preview-shared.ts` | Shared component helpers |
 | `generated/rpc-schema.d.ts` | Types generated from `contracts/rpc.schema.json` (committed) |
 | `__goldens__/` | Golden TUI text frames (refresh with `DITOX_UPDATE_GOLDENS=1`) |
 
 ## Data Locations (Linux)
 
-- Database: `~/.local/share/ditox/ditox.db`
-- Image blobs: `~/.local/share/ditox/images/` (content-addressed `hash[..2]/hash.ext`)
+- Database: `~/.local/share/ditox/ditox-v2.db`
+- Image blobs: `~/.local/share/ditox/images-v2/` (content-addressed `hash[..2]/hash.ext`)
 - Config: `~/.config/ditox/config.toml` (TOML or JSON; `DITOX_CONFIG` overrides)
 - TUI config: `~/.config/ditox/tui.json` (`DITOX_TUI_CONFIG` overrides)
 
@@ -152,14 +163,86 @@ Tests isolate via `XDG_DATA_HOME` / `XDG_CONFIG_HOME` temp dirs.
 
 ## Important Patterns
 
-- **UI never touches the DB.** All data flows through JSON-RPC to `ditoxd`.
+- **UI never touches the DB or the blob store.** All data flows through
+  JSON-RPC to `ditoxd`; image preview bytes arrive via `entries.get_image`.
+  The filesystem byte source in `image-preview.ts` exists only as the default
+  for direct/unit use — production installs the RPC source in `App.run`. Do
+  not add direct filesystem reads to the TUI.
 - **Image-over-text capture priority**: the watcher prefers image formats so
-  "copy image" from a browser stores the image, not the URL.
+  "copy image" from a browser stores the image, not the URL. A failed image
+  store is retried next poll instead of falling back to the text alternative.
+- **MIME is verified, not trusted**: capture paths sniff magic bytes via
+  `util.detectImageMime`; a sniffable announced type that does not match the
+  bytes is not stored as an image.
 - **Deduplication**: entries are SHA-256 hashed; the watcher checks before insert.
 - **Content sanitization**: display/preview text strips control/ANSI sequences.
-- **Image blobs are content-addressed** with atomic writes and a prune queue.
+- **Image blobs are content-addressed** with atomic writes (unique tmp +
+  fsync + rename) and a prune queue. Prunes are liveness-checked (`path NOT
+  referenced by entries`) and re-adding an image cancels its pending prune —
+  preserve both invariants when touching delete/clear/retention/repair.
 - **Format names are backend-owned and stable**; the frontend must not invent them.
 - **Machine output is JSON** (`list --json`, RPC); human CLI output is separate.
+
+## Code Standards
+
+Hard-won rules; new code must follow them, and reviews should reject code that
+does not.
+
+### Layering
+
+- **No per-call process spawns** in the TUI. RPC goes through the persistent
+  session in `tui/src/rpc.ts`. Never call `Bun.spawnSync` from render code.
+- **Layout math lives in `tui/src/layout.ts`.** App and components must consume
+  it — never re-derive (mirror) another component's width/row math inline.
+- **Component styling helpers live in `components/style-utils.ts`** and
+  preview-shared logic in `components/preview-shared.ts`; do not re-copy
+  `justifyContent`/tone helpers into components.
+- **Theming is token-driven.** Components take colors from `surface(config, name)`
+  + tone routing; never hardcode hex values in components (image background
+  defaults excepted).
+- **Config resolution lives in `tui/src/config/`**; `tui-config.ts` is a
+  re-export facade. Add new knobs in `config/types.ts` (+ defaults) and
+  `config/resolve.ts` (+ env override), and cover them in `tui-config.test.ts`
+  and `tui/tui-config.schema.json`.
+
+### Error handling
+
+- **The daemon capture loop must never die from a capture error.** Failures
+  are logged (`std.log`) and surfaced via `WatcherStatus.last_error`
+  (runtime-state key `watcher_last_error`); the next poll retries. No bare
+  silent `catch {}` on storage writes in the watcher path.
+- **Carry SQLite error detail.** `Storage` records the last sqlite message
+  (`lastSqliteMessage()`); do not `std.debug.print` from the storage layer.
+- **CLI user errors** should surface as friendly messages, not Zig error traces.
+
+### Rendering (TUI)
+
+- **Never write escape sequences directly to stdout from components.** Native
+  image placement goes through `TerminalImageManager`, which diffs placements
+  and only re-emits on real changes (re-emitting per frame causes flicker).
+- **Effects that decode/allocate must use semantic equality**, not object
+  identity: refresh polls re-create entry objects every tick (see
+  `use-image-block-preview.ts`). Caches holding pixel data must be bounded
+  (LRU) and decoders must enforce dimension guards.
+
+### Adding an RPC method (4 touchpoints)
+
+1. `backend/src/rpc.zig`: `dispatch` branch + `validateParams` entry.
+2. `contracts/rpc.schema.json`: method enum + request/success defs.
+3. `bun run build:tui` regenerates `tui/src/generated/rpc-schema.d.ts` (json2ts).
+4. Wrapper in `tui/src/rpc.ts` + tests (backend test and/or `tests/` smoke).
+
+Nothing enforces dispatch ↔ schema agreement at compile time yet; keep them in
+sync manually and update `contracts/fixtures/*.rpc` when shapes change.
+
+### Workflow
+
+- Run `bun run check` before declaring work done.
+- Golden frames: a deliberate visual change requires
+  `DITOX_UPDATE_GOLDENS=1 bun test src/tui-golden.test.tsx` and review of the
+  SVG/PNG artifacts (`DITOX_TUI_ARTIFACTS=1`).
+- Structural UI changes (new chrome/widgets) should extend the shared helpers
+  first instead of duplicating per component.
 
 ## Logging
 

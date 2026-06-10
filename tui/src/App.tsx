@@ -1,11 +1,10 @@
 import { createEffect, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { render, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
-import { KeymapProvider, useBindings, useKeymap } from "@opentui/keymap/solid";
+import { KeymapProvider } from "@opentui/keymap/solid";
 import {
   CliRenderEvents,
   parseColor,
-  type CliRenderer,
   type CliRendererConfig,
   type CursorStyleOptions,
   type KittyKeyboardOptions,
@@ -14,31 +13,20 @@ import {
 } from "@opentui/core";
 import {
   clampSelection,
-  applySearch,
-  cancelSearch,
   initialState,
-  moveEnd,
-  moveHome,
-  movePage,
   movePreview,
   moveSelection,
-  nextFilter,
-  openSearch,
-  selectRange,
-  selectSingle,
   selectThroughIndex,
   selectedIdsOrCurrent,
   selectedEntry,
   selectedSetIncludesPinned,
-  visibleFullPreviewLineCapacity,
   togglePinnedOnly,
   toggleSelectedId,
-  updateSearchQuery,
   visibleEntryCapacity,
   type UiState,
 } from "./state";
-import { bulkCopyEntries, clearEntries, copyEntry, deleteEntry, favoriteEntry, getWatcherStatus, listEntries, outputEntries, pasteEntry } from "./rpc";
-import { currentTuiConfig, normalizeKey, surface, type ResolvedTuiConfig, type TuiStatusHintMode } from "./tui-config";
+import { bulkCopyEntries, clearEntries, copyEntry, deleteEntry, favoriteEntry, getImageBytes, getWatcherStatus, listEntries, outputEntries, pasteEntry } from "./rpc";
+import { currentTuiConfig, surface, type ResolvedTuiConfig, type TuiStatusHintMode } from "./tui-config";
 import {
   formatClearedStatus,
   formatCopiedCountStatus,
@@ -55,30 +43,38 @@ import { PreviewPane } from "./components/PreviewPane";
 import { StatusLine } from "./components/StatusLine";
 import { ModeOverlay } from "./components/Overlay";
 import { FullPreview } from "./components/FullPreview";
-import { isBlockPreviewMime, type ImageProtocolCapabilities } from "./image-preview";
+import { setImageByteSource, type ImageProtocolCapabilities } from "./image-preview";
+import { useDitoxKeymap } from "./keymap";
+import { fullPreviewTextWidth as layoutFullPreviewTextWidth, fullPreviewVisibleRows, fullPreviewWidth as layoutFullPreviewWidth } from "./layout";
+import { exitAfter, installTerminalExitReset, shutdownTui } from "./terminal-lifecycle";
 import { TerminalImageManager, type TerminalImageState } from "./terminal-image";
-import type { Entry } from "./types";
+
+// Re-exported for backwards compatibility (tests and external callers import
+// these from "./App").
+export { runtimeKeysForBinding, runtimeSequenceKey } from "./keymap";
+export { estimatedImagePreviewRows, fullPreviewReservedRows } from "./layout";
+export { installTerminalExitReset, shutdownTui, terminalExitResetSequence, writeTerminalExitReset } from "./terminal-lifecycle";
 
 type CopyPasteRpc = {
   copyEntry: typeof copyEntry;
   pasteEntry: typeof pasteEntry;
 };
 
-function AppRoot(props: { config: ResolvedTuiConfig }) {
+function AppRoot(props: { config: ResolvedTuiConfig; initialUiState?: UiState }) {
   const renderer = useRenderer();
   const keymap = createDefaultOpenTuiKeymap(renderer);
   return (
     <KeymapProvider keymap={keymap}>
-      <App config={props.config} />
+      <App config={props.config} initialUiState={props.initialUiState} />
     </KeymapProvider>
   );
 }
 
-export function App(props: { config?: ResolvedTuiConfig } = {}) {
+export function App(props: { config?: ResolvedTuiConfig; initialUiState?: UiState } = {}) {
   const config = props.config ?? currentTuiConfig();
   const renderer = useRenderer();
   const imageManager = new TerminalImageManager();
-  const [state, setState] = createSignal<UiState>(initialState(config.startup));
+  const [state, setState] = createSignal<UiState>(props.initialUiState ?? initialState(config.startup));
   const [terminalCapabilities, setTerminalCapabilities] = createSignal<TerminalCapabilities | null>(renderer.capabilities);
   // The terminal answers the pixel-resolution query asynchronously, so
   // renderer.resolution is a plain (non-reactive) getter that is null on first
@@ -107,18 +103,9 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
       ? Math.max(config.layout.minPaneWidth, Math.floor((splitPaneAvailableWidth() * config.layout.listWidthPercent) / 100) - config.layout.splitPaneWidthInset)
       : Math.max(config.layout.minPaneWidth, contentWidth());
   const previewWidth = () => Math.max(config.layout.minPaneWidth, Math.floor((splitPaneAvailableWidth() * config.layout.previewWidthPercent) / 100) - config.layout.splitPaneWidthInset);
-  // Mirror FullPreview's own width math so wrapped-line counts used for scroll
-  // bounds match what FullPreview actually renders.
-  const fullPreviewWidth = () => Math.max(config.layout.minPaneWidth, contentWidth() - config.layout.fullPreviewWidthInset);
-  const fullPreviewTextWidth = () =>
-    Math.max(1, fullPreviewWidth() - (config.layout.showFullPreviewGutter ? config.layout.fullPreviewTextWidthInset : config.layout.fullPreviewPaddingX * 2));
-  const previewVisibleRows = () =>
-    visibleFullPreviewLineCapacity(
-      listRows(),
-      config.layout.fullPreviewLineSpacing,
-      config.layout.fullPreviewScrollInsetRows,
-      fullPreviewReservedRows(selectedEntry(state()), config, listRows()),
-    );
+  const fullPreviewWidth = () => layoutFullPreviewWidth(config, contentWidth());
+  const fullPreviewTextWidth = () => layoutFullPreviewTextWidth(config, contentWidth());
+  const previewVisibleRows = () => fullPreviewVisibleRows(selectedEntry(state()), config, listRows());
   let lastLiveSearchKey = "";
 
   async function refresh(next?: Partial<UiState>) {
@@ -358,7 +345,9 @@ export function App(props: { config?: ResolvedTuiConfig } = {}) {
       stopResolutionPoll();
     });
 
-    void refresh();
+    // run() preloads the first screenful before rendering; only fetch here
+    // when the App was mounted without preloaded state (e.g. in tests).
+    if (!props.initialUiState) void refresh();
     if (config.layout.refreshIntervalMs <= 0) return;
     let polling = false;
     const timer = setInterval(() => {
@@ -491,230 +480,8 @@ function statusHintMode(mode: UiState["mode"]): TuiStatusHintMode {
   return "browse";
 }
 
-type DitoxKeymapActions = {
-  state: () => UiState;
-  setState: (updater: UiState | ((previous: UiState) => UiState)) => void;
-  refresh: (next?: Partial<UiState>) => Promise<void>;
-  copySelected: (paste: boolean) => Promise<void>;
-  bulkCopySelected: () => Promise<void>;
-  copySearchMatches: () => Promise<void>;
-  outputSelected: () => Promise<void>;
-  toggleFavorite: () => Promise<void>;
-  confirmDelete: () => Promise<void>;
-  confirmClear: () => Promise<void>;
-  togglePinnedView: () => Promise<void>;
-  openClear: (kind: UiState["clearKind"], preserveFavorites?: boolean) => void;
-  config: ResolvedTuiConfig;
-  browsePageRows: () => number;
-  previewRows: () => number;
-  previewWrapWidth: () => number;
-};
-
-function useDitoxKeymap(actions: DitoxKeymapActions) {
-  const keymap = useKeymap();
-  const renderer = useRenderer();
-
-  onMount(() => {
-    const dispose = keymap.intercept("key", (ctx) => {
-      const mode = actions.state().mode;
-      if (mode === "help") {
-        actions.setState((previous) => ({ ...previous, mode: "browse" }));
-        ctx.consume();
-        return;
-      }
-      if (mode !== "search") return;
-      const event = ctx.event as any;
-      const specialKeys = [
-        ...actions.config.keyBindings.searchCancel,
-        ...actions.config.keyBindings.searchBackspace,
-        ...actions.config.keyBindings.searchApply,
-        ...actions.config.keyBindings.searchCopyMatches,
-      ];
-      if (matchesAnyKey(event, specialKeys) || matchesAnyKey(event, ["escape", "backspace", "enter"])) return;
-      if (typeof event.sequence === "string" && event.sequence.length === 1 && event.sequence >= " ") {
-        actions.setState((previous) => updateSearchQuery(previous, previous.query + event.sequence));
-        ctx.consume();
-      }
-    });
-    onCleanup(dispose);
-  });
-
-  useBindings(() => {
-    const mode = actions.state().mode;
-    const keys = actions.config.keyBindings;
-    if (mode === "search") {
-      return {
-        priority: 100,
-        bindings: [
-          ...bind(keys.searchCancel, () => actions.setState((previous) => cancelSearch(previous, actions.config.behavior.restoreQueryOnSearchCancel))),
-          ...bind(keys.searchBackspace, () => actions.setState((previous) => updateSearchQuery(previous, previous.query.slice(0, -1)))),
-          ...bind(keys.searchApply, () => actions.refresh(applySearch(actions.state()))),
-          ...bind(keys.searchCopyMatches, () => actions.copySearchMatches()),
-        ],
-      };
-    }
-    if (mode === "preview") {
-      const totalLines = () =>
-        previewModel(
-          selectedEntry(actions.state()),
-          actions.config.layout.maxFullPreviewLines,
-          actions.config.labels,
-          actions.config.layout,
-          actions.previewWrapWidth(),
-        ).length;
-      return {
-        priority: 100,
-        bindings: [
-          ...bind(keys.previewBack, () => actions.setState((previous) => ({ ...previous, mode: "browse", previewOffset: 0 }))),
-          ...bind(keys.previewUp, () => actions.setState((previous) => movePreview(previous, -1, totalLines(), previewVisibleRows(actions)))),
-          ...bind(keys.previewDown, () => actions.setState((previous) => movePreview(previous, 1, totalLines(), previewVisibleRows(actions)))),
-          ...bind(keys.previewPageUp, () => actions.setState((previous) => movePreview(previous, -previewVisibleRows(actions), totalLines(), previewVisibleRows(actions)))),
-          ...bind(keys.previewPageDown, () => actions.setState((previous) => movePreview(previous, previewVisibleRows(actions), totalLines(), previewVisibleRows(actions)))),
-          ...bind(keys.copyPaste, () => actions.copySelected(true)),
-          ...bind(keys.copyOnly, () => actions.copySelected(false)),
-          ...bind(keys.forceQuit, () => shutdownTui(renderer)),
-        ],
-      };
-    }
-    if (mode === "confirm-delete") {
-      return {
-        priority: 100,
-        bindings: [
-          ...bind(keys.confirmYes, () => actions.confirmDelete()),
-          ...bind(keys.confirmNo, () => actions.setState((previous) => ({ ...previous, mode: "browse" }))),
-          ...bind(keys.searchCancel, () => actions.setState((previous) => ({ ...previous, mode: "browse" }))),
-        ],
-      };
-    }
-    if (mode === "confirm-clear") {
-      return {
-        priority: 100,
-        bindings: [
-          ...bind(keys.confirmYes, () => actions.confirmClear()),
-          ...bind(keys.confirmNo, () => actions.setState((previous) => ({ ...previous, mode: "browse" }))),
-          ...bind(keys.searchCancel, () => actions.setState((previous) => ({ ...previous, mode: "browse" }))),
-        ],
-      };
-    }
-    return {
-      priority: 100,
-      bindings: [
-        ...bind(keys.forceQuit, () => shutdownTui(renderer)),
-        ...bind(keys.quit, () => shutdownTui(renderer)),
-        ...bind(keys.up, () => actions.setState((previous) => moveSelection(previous, -1))),
-        ...bind(keys.down, () => actions.setState((previous) => moveSelection(previous, 1))),
-        ...bind(keys.pageUp, () => actions.setState((previous) => movePage(previous, actions.browsePageRows(), -1))),
-        ...bind(keys.pageDown, () => actions.setState((previous) => movePage(previous, actions.browsePageRows(), 1))),
-        ...bind(keys.home, () => actions.setState(moveHome)),
-        ...bind(keys.end, () => actions.setState(moveEnd)),
-        ...bind(keys.nextFilter, () =>
-          actions.refresh({ filter: nextFilter(actions.state().filter, actions.config.filterOrder), pinnedOnly: false, selectedIndex: 0, previewOffset: 0 }),
-        ),
-        ...bind(keys.search, () => actions.setState((previous) => openSearch(previous, actions.config.behavior.clearQueryOnSearchOpen))),
-        ...bind(keys.selectToggle, () => actions.setState(toggleSelectedId)),
-        ...bind(keys.selectSingle, () => actions.setState(selectSingle)),
-        ...bind(keys.clearSelection, () => actions.setState((previous) => ({ ...previous, selectedIds: new Set() }))),
-        ...bind(keys.selectUp, () => actions.setState((previous) => selectRange(previous, -1))),
-        ...bind(keys.selectDown, () => actions.setState((previous) => selectRange(previous, 1))),
-        ...bind(keys.toggleFavorite, () => actions.toggleFavorite()),
-        ...bind(keys.togglePinnedView, () => actions.togglePinnedView()),
-        ...bind(keys.preview, () => actions.setState((previous) => ({ ...previous, mode: "preview", previewOffset: 0 }))),
-        ...bind(keys.delete, () => actions.setState((previous) => ({ ...previous, mode: "confirm-delete" }))),
-        ...bind(keys.copyPaste, () => actions.copySelected(true)),
-        ...bind(keys.copyOnly, () => actions.copySelected(false)),
-        ...bind(keys.bulkCopy, () => actions.bulkCopySelected()),
-        ...bind(keys.output, () => actions.outputSelected()),
-        ...bind(keys.help, () => actions.setState((previous) => ({ ...previous, mode: "help" }))),
-        ...bind(keys.clearAll, () => actions.openClear("all")),
-        ...bind(keys.clearText, () => actions.openClear("text")),
-        ...bind(keys.clearImages, () => actions.openClear("images")),
-        ...bind(keys.clearAllIncludingPinned, () => actions.openClear("all", false)),
-      ],
-    };
-  });
-}
-
-function bind(keys: string[], cmd: () => void | Promise<void>): Array<{ key: string; cmd: () => void | Promise<void> }> {
-  return runtimeKeysForBinding(keys).map((key) => ({ key, cmd }));
-}
-
-export function runtimeKeysForBinding(keys: string[]): string[] {
-  const expanded: string[] = [];
-  const seen = new Set<string>();
-  for (const rawKey of keys) {
-    const key = runtimeSequenceKey(rawKey);
-    for (const candidate of [key, openTuiRuntimeAlias(key)]) {
-      if (candidate === null || seen.has(candidate)) continue;
-      seen.add(candidate);
-      expanded.push(candidate);
-    }
-  }
-  return expanded;
-}
-
-// Ditox spells multi-stroke chords with spaces (e.g. "c a", "ctrl+x s") for
-// readability, but @opentui/keymap reads a literal space as the `space` key and
-// otherwise matches strokes greedily from contiguous characters. Normalize each
-// stroke and concatenate so "c a" -> "ca" (strokes [c, a]) and "ctrl+x s" ->
-// "ctrl+xs" (strokes [ctrl+x, s]). Single-stroke bindings (including the literal
-// "space"/" " preview key) have no inter-stroke whitespace and pass through.
-export function runtimeSequenceKey(rawKey: string): string {
-  const strokes = rawKey.trim().split(/\s+/).filter(Boolean);
-  if (strokes.length <= 1) return normalizeKey(rawKey);
-  return strokes.map((stroke) => normalizeKey(stroke)).join("");
-}
-
-function openTuiRuntimeAlias(key: string): string | null {
-  const parts = key.split("+");
-  if (parts[parts.length - 1] !== "enter") return null;
-  parts[parts.length - 1] = "return";
-  return parts.join("+");
-}
-
-function matchesAnyKey(event: any, keys: string[]): boolean {
-  const candidates = [
-    normalizeKey(String(event.name ?? "")),
-    normalizeKey(String(event.key ?? "")),
-    normalizeKey(String(event.baseCode ?? "")),
-    normalizeKey(String(event.sequence ?? "")),
-  ];
-  return keys.some((key) => candidates.includes(normalizeKey(key)));
-}
-
-function previewVisibleRows(actions: DitoxKeymapActions): number {
-  return visibleFullPreviewLineCapacity(
-    actions.previewRows(),
-    actions.config.layout.fullPreviewLineSpacing,
-    actions.config.layout.fullPreviewScrollInsetRows,
-    fullPreviewReservedRows(selectedEntry(actions.state()), actions.config, actions.previewRows()),
-  );
-}
-
-export function fullPreviewReservedRows(entry: Entry | undefined, config: ResolvedTuiConfig, rows: number): number {
-  const metadataRows = config.layout.showFullPreviewMetadata && entry ? config.layout.fullPreviewMetaHeight : 0;
-  return metadataRows + estimatedImagePreviewRows(entry, config, rows);
-}
-
-export function estimatedImagePreviewRows(entry: Entry | undefined, config: ResolvedTuiConfig, rows: number): number {
-  if (entry?.kind !== "image" || config.layout.fullPreviewImageMode === "metadata") return 0;
-  const canRenderBlocks = entry.blob_path !== null && isBlockPreviewMime(entry.mime);
-  if (!canRenderBlocks) return 1;
-  const renderedRows = Math.min(Math.max(2, rows - config.layout.fullPreviewImageRowInset), config.layout.fullPreviewImageMaxRows);
-  const noticeRows =
-    config.layout.fullPreviewImageNoticeVisibility === "always" ||
-    (config.layout.fullPreviewImageNoticeVisibility === "protocol" && (config.layout.fullPreviewImageMode === "kitty" || config.layout.fullPreviewImageMode === "sixel"))
-      ? 1
-      : 0;
-  return renderedRows + noticeRows + (noticeRows > 0 ? config.layout.fullPreviewImageNoticeSpacing : 0);
-}
-
 function liveSearchKey(state: UiState): string {
   return [state.query, state.pinnedOnly ? "pinned" : state.filter].join("\u0000");
-}
-
-function exitAfter(enabled: boolean, renderer: CliRenderer): void {
-  if (!enabled) return;
-  setTimeout(() => shutdownTui(renderer), 0);
 }
 
 export async function copyOrPasteEntry(
@@ -747,53 +514,6 @@ function isPasteBackFailure(error: unknown, labels: ResolvedTuiConfig["labels"])
   return message === labels.errorPasteBackFailed || message.includes("PasteBackFailed");
 }
 
-type TerminalWriter = {
-  isTTY?: boolean;
-  write: (chunk: string) => unknown;
-};
-
-type ShutdownTuiOptions = {
-  code?: number;
-  stdout?: TerminalWriter;
-  exit?: (code: number) => void;
-  schedule?: (callback: () => void) => unknown;
-  afterDestroy?: () => void;
-};
-
-export const terminalExitResetSequence = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?2004l\x1b[?25h\x1b[0m";
-
-let terminalExitResetInstalled = false;
-let terminalExitResetWritten = false;
-let tuiShutdownStarted = false;
-
-export function writeTerminalExitReset(stdout: TerminalWriter = process.stdout): void {
-  if (terminalExitResetWritten) return;
-  if (!stdout.isTTY) return;
-  stdout.write(terminalExitResetSequence);
-  terminalExitResetWritten = true;
-}
-
-export function installTerminalExitReset(stdout: TerminalWriter = process.stdout): void {
-  if (terminalExitResetInstalled) return;
-  terminalExitResetInstalled = true;
-  process.once("exit", () => writeTerminalExitReset(stdout));
-}
-
-export function shutdownTui(renderer: Pick<CliRenderer, "destroy">, options: ShutdownTuiOptions = {}): void {
-  if (tuiShutdownStarted) return;
-  tuiShutdownStarted = true;
-  const stdout = options.stdout ?? process.stdout;
-  try {
-    renderer.destroy();
-  } finally {
-    writeTerminalExitReset(stdout);
-    options.afterDestroy?.();
-    const exit = options.exit ?? process.exit;
-    const schedule = options.schedule ?? ((callback: () => void) => setTimeout(callback, 0));
-    schedule(() => exit(options.code ?? 0));
-  }
-}
-
 function activeOverlayHeight(state: UiState, config: ResolvedTuiConfig): number {
   if (state.mode === "help") return config.layout.helpOverlayHeight;
   if (state.mode === "confirm-delete") {
@@ -807,7 +527,36 @@ function activeOverlayHeight(state: UiState, config: ResolvedTuiConfig): number 
 export async function run() {
   const config = currentTuiConfig();
   installTerminalExitReset();
-  await render(() => <AppRoot config={config} />, tuiRenderOptions(config));
+  // Production image previews fetch bytes over RPC; the TUI process never
+  // reads blob files from the daemon's filesystem (AGENTS.md layering rule).
+  setImageByteSource({
+    readSync: null,
+    read: async (entry) => (await getImageBytes(entry.id, config.labels)).data,
+  });
+  const initialUiState = await initialAppState(config);
+  await render(() => <AppRoot config={config} initialUiState={initialUiState} />, tuiRenderOptions(config));
+}
+
+// Loads the first screenful of data before the renderer starts, so the first
+// painted frame already shows history instead of flashing an empty list and
+// immediately repainting. RPC failures degrade to an empty list with the error
+// in the status line.
+export async function initialAppState(config: ResolvedTuiConfig): Promise<UiState> {
+  const state = initialState(config.startup);
+  try {
+    const [result, watcher] = await Promise.all([
+      listEntries(state.query, state.pinnedOnly ? "favorites" : state.filter, config.layout.historyLimit, config.labels),
+      getWatcherStatus(config.labels),
+    ]);
+    return clampSelection({
+      ...state,
+      entries: result.entries,
+      watcher,
+      status: formatEntriesStatus(result.entries.length, config.labels),
+    });
+  } catch (error) {
+    return { ...state, status: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export function tuiRenderOptions(config: ResolvedTuiConfig) {

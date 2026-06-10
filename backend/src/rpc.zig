@@ -9,7 +9,19 @@ const Request = struct {
     params: ?std.json.Value = null,
 };
 
+/// One-shot entry point: opens (and closes) a store around a single request.
 pub fn handle(allocator: std.mem.Allocator, init: std.process.Init, input: []const u8) ![]u8 {
+    var opened = app.openStore(allocator, init) catch |err| {
+        return errorResponseOwned(allocator, .null, -32000, @errorName(err));
+    };
+    defer opened.cfg.deinit();
+    defer opened.store.close();
+    return handleOpened(allocator, init, input, &opened);
+}
+
+/// Long-lived entry point: handles one request against an already-open store,
+/// so a persistent `ditoxd serve --stdio` session pays config + DB setup once.
+pub fn handleOpened(allocator: std.mem.Allocator, init: std.process.Init, input: []const u8, opened: anytype) ![]u8 {
     const body = requestBody(input);
     const parsed = std.json.parseFromSlice(Request, allocator, body, .{ .ignore_unknown_fields = true }) catch |err| {
         return errorResponseOwned(allocator, .null, -32700, @errorName(err));
@@ -25,13 +37,7 @@ pub fn handle(allocator: std.mem.Allocator, init: std.process.Init, input: []con
         return errorResponseOwned(allocator, parsed.value.id, -32602, message);
     }
 
-    var opened = app.openStore(allocator, init) catch |err| {
-        return errorResponseOwned(allocator, parsed.value.id, -32000, @errorName(err));
-    };
-    defer opened.cfg.deinit();
-    defer opened.store.close();
-
-    return dispatch(allocator, init, parsed.value.id, method, params, &opened) catch |err| {
+    return dispatch(allocator, init, parsed.value.id, method, params, opened) catch |err| {
         return errorResponseOwned(allocator, parsed.value.id, -32000, @errorName(err));
     };
 }
@@ -49,7 +55,9 @@ fn dispatch(allocator: std.mem.Allocator, init: std.process.Init, id_value: std.
         return successResponseOwned(allocator, id_value, app.configView(opened.cfg));
     }
     if (std.mem.eql(u8, method, "watcher.status")) {
-        return successResponseOwned(allocator, id_value, try app.watcherStatus(&opened.store, opened.cfg));
+        const status = try app.watcherStatus(&opened.store, opened.cfg);
+        defer if (status.last_error) |message| allocator.free(message);
+        return successResponseOwned(allocator, id_value, status);
     }
     if (std.mem.eql(u8, method, "entries.list") or std.mem.eql(u8, method, "entries.search")) {
         const query = getString(params, "query") orelse "";
@@ -67,6 +75,26 @@ fn dispatch(allocator: std.mem.Allocator, init: std.process.Init, id_value: std.
         const entry = (try opened.store.get(id)) orelse return errorResponseOwned(allocator, id_value, -32004, "entry not found");
         defer entry.deinit(allocator);
         return successResponseOwned(allocator, id_value, .{ .entry = entry });
+    }
+    if (std.mem.eql(u8, method, "entries.get_image")) {
+        const id = getI64(params, "id") orelse return errorResponseOwned(allocator, id_value, -32602, "missing id");
+        const entry = (try opened.store.get(id)) orelse return errorResponseOwned(allocator, id_value, -32004, "entry not found");
+        defer entry.deinit(allocator);
+        if (!std.mem.eql(u8, entry.kind, "image")) return errorResponseOwned(allocator, id_value, -32005, "entry is not an image");
+        const bytes = app.readImageBlob(allocator, init, entry.blob_path) catch {
+            return errorResponseOwned(allocator, id_value, -32006, "image blob is not stored");
+        };
+        defer allocator.free(bytes);
+        const encoder = std.base64.standard.Encoder;
+        const encoded = try allocator.alloc(u8, encoder.calcSize(bytes.len));
+        defer allocator.free(encoded);
+        _ = encoder.encode(encoded, bytes);
+        return successResponseOwned(allocator, id_value, .{
+            .mime = entry.mime,
+            .data = encoded,
+            .width = entry.image_width,
+            .height = entry.image_height,
+        });
     }
     if (std.mem.eql(u8, method, "entries.add")) {
         const content = getString(params, "content") orelse return errorResponseOwned(allocator, id_value, -32602, "missing content");
@@ -217,7 +245,11 @@ fn validateParams(method: []const u8, params: ?std.json.Value) ?[]const u8 {
         return validateNoParams(params);
     }
     if (std.mem.eql(u8, method, "entries.list") or std.mem.eql(u8, method, "entries.search")) return validateListParams(params);
-    if (std.mem.eql(u8, method, "entries.get") or std.mem.eql(u8, method, "entries.copy") or std.mem.eql(u8, method, "entries.delete")) {
+    if (std.mem.eql(u8, method, "entries.get") or
+        std.mem.eql(u8, method, "entries.get_image") or
+        std.mem.eql(u8, method, "entries.copy") or
+        std.mem.eql(u8, method, "entries.delete"))
+    {
         return validateIdParams(params);
     }
     if (std.mem.eql(u8, method, "entries.add")) return validateAddParams(params);
@@ -354,6 +386,8 @@ test "requestBody accepts content-length frames" {
 
 test "validateParams enforces method-specific RPC params" {
     try expectValidParams("entries.paste", "{\"id\":1,\"target_window\":\"0xabc\"}");
+    try expectValidParams("entries.get_image", "{\"id\":7}");
+    try expectInvalidParams("entries.get_image", "{}");
     try expectValidParams("entries.list", "{\"query\":\"needle\",\"filter\":\"today\",\"limit\":500}");
     try expectValidParams("history.pause", "{}");
     try expectValidParams("stats.get", "{}");

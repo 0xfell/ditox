@@ -1,6 +1,5 @@
 import { For } from "solid-js";
 import { statusTone, truncateText, watcherStatusView } from "../presentation";
-import type { ContentAlign, VerticalAlign } from "../ui-config";
 import {
   paddedTitle,
   statusHint,
@@ -9,10 +8,10 @@ import {
   textStyle,
   type ResolvedTuiConfig,
   type TuiStatusHintMode,
-  type TuiStatusLineToneName,
   type TuiSurfaceStyle,
 } from "../tui-config";
 import type { WatcherStatus } from "../types";
+import { configuredMax, configuredToneColor, justifyContent, templateWidth, verticalJustify } from "./style-utils";
 
 export function StatusLine(props: { config: ResolvedTuiConfig; status: string; watcher: WatcherStatus | null; width: number; mode?: TuiStatusHintMode }) {
   const style = () => surface(props.config, "status");
@@ -75,32 +74,12 @@ function fittedStatusLineValues(config: ResolvedTuiConfig, values: StatusLineVal
   };
   const shrinkOrder: Array<keyof StatusLineValues> = ["hint", "watcher", "operation"];
   for (const key of shrinkOrder) {
-    const overflow = templateWidth(config, fitted) - width;
+    const overflow = templateWidth(config.labels.statusLineTemplate, fitted) - width;
     if (overflow <= 0) break;
     if (fitted[key].length === 0) continue;
     fitted[key] = truncateText(fitted[key], Math.max(0, fitted[key].length - overflow), config.labels);
   }
   return fitted;
-}
-
-function configuredMax(value: string, maxWidth: number, config: ResolvedTuiConfig): string {
-  return truncateText(value, maxWidth > 0 ? maxWidth : value.length, config.labels);
-}
-
-function templateWidth(config: ResolvedTuiConfig, values: StatusLineValues): number {
-  return templateSegments(config.labels.statusLineTemplate, values).reduce((width, part) => width + part.text.length, 0);
-}
-
-function justifyContent(align: ContentAlign): "flex-start" | "center" | "flex-end" {
-  if (align === "right") return "flex-end";
-  if (align === "center") return "center";
-  return "flex-start";
-}
-
-function verticalJustify(align: VerticalAlign): "flex-start" | "center" | "flex-end" {
-  if (align === "bottom") return "flex-end";
-  if (align === "center") return "center";
-  return "flex-start";
 }
 
 function statusPartColor(config: ResolvedTuiConfig, key: string | null, watcher: StatusTone, operation: StatusTone): string {
@@ -110,11 +89,6 @@ function statusPartColor(config: ResolvedTuiConfig, key: string | null, watcher:
   if (key === "hint") return configuredToneColor(style, config.statusLineTones.hint, style.muted);
   if (key === "separator") return configuredToneColor(style, config.statusLineTones.separator, style.muted);
   return style.muted;
-}
-
-function configuredToneColor(style: TuiSurfaceStyle, tone: TuiStatusLineToneName, autoColor: string): string {
-  if (tone === "auto") return autoColor;
-  return style[tone];
 }
 
 function toneColorFromStyle(style: TuiSurfaceStyle, tone: StatusTone): string {

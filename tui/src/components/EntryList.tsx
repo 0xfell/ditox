@@ -1,7 +1,7 @@
 import { For, Show } from "solid-js";
 import { entryAccent, entryMeta, entryPreviewSegments, fitRowMeta, scrollbarCells } from "../presentation";
 import { visibleEntries, visibleEntryCapacity } from "../state";
-import type { ContentAlign, VerticalAlign } from "../ui-config";
+import type { ContentAlign } from "../ui-config";
 import {
   formatTemplate,
   paddedTitle,
@@ -9,10 +9,10 @@ import {
   textStyle,
   type ResolvedTuiConfig,
   type TuiListContentPartName,
-  type TuiStatusLineToneName,
   type TuiSurfaceStyle,
 } from "../tui-config";
 import type { Entry } from "../types";
+import { configuredToneColor, fitCell, justifyContent, verticalJustify } from "./style-utils";
 
 export function EntryList(props: {
   config: ResolvedTuiConfig;
@@ -226,18 +226,6 @@ function scrollbarCell(value: string, width: number, align: ContentAlign): strin
   return fitCell(value, width, align);
 }
 
-function fitCell(value: string, width: number, align: ContentAlign): string {
-  const chars = Array.from(value);
-  if (chars.length >= width) return chars.slice(0, width).join("");
-  const padding = width - chars.length;
-  if (align === "right") return `${" ".repeat(padding)}${value}`;
-  if (align === "center") {
-    const left = Math.floor(padding / 2);
-    return `${" ".repeat(left)}${value}${" ".repeat(padding - left)}`;
-  }
-  return `${value}${" ".repeat(padding)}`;
-}
-
 function EmptyList(props: { config: ResolvedTuiConfig; query: string }) {
   const style = () => surface(props.config, "emptyState");
   const labels = () => props.config.labels;
@@ -271,18 +259,6 @@ function EmptyList(props: { config: ResolvedTuiConfig; query: string }) {
   );
 }
 
-function justifyContent(align: ContentAlign): "flex-start" | "center" | "flex-end" {
-  if (align === "right") return "flex-end";
-  if (align === "center") return "center";
-  return "flex-start";
-}
-
-function verticalJustify(align: VerticalAlign): "flex-start" | "center" | "flex-end" {
-  if (align === "bottom") return "flex-end";
-  if (align === "center") return "center";
-  return "flex-start";
-}
-
 function alignmentPadding(align: ContentAlign, width: number, contentWidth: number): number {
   const extra = Math.max(0, Math.floor(width) - contentWidth);
   if (align === "right") return extra;
@@ -313,9 +289,4 @@ function autoListContentColor(style: TuiSurfaceStyle, entry: Entry | null, part:
     default:
       return style.fg;
   }
-}
-
-function configuredToneColor(style: TuiSurfaceStyle, tone: TuiStatusLineToneName, autoColor: string): string {
-  if (tone === "auto") return autoColor;
-  return style[tone];
 }

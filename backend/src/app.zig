@@ -58,6 +58,7 @@ pub fn configView(cfg: config.Config) ConfigView {
     };
 }
 
+/// Caller frees `last_error` (when present) with the store's allocator.
 pub fn watcherStatus(store: *storage.Storage, cfg: config.Config) !models.WatcherStatus {
     const last_seen_ms = try store.watcherLastSeen();
     const running = if (last_seen_ms) |seen| seen + (@as(i64, cfg.poll_interval_ms) * 8) + 2000 >= try store.nowMs() else false;
@@ -67,6 +68,7 @@ pub fn watcherStatus(store: *storage.Storage, cfg: config.Config) !models.Watche
         .backend = "wl-clipboard",
         .poll_interval_ms = cfg.poll_interval_ms,
         .last_seen_ms = last_seen_ms,
+        .last_error = try store.watcherLastError(),
     };
 }
 
@@ -163,7 +165,7 @@ pub fn openStore(allocator: std.mem.Allocator, init: std.process.Init) !struct {
     return .{ .cfg = cfg, .store = store };
 }
 
-fn readImageBlob(allocator: std.mem.Allocator, init: std.process.Init, blob_path: ?[]const u8) ![]u8 {
+pub fn readImageBlob(allocator: std.mem.Allocator, init: std.process.Init, blob_path: ?[]const u8) ![]u8 {
     const path = blob_path orelse return error.ImageBlobMissing;
     if (path.len == 0) return error.ImageBlobMissing;
     return try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024));

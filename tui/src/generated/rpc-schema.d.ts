@@ -13,6 +13,7 @@ export type Request =
   | EntriesListRequest
   | EntriesSearchRequest
   | EntriesGetRequest
+  | EntriesGetImageRequest
   | EntriesAddRequest
   | EntriesCopyRequest
   | EntriesBulkCopyRequest
@@ -34,6 +35,7 @@ export type Success =
   | EntriesListSuccess
   | EntriesSearchSuccess
   | EntriesGetSuccess
+  | EntriesGetImageSuccess
   | EntriesAddSuccess
   | EntriesCopySuccess
   | EntriesBulkCopySuccess
@@ -91,6 +93,12 @@ export interface EntriesGetRequest {
 }
 export interface IdParams {
   id: number;
+}
+export interface EntriesGetImageRequest {
+  jsonrpc: "2.0";
+  id: Id;
+  method: "entries.get_image";
+  params: IdParams;
 }
 export interface EntriesAddRequest {
   jsonrpc: "2.0";
@@ -273,6 +281,20 @@ export interface EntriesGetSuccess {
 export interface GetResult {
   entry: Entry;
 }
+export interface EntriesGetImageSuccess {
+  jsonrpc: "2.0";
+  id: Id;
+  result: GetImageResult;
+}
+export interface GetImageResult {
+  mime: string;
+  /**
+   * Raw image bytes, base64-encoded.
+   */
+  data: string;
+  width: number | null;
+  height: number | null;
+}
 export interface EntriesAddSuccess {
   jsonrpc: "2.0";
   id: Id;
@@ -360,6 +382,7 @@ export interface RepairResult {
   pruned_blobs: number;
   sanitized_text: number;
   removed_missing_images: number;
+  removed_orphan_blobs: number;
 }
 export interface StatsGetSuccess {
   jsonrpc: "2.0";

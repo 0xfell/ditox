@@ -392,3 +392,255 @@ fn jsonStringArray(allocator: std.mem.Allocator, object: std.json.ObjectMap, key
     const owned: []const []const u8 = try list.toOwnedSlice(allocator);
     return owned;
 }
+
+const test_home = "/home/tester";
+const test_config_home = "/home/tester/.config";
+const test_data_home = "/home/tester/.local/share";
+
+/// Test helper: a Config whose config_path lives in an absolute directory so
+/// relative-path resolution is deterministic, with the given bytes applied as
+/// if read from that config file.
+fn appliedTestConfig(allocator: std.mem.Allocator, bytes: []const u8) !Config {
+    var cfg = try testConfig(allocator, ".zig-cache/tmp/config-tests");
+    errdefer cfg.deinit();
+    allocator.free(cfg.config_path);
+    cfg.config_path = try allocator.dupe(u8, "/etc/ditox/config.toml");
+    try cfg.applyConfigFile(bytes, test_home, test_config_home, test_data_home);
+    return cfg;
+}
+
+fn expectStringList(expected: []const []const u8, actual: []const []const u8) !void {
+    try std.testing.expectEqual(expected.len, actual.len);
+    for (expected, actual) |want, got| try std.testing.expectEqualStrings(want, got);
+}
+
+test "config TOML parsing covers sections and basic keys" {
+    var cfg = try appliedTestConfig(std.testing.allocator,
+        \\# comment line
+        \\[history]
+        \\max_entries = 42
+        \\delete_after_seconds = 60 # trailing comment
+        \\allow_duplicates = true
+        \\
+        \\[watch]
+        \\poll_interval_ms = 99
+        \\
+        \\[paste]
+        \\enabled = false
+        \\buffer_ms = 7
+        \\
+        \\[auto_paste]
+        \\enabled = true
+        \\keybind = "ctrl+shift+v"
+        \\buffer_ms = 33
+        \\
+        \\[ui]
+        \\max_preview_chars = 12
+        \\terminal_command = "kitty -e ditox tui"
+        \\
+        \\[capture]
+        \\excluded_apps = ["KeePassXC", "Bitwarden"]
+        \\excluded_windows = ["secret window"]
+    );
+    defer cfg.deinit();
+
+    try std.testing.expectEqual(@as(u32, 42), cfg.max_entries);
+    try std.testing.expectEqual(@as(u32, 60), cfg.delete_after_seconds);
+    try std.testing.expect(cfg.allow_duplicates);
+    try std.testing.expectEqual(@as(u32, 99), cfg.poll_interval_ms);
+    try std.testing.expect(!cfg.paste_enabled);
+    try std.testing.expectEqual(@as(u32, 7), cfg.paste_buffer_ms);
+    try std.testing.expect(cfg.auto_paste_enabled);
+    try std.testing.expectEqualStrings("ctrl+shift+v", cfg.auto_paste_keybind);
+    try std.testing.expectEqual(@as(u32, 33), cfg.auto_paste_buffer_ms);
+    try std.testing.expectEqual(@as(u32, 12), cfg.max_preview_chars);
+    try std.testing.expectEqualStrings("kitty -e ditox tui", cfg.terminal_command);
+    try expectStringList(&.{ "KeePassXC", "Bitwarden" }, cfg.excluded_apps);
+    try expectStringList(&.{"secret window"}, cfg.excluded_windows);
+}
+
+test "config TOML top-level compatibility aliases" {
+    var cfg = try appliedTestConfig(std.testing.allocator,
+        \\maxHistory = 5
+        \\deleteAfter = 10
+        \\allowDuplicates = true
+        \\pollInterval = 123
+        \\maxEntryLength = 44
+        \\historyFile = "history/hist.db"
+        \\tempDir = "imgs"
+        \\excludedApps = ["1Password"]
+        \\excludedWindows = ["vault"]
+    );
+    defer cfg.deinit();
+
+    try std.testing.expectEqual(@as(u32, 5), cfg.max_entries);
+    try std.testing.expectEqual(@as(u32, 10), cfg.delete_after_seconds);
+    try std.testing.expect(cfg.allow_duplicates);
+    try std.testing.expectEqual(@as(u32, 123), cfg.poll_interval_ms);
+    try std.testing.expectEqual(@as(u32, 44), cfg.max_preview_chars);
+    // Relative paths resolve from the config file's directory.
+    try std.testing.expectEqualStrings("/etc/ditox/history/hist.db", cfg.db_path);
+    try std.testing.expectEqualStrings("/etc/ditox/imgs", cfg.image_dir);
+    try expectStringList(&.{"1Password"}, cfg.excluded_apps);
+    try expectStringList(&.{"vault"}, cfg.excluded_windows);
+}
+
+test "config TOML snake_case and camelCase alias pairs agree" {
+    var snake = try appliedTestConfig(std.testing.allocator,
+        \\[history]
+        \\max_entries = 77
+        \\delete_after = 88
+        \\allow_duplicates = true
+        \\[watch]
+        \\poll_interval_ms = 55
+        \\[ui]
+        \\max_preview_chars = 66
+    );
+    defer snake.deinit();
+    var camel = try appliedTestConfig(std.testing.allocator,
+        \\[history]
+        \\maxHistory = 77
+        \\deleteAfter = 88
+        \\allowDuplicates = true
+        \\[watch]
+        \\pollInterval = 55
+        \\[ui]
+        \\maxEntryLength = 66
+    );
+    defer camel.deinit();
+
+    try std.testing.expectEqual(snake.max_entries, camel.max_entries);
+    try std.testing.expectEqual(snake.delete_after_seconds, camel.delete_after_seconds);
+    try std.testing.expectEqual(snake.allow_duplicates, camel.allow_duplicates);
+    try std.testing.expectEqual(snake.poll_interval_ms, camel.poll_interval_ms);
+    try std.testing.expectEqual(snake.max_preview_chars, camel.max_preview_chars);
+    try std.testing.expectEqual(@as(u32, 77), camel.max_entries);
+    try std.testing.expectEqual(@as(u32, 88), camel.delete_after_seconds);
+}
+
+test "config JSON parsing with snake_case keys and nested sections" {
+    var cfg = try appliedTestConfig(std.testing.allocator,
+        \\{
+        \\  "max_entries": 31,
+        \\  "delete_after_seconds": 32,
+        \\  "allow_duplicates": true,
+        \\  "poll_interval_ms": 34,
+        \\  "max_preview_chars": 35,
+        \\  "db_path": "store/main.db",
+        \\  "image_dir": "store/images",
+        \\  "terminal_command": "alacritty -e ditox tui",
+        \\  "excluded_apps": ["Dashlane"],
+        \\  "excluded_windows": ["private"],
+        \\  "paste": { "enabled": false, "buffer_ms": 9 },
+        \\  "auto_paste": { "enabled": true, "keybind": "super+v", "buffer_ms": 4 }
+        \\}
+    );
+    defer cfg.deinit();
+
+    try std.testing.expectEqual(@as(u32, 31), cfg.max_entries);
+    try std.testing.expectEqual(@as(u32, 32), cfg.delete_after_seconds);
+    try std.testing.expect(cfg.allow_duplicates);
+    try std.testing.expectEqual(@as(u32, 34), cfg.poll_interval_ms);
+    try std.testing.expectEqual(@as(u32, 35), cfg.max_preview_chars);
+    try std.testing.expectEqualStrings("/etc/ditox/store/main.db", cfg.db_path);
+    try std.testing.expectEqualStrings("/etc/ditox/store/images", cfg.image_dir);
+    try std.testing.expectEqualStrings("alacritty -e ditox tui", cfg.terminal_command);
+    try expectStringList(&.{"Dashlane"}, cfg.excluded_apps);
+    try expectStringList(&.{"private"}, cfg.excluded_windows);
+    try std.testing.expect(!cfg.paste_enabled);
+    try std.testing.expectEqual(@as(u32, 9), cfg.paste_buffer_ms);
+    try std.testing.expect(cfg.auto_paste_enabled);
+    try std.testing.expectEqualStrings("super+v", cfg.auto_paste_keybind);
+    try std.testing.expectEqual(@as(u32, 4), cfg.auto_paste_buffer_ms);
+}
+
+test "config JSON compatibility aliases" {
+    var cfg = try appliedTestConfig(std.testing.allocator,
+        \\{
+        \\  "maxHistory": 11,
+        \\  "deleteAfter": 22,
+        \\  "allowDuplicates": true,
+        \\  "pollInterval": 33,
+        \\  "maxEntryLength": 14,
+        \\  "historyFile": "hist.db",
+        \\  "tempDir": "tmp-images",
+        \\  "terminalCommand": "wezterm start ditox tui",
+        \\  "excludedApps": ["LastPass"],
+        \\  "excludedWindows": ["incognito"],
+        \\  "autoPaste": { "enabled": true, "keybind": "alt+v", "buffer": 6 }
+        \\}
+    );
+    defer cfg.deinit();
+
+    try std.testing.expectEqual(@as(u32, 11), cfg.max_entries);
+    try std.testing.expectEqual(@as(u32, 22), cfg.delete_after_seconds);
+    try std.testing.expect(cfg.allow_duplicates);
+    try std.testing.expectEqual(@as(u32, 33), cfg.poll_interval_ms);
+    try std.testing.expectEqual(@as(u32, 14), cfg.max_preview_chars);
+    try std.testing.expectEqualStrings("/etc/ditox/hist.db", cfg.db_path);
+    try std.testing.expectEqualStrings("/etc/ditox/tmp-images", cfg.image_dir);
+    try std.testing.expectEqualStrings("wezterm start ditox tui", cfg.terminal_command);
+    try expectStringList(&.{"LastPass"}, cfg.excluded_apps);
+    try expectStringList(&.{"incognito"}, cfg.excluded_windows);
+    try std.testing.expect(cfg.auto_paste_enabled);
+    try std.testing.expectEqualStrings("alt+v", cfg.auto_paste_keybind);
+    try std.testing.expectEqual(@as(u32, 6), cfg.auto_paste_buffer_ms);
+}
+
+test "config JSON nested history, watch, ui, and capture sections" {
+    var cfg = try appliedTestConfig(std.testing.allocator,
+        \\{
+        \\  "history": { "maxHistory": 64, "deleteAfter": 65, "allowDuplicates": true, "historyFile": "nested.db" },
+        \\  "watch": { "pollInterval": 71 },
+        \\  "ui": { "maxEntryLength": 81, "terminalCommand": "foot ditox tui" },
+        \\  "capture": { "excludedApps": ["KeePassXC"], "excludedWindows": ["totp"] }
+        \\}
+    );
+    defer cfg.deinit();
+
+    try std.testing.expectEqual(@as(u32, 64), cfg.max_entries);
+    try std.testing.expectEqual(@as(u32, 65), cfg.delete_after_seconds);
+    try std.testing.expect(cfg.allow_duplicates);
+    try std.testing.expectEqualStrings("/etc/ditox/nested.db", cfg.db_path);
+    try std.testing.expectEqual(@as(u32, 71), cfg.poll_interval_ms);
+    try std.testing.expectEqual(@as(u32, 81), cfg.max_preview_chars);
+    try std.testing.expectEqualStrings("foot ditox tui", cfg.terminal_command);
+    try expectStringList(&.{"KeePassXC"}, cfg.excluded_apps);
+    try expectStringList(&.{"totp"}, cfg.excluded_windows);
+}
+
+test "config resolves home and XDG path prefixes" {
+    var cfg = try appliedTestConfig(std.testing.allocator,
+        \\historyFile = "~/clip/hist.db"
+        \\tempDir = "$XDG_DATA_HOME/ditox/blobs"
+    );
+    defer cfg.deinit();
+    try std.testing.expectEqualStrings(test_home ++ "/clip/hist.db", cfg.db_path);
+    try std.testing.expectEqualStrings(test_data_home ++ "/ditox/blobs", cfg.image_dir);
+
+    var braced = try appliedTestConfig(std.testing.allocator,
+        \\historyFile = "${HOME}/braced.db"
+        \\tempDir = "${XDG_CONFIG_HOME}/ditox/img"
+    );
+    defer braced.deinit();
+    try std.testing.expectEqualStrings(test_home ++ "/braced.db", braced.db_path);
+    try std.testing.expectEqualStrings(test_config_home ++ "/ditox/img", braced.image_dir);
+
+    var absolute = try appliedTestConfig(std.testing.allocator,
+        \\historyFile = "/var/lib/ditox/abs.db"
+    );
+    defer absolute.deinit();
+    try std.testing.expectEqualStrings("/var/lib/ditox/abs.db", absolute.db_path);
+}
+
+test "config unknown keys and malformed values leave defaults intact" {
+    var cfg = try appliedTestConfig(std.testing.allocator,
+        \\unknownKey = "whatever"
+        \\[history]
+        \\max_entries = not-a-number
+        \\allow_duplicates = maybe
+    );
+    defer cfg.deinit();
+    try std.testing.expectEqual(@as(u32, 1000), cfg.max_entries);
+    try std.testing.expect(!cfg.allow_duplicates);
+}

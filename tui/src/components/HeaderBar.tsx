@@ -1,7 +1,6 @@
 import { For } from "solid-js";
 import type { UiState } from "../state";
 import { formatFilter, truncateText } from "../presentation";
-import type { ContentAlign, VerticalAlign } from "../ui-config";
 import {
   formatTemplate,
   headerLinePartNames,
@@ -11,9 +10,9 @@ import {
   textStyle,
   type ResolvedTuiConfig,
   type TuiHeaderLinePartName,
-  type TuiStatusLineToneName,
   type TuiSurfaceStyle,
 } from "../tui-config";
+import { configuredMax, configuredToneColor, justifyContent, templateWidth, verticalJustify } from "./style-utils";
 
 export function HeaderBar(props: { config: ResolvedTuiConfig; state: UiState; selectedCount: number; width?: number }) {
   const style = () => surface(props.config, "header");
@@ -85,32 +84,12 @@ function fittedHeaderLineValues(config: ResolvedTuiConfig, values: HeaderLineVal
   };
   const shrinkOrder: Array<keyof HeaderLineValues> = ["query", "mode", "filter", "brand", "queryLabel", "modeLabel", "filterLabel", "sectionSeparator", "labelSeparator"];
   for (const key of shrinkOrder) {
-    const overflow = templateWidth(config, fitted) - width;
+    const overflow = templateWidth(config.labels.headerLineTemplate, fitted) - width;
     if (overflow <= 0) break;
     if (fitted[key].length === 0) continue;
     fitted[key] = truncateText(fitted[key], Math.max(0, fitted[key].length - overflow), config.labels);
   }
   return fitted;
-}
-
-function configuredMax(value: string, maxWidth: number, config: ResolvedTuiConfig): string {
-  return truncateText(value, maxWidth > 0 ? maxWidth : value.length, config.labels);
-}
-
-function templateWidth(config: ResolvedTuiConfig, values: HeaderLineValues): number {
-  return templateSegments(config.labels.headerLineTemplate, values).reduce((width, part) => width + part.text.length, 0);
-}
-
-function justifyContent(align: ContentAlign): "flex-start" | "center" | "flex-end" {
-  if (align === "right") return "flex-end";
-  if (align === "center") return "center";
-  return "flex-start";
-}
-
-function verticalJustify(align: VerticalAlign): "flex-start" | "center" | "flex-end" {
-  if (align === "bottom") return "flex-end";
-  if (align === "center") return "center";
-  return "flex-start";
 }
 
 function headerPartColor(config: ResolvedTuiConfig, key: string | null, pinnedOnly: boolean): string {
@@ -137,11 +116,6 @@ function autoHeaderPartColor(style: TuiSurfaceStyle, key: TuiHeaderLinePartName,
     default:
       return style.muted;
   }
-}
-
-function configuredToneColor(style: TuiSurfaceStyle, tone: TuiStatusLineToneName, autoColor: string): string {
-  if (tone === "auto") return autoColor;
-  return style[tone];
 }
 
 function isHeaderLinePartName(value: string | null): value is TuiHeaderLinePartName {

@@ -186,7 +186,6 @@ function NativeTerminalImage(props: {
       contentPixelHeight: props.placement.contentPixelHeight,
       contentOffsetX: props.placement.contentOffsetX,
       contentOffsetY: props.placement.contentOffsetY,
-      frameId: this.ctx.frameId,
     });
   };
   return <box width={props.placement.cols} height={props.placement.rows} flexShrink={0} backgroundColor={props.background} renderAfter={drawImage} />;

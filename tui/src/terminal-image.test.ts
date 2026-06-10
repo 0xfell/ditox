@@ -151,12 +151,11 @@ describe("terminal image previews", () => {
       contentPixelHeight: 1,
       contentOffsetX: 0,
       contentOffsetY: 0,
-      frameId: 1,
     });
     await new Promise((resolve) => setTimeout(resolve, 1));
     expect(writes).toHaveLength(1);
     expect(writes[0]).toContain("\x1b[3;5H");
-    expect(writes[0]).toContain("a=d,q=2");
+    expect(writes[0]).not.toContain("a=d");
     expect(writes[0]).toContain("a=t");
     expect(writes[0]).toContain("a=p");
     expect(writes[0]).not.toContain("a=T");
@@ -176,11 +175,10 @@ describe("terminal image previews", () => {
       contentPixelHeight: 1,
       contentOffsetX: 0,
       contentOffsetY: 0,
-      frameId: 2,
     });
     await new Promise((resolve) => setTimeout(resolve, 1));
     expect(writes).toHaveLength(2);
-    expect(writes[1]).toContain("a=d,q=2");
+    expect(writes[1]).not.toContain("a=d");
     expect(writes[1]).not.toContain("a=t");
     expect(writes[1]).toContain("a=p");
 
@@ -189,7 +187,44 @@ describe("terminal image previews", () => {
     expect(writes.at(-1)).toContain("d=I");
   });
 
-  test("frees old Kitty image data when the preview source changes", async () => {
+  test("skips re-emitting an identical placement queued on a later frame", async () => {
+    const writes: string[] = [];
+    const manager = new TerminalImageManager((chunk) => writes.push(chunk));
+    const image: DecodedImage = { width: 1, height: 1, pixels: Uint8Array.from([255, 0, 0, 255]) };
+
+    const request = {
+      protocol: "kitty" as const,
+      sourceKey: "red",
+      image,
+      background: "#000000",
+      screenX: 4,
+      screenY: 2,
+      cols: 1,
+      rows: 1,
+      pixelWidth: 1,
+      pixelHeight: 1,
+      contentPixelWidth: 1,
+      contentPixelHeight: 1,
+      contentOffsetX: 0,
+      contentOffsetY: 0,
+    };
+
+    manager.queue(request);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    manager.queue({ ...request });
+    manager.queue({ ...request });
+    await new Promise((resolve) => setTimeout(resolve, 1));
+
+    expect(writes).toHaveLength(1);
+
+    // After clear, the same placement must re-emit (the screen was wiped).
+    manager.clear();
+    manager.queue({ ...request });
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(writes.filter((chunk) => chunk.includes("a=p"))).toHaveLength(2);
+  });
+
+  test("frees old Kitty image data only after the new placement is established", async () => {
     const writes: string[] = [];
     const manager = new TerminalImageManager((chunk) => writes.push(chunk));
     const image: DecodedImage = { width: 1, height: 1, pixels: Uint8Array.from([255, 0, 0, 255]) };
@@ -210,15 +245,17 @@ describe("terminal image previews", () => {
       contentOffsetY: 0,
     };
 
-    manager.queue({ ...request, sourceKey: "red", frameId: 1 });
+    manager.queue({ ...request, sourceKey: "red" });
     await new Promise((resolve) => setTimeout(resolve, 1));
-    manager.queue({ ...request, sourceKey: "blue", frameId: 2 });
+    manager.queue({ ...request, sourceKey: "blue" });
     await new Promise((resolve) => setTimeout(resolve, 1));
 
     expect(writes).toHaveLength(2);
-    expect(writes[1]).toContain("a=d,q=2");
+    expect(writes[1]).not.toContain("a=d,q=2");
     expect(writes[1]).toContain("d=I");
     expect(writes[1]).toContain("a=t");
     expect(writes[1]).toContain("a=p");
+    // The new placement must come before the old image is freed.
+    expect(writes[1]!.indexOf("a=p")).toBeLessThan(writes[1]!.indexOf("d=I"));
   });
 });

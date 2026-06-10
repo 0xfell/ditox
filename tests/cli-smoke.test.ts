@@ -663,8 +663,11 @@ describe("ditox CLI smoke", () => {
     );
     db.close();
 
+    // Image previews decode asynchronously (bytes arrive over RPC); the
+    // renderer only emits the post-decode frame on a real terminal, so run
+    // the TUI under a PTY via `script` instead of bare pipes.
     const proc = Bun.spawnSync({
-      cmd: ["timeout", "--foreground", "--kill-after=1s", "1s", "bun", "run", "--cwd", "tui", "start"],
+      cmd: ["script", "-qec", "timeout --foreground --kill-after=1s 1s bun run --cwd tui start", "/dev/null"],
       cwd: repoRoot,
       env: {
         ...process.env,

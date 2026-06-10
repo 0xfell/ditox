@@ -1,7 +1,6 @@
 import { For, Show } from "solid-js";
 import { formatClearKind, truncateText } from "../presentation";
 import { selectedIdsOrCurrent, selectedSetIncludesPinned, type UiState } from "../state";
-import type { ContentAlign, VerticalAlign } from "../ui-config";
 import {
   formatTemplate,
   helpRows,
@@ -13,9 +12,9 @@ import {
   type ResolvedTuiConfig,
   type TuiOverlayContentPartName,
   type TuiOverlayToneName,
-  type TuiStatusLineToneName,
   type TuiSurfaceStyle,
 } from "../tui-config";
+import { configuredMax, configuredToneColor, fitHelpKey, justifyContent, templateWidth, verticalJustify } from "./style-utils";
 
 export function ModeOverlay(props: { config: ResolvedTuiConfig; state: UiState; width?: number }) {
   const searchStyle = () => overlaySurface(props.config, "search");
@@ -191,7 +190,7 @@ function fittedSearchInputValues(config: ResolvedTuiConfig, values: SearchInputV
   };
   const shrinkOrder: Array<keyof SearchInputValues> = ["query", "prompt", "cursor"];
   for (const key of shrinkOrder) {
-    const overflow = searchInputWidth(config, fitted) - width;
+    const overflow = templateWidth(config.labels.searchInputTemplate, fitted) - width;
     if (overflow <= 0) break;
     if (fitted[key].length === 0) continue;
     fitted[key] = truncateText(fitted[key], Math.max(0, fitted[key].length - overflow), config.labels);
@@ -199,16 +198,8 @@ function fittedSearchInputValues(config: ResolvedTuiConfig, values: SearchInputV
   return fitted;
 }
 
-function searchInputWidth(config: ResolvedTuiConfig, values: SearchInputValues): number {
-  return templateSegments(config.labels.searchInputTemplate, values).reduce((width, part) => width + part.text.length, 0);
-}
-
 function fitOverlayText(value: string, maxWidth: number, width: number, config: ResolvedTuiConfig): string {
   return truncateText(configuredMax(value, maxWidth, config), width, config.labels);
-}
-
-function configuredMax(value: string, maxWidth: number, config: ResolvedTuiConfig): string {
-  return truncateText(value, maxWidth > 0 ? maxWidth : value.length, config.labels);
 }
 
 function OverlayLine(props: { config: ResolvedTuiConfig; tone: TuiOverlayToneName; children: any }) {
@@ -322,18 +313,6 @@ function OverlayFrame(props: { config: ResolvedTuiConfig; title: string; height:
   );
 }
 
-function justifyContent(align: ContentAlign): "flex-start" | "center" | "flex-end" {
-  if (align === "right") return "flex-end";
-  if (align === "center") return "center";
-  return "flex-start";
-}
-
-function verticalJustify(align: VerticalAlign): "flex-start" | "center" | "flex-end" {
-  if (align === "bottom") return "flex-end";
-  if (align === "center") return "center";
-  return "flex-start";
-}
-
 function overlayBorder(config: ResolvedTuiConfig, tone: TuiOverlayToneName): string {
   const style = overlaySurface(config, tone);
   return configuredToneColor(style, config.overlayBorderTones[tone], autoOverlayBorderColor(style, tone));
@@ -379,19 +358,6 @@ function overlayLineSpacing(config: ResolvedTuiConfig, tone: TuiOverlayToneName)
   if (tone === "search") return config.layout.searchOverlayLineSpacing;
   if (tone === "danger") return config.layout.dangerOverlayLineSpacing;
   return config.layout.helpOverlayLineSpacing;
-}
-
-function fitHelpKey(value: string, config: ResolvedTuiConfig, maxWidth = config.layout.helpKeyWidth): string {
-  const width = Math.max(0, Math.floor(maxWidth));
-  const chars = Array.from(value);
-  const clipped = chars.length > width ? truncateText(value, width, config.labels) : value;
-  const padding = Math.max(0, width - Array.from(clipped).length);
-  if (config.layout.helpKeyAlign === "right") return `${" ".repeat(padding)}${clipped}`;
-  if (config.layout.helpKeyAlign === "center") {
-    const left = Math.floor(padding / 2);
-    return `${" ".repeat(left)}${clipped}${" ".repeat(padding - left)}`;
-  }
-  return `${clipped}${" ".repeat(padding)}`;
 }
 
 function overlayPaddingX(config: ResolvedTuiConfig, tone: TuiOverlayToneName): number {
@@ -458,9 +424,4 @@ function autoOverlayContentColor(style: TuiSurfaceStyle, part: TuiOverlayContent
     default:
       return style.muted;
   }
-}
-
-function configuredToneColor(style: TuiSurfaceStyle, tone: TuiStatusLineToneName, autoColor: string): string {
-  if (tone === "auto") return autoColor;
-  return style[tone];
 }

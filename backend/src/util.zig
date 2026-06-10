@@ -63,6 +63,50 @@ pub fn readAllStdin(allocator: std.mem.Allocator) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
+/// Sniffs the image format from magic bytes. This is the single source of
+/// truth for capture-format detection: both the CLI `--wl-store` path and the
+/// watcher daemon verify clipboard payloads with it, so an announced MIME can
+/// never mislabel stored bytes.
+pub fn detectImageMime(bytes: []const u8) ?[]const u8 {
+    if (isPng(bytes)) return "image/png";
+    if (isJpeg(bytes)) return "image/jpeg";
+    if (isGif(bytes)) return "image/gif";
+    if (isWebp(bytes)) return "image/webp";
+    if (isBmp(bytes)) return "image/bmp";
+    return null;
+}
+
+/// True when `detectImageMime` is able to recognize this MIME from magic
+/// bytes. Formats outside this set (e.g. image/svg+xml) cannot be verified.
+pub fn isSniffableImageMime(mime: []const u8) bool {
+    return std.mem.eql(u8, mime, "image/png") or
+        std.mem.eql(u8, mime, "image/jpeg") or
+        std.mem.eql(u8, mime, "image/jpg") or
+        std.mem.eql(u8, mime, "image/gif") or
+        std.mem.eql(u8, mime, "image/webp") or
+        std.mem.eql(u8, mime, "image/bmp");
+}
+
+fn isPng(bytes: []const u8) bool {
+    return bytes.len >= 8 and std.mem.eql(u8, bytes[0..8], "\x89PNG\r\n\x1a\n");
+}
+
+fn isJpeg(bytes: []const u8) bool {
+    return bytes.len >= 3 and bytes[0] == 0xff and bytes[1] == 0xd8 and bytes[2] == 0xff;
+}
+
+fn isGif(bytes: []const u8) bool {
+    return bytes.len >= 6 and (std.mem.eql(u8, bytes[0..6], "GIF87a") or std.mem.eql(u8, bytes[0..6], "GIF89a"));
+}
+
+fn isWebp(bytes: []const u8) bool {
+    return bytes.len >= 12 and std.mem.eql(u8, bytes[0..4], "RIFF") and std.mem.eql(u8, bytes[8..12], "WEBP");
+}
+
+fn isBmp(bytes: []const u8) bool {
+    return bytes.len >= 2 and std.mem.eql(u8, bytes[0..2], "BM");
+}
+
 pub fn imageMetadata(bytes: []const u8, mime: []const u8) models.ImageMetadata {
     if (std.mem.eql(u8, mime, "image/png")) return pngMetadata(bytes);
     if (std.mem.eql(u8, mime, "image/jpeg")) return jpegMetadata(bytes);
@@ -123,6 +167,21 @@ test "sanitizeText strips ANSI and controls" {
 test "sha256Hex" {
     const hash = sha256Hex("abc");
     try std.testing.expectEqualStrings("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", &hash);
+}
+
+test "detectImageMime sniffs known formats and rejects other bytes" {
+    try std.testing.expectEqualStrings("image/png", detectImageMime("\x89PNG\r\n\x1a\n12345678").?);
+    try std.testing.expectEqualStrings("image/jpeg", detectImageMime("\xff\xd8\xff\xe0rest").?);
+    try std.testing.expectEqualStrings("image/gif", detectImageMime("GIF89a-rest").?);
+    try std.testing.expectEqualStrings("image/webp", detectImageMime("RIFF\x00\x00\x00\x00WEBPVP8 ").?);
+    try std.testing.expectEqualStrings("image/bmp", detectImageMime("BM\x00\x00").?);
+    try std.testing.expectEqual(@as(?[]const u8, null), detectImageMime("<svg></svg>"));
+    try std.testing.expectEqual(@as(?[]const u8, null), detectImageMime("https://example.com/cat.png"));
+
+    try std.testing.expect(isSniffableImageMime("image/png"));
+    try std.testing.expect(isSniffableImageMime("image/jpg"));
+    try std.testing.expect(!isSniffableImageMime("image/svg+xml"));
+    try std.testing.expect(!isSniffableImageMime("text/plain"));
 }
 
 test "imageMetadata reads png dimensions" {

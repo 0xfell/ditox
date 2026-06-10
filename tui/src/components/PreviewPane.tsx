@@ -1,27 +1,14 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import {
-  imageBlockPreview,
-  imageBlockPreviewAsync,
-  shouldLoadImageBlockPreviewAsync,
-  type ImageBlockPreview as ImageBlockPreviewModel,
-  type ImageProtocolCapabilities,
-} from "../image-preview";
-import { entryAccent, previewMetaTemplateValues, previewModel, truncateText } from "../presentation";
+import { createEffect, For, Show } from "solid-js";
+import { type ImageBlockPreview as ImageBlockPreviewModel, type ImageProtocolCapabilities } from "../image-preview";
+import { previewMetaTemplateValues, previewModel, truncateText } from "../presentation";
 import { visiblePreviewLineCapacity } from "../state";
-import type { ContentAlign, VerticalAlign } from "../ui-config";
 import { selectNativeImageProtocol, type TerminalImageManagerLike, type TerminalImageState } from "../terminal-image";
-import {
-  formatTemplate,
-  paddedTitle,
-  surface,
-  textStyle,
-  type ResolvedTuiConfig,
-  type TuiPreviewContentPartName,
-  type TuiStatusLineToneName,
-  type TuiSurfaceStyle,
-} from "../tui-config";
+import { formatTemplate, paddedTitle, surface, textStyle, type ResolvedTuiConfig } from "../tui-config";
 import type { Entry } from "../types";
+import { createImageBlockPreview } from "../use-image-block-preview";
 import { ImagePreviewRows } from "./ImagePreviewRows";
+import { imagePreviewBackground, imagePreviewNotice, previewBorderColor, previewContentColor, previewLineToneColor } from "./preview-shared";
+import { fitGutter, justifyContent, verticalJustify } from "./style-utils";
 
 export function PreviewPane(props: {
   config: ResolvedTuiConfig;
@@ -38,63 +25,23 @@ export function PreviewPane(props: {
   const spacerStyle = () => surface(props.config, "previewSpacer");
   const layout = () => props.config.layout;
   const labels = () => props.config.labels;
-  const [loadedBlockPreview, setLoadedBlockPreview] = createSignal<ImageBlockPreviewModel | null>(null);
   const textWidth = () => Math.max(1, props.width - (layout().showPreviewGutter ? layout().previewTextWidthInset : layout().previewPaddingX * 2));
   // Width available to the metadata header/detail text once the preview border,
   // preview padding, and metadata padding are subtracted. Used to hard-truncate
   // each line so a long header (e.g. full hash) cannot wrap into the detail row.
   const metaTextWidth = () =>
     Math.max(1, props.width - (props.config.chrome.previewBorder ? 2 : 0) - layout().previewPaddingX * 2 - layout().previewMetaPaddingX * 2);
-  const blockPreviewRequest = createMemo(() => ({
+  const blockPreview = createImageBlockPreview(() => ({
     entry: props.entry,
     maxWidth: Math.min(textWidth(), layout().imagePreviewMaxWidth),
     maxRows: Math.min(Math.max(2, props.rows - layout().imagePreviewRowInset), layout().imagePreviewMaxRows),
-    background: imagePreviewBackground(props.config, style().bg),
+    background: imagePreviewBackground(layout().imagePreviewBackground, style().bg),
     mode: layout().imagePreviewMode,
     labels: labels(),
     blockGlyph: layout().imagePreviewBlockGlyph,
     capabilities: props.imageTerminal?.capabilities ?? props.imageCapabilities,
   }));
-  createEffect(() => {
-    const request = blockPreviewRequest();
-    const syncPreview = imageBlockPreview(
-      request.entry,
-      request.maxWidth,
-      request.maxRows,
-      request.background,
-      request.mode,
-      request.labels,
-      request.blockGlyph,
-      request.capabilities,
-    );
-    setLoadedBlockPreview(syncPreview);
-    if (!shouldLoadImageBlockPreviewAsync(request.entry, request.mode)) return;
-
-    let disposed = false;
-    void imageBlockPreviewAsync(
-      request.entry,
-      request.maxWidth,
-      request.maxRows,
-      request.background,
-      request.mode,
-      request.labels,
-      request.blockGlyph,
-      request.capabilities,
-    ).then((preview) => {
-      if (!disposed) setLoadedBlockPreview(preview);
-    });
-    onCleanup(() => {
-      disposed = true;
-    });
-  });
-  const blockPreview = () => {
-    const request = blockPreviewRequest();
-    return (
-      loadedBlockPreview() ??
-      imageBlockPreview(request.entry, request.maxWidth, request.maxRows, request.background, request.mode, request.labels, request.blockGlyph, request.capabilities)
-    );
-  };
-  const imageNoticeText = () => imagePreviewNotice(props.config, blockPreview());
+  const imageNoticeText = () => imagePreviewNotice(blockPreview(), layout().imagePreviewNoticeVisibility, labels().splitImagePreviewSourceTemplate);
   const imageFallbackVisible = () => props.entry?.kind === "image" && blockPreview().kind === "fallback" && layout().imagePreviewMode !== "metadata";
   const imageNoticeSpacingRows = () =>
     props.entry?.kind === "image" && blockPreview().kind === "rendered" && imageNoticeText() ? layout().imagePreviewNoticeSpacing : 0;
@@ -133,7 +80,7 @@ export function PreviewPane(props: {
       width={`${props.widthPercent ?? layout().previewWidthPercent}%`}
       border={props.config.chrome.previewBorder ? true : undefined}
       borderStyle={props.config.chrome.previewBorder ? props.config.chrome.previewBorderStyle : undefined}
-      borderColor={props.config.chrome.previewBorder ? splitBorderColor(props.config, style(), props.entry) : undefined}
+      borderColor={props.config.chrome.previewBorder ? previewBorderColor(props.config, style(), props.entry, "splitBorder") : undefined}
       backgroundColor={style().bg}
       paddingX={layout().previewPaddingX}
       paddingY={layout().previewPaddingY}
@@ -162,7 +109,7 @@ export function PreviewPane(props: {
             blockGlyph={layout().imagePreviewBlockGlyph}
             align={layout().imagePreviewAlign}
             width={textWidth()}
-            background={imagePreviewBackground(props.config, style().bg)}
+            background={imagePreviewBackground(layout().imagePreviewBackground, style().bg)}
             entry={props.entry}
             terminal={props.imageTerminal}
             imageManager={props.imageManager}
@@ -174,20 +121,20 @@ export function PreviewPane(props: {
         <Show when={imageNoticeText()}>
           {(notice) => (
             <box height={1} flexDirection="row" justifyContent={justifyContent(layout().previewContentAlign)} backgroundColor={style().bg}>
-              <text style={textStyle(style(), splitContentColor(props.config, style(), "splitImageNotice", style().muted))}>{notice()}</text>
+              <text style={textStyle(style(), previewContentColor(props.config, style(), "splitImageNotice", style().muted))}>{notice()}</text>
             </box>
           )}
         </Show>
         <Show when={imageFallbackVisible()}>
           <box height={1} flexDirection="row" justifyContent={justifyContent(layout().previewContentAlign)} backgroundColor={style().bg}>
             <text style={textStyle(style())}>
-              <span style={textStyle(style(), splitContentColor(props.config, style(), "splitImageFallbackPrefix", style().muted))}>
+              <span style={textStyle(style(), previewContentColor(props.config, style(), "splitImageFallbackPrefix", style().muted))}>
                 {labels().splitImagePreviewFallbackPrefix}
               </span>
-              <span style={textStyle(style(), splitContentColor(props.config, style(), "splitImageFallbackSeparator", style().muted))}>
+              <span style={textStyle(style(), previewContentColor(props.config, style(), "splitImageFallbackSeparator", style().muted))}>
                 {labels().splitImagePreviewFallbackSeparator}
               </span>
-              <span style={textStyle(style(), splitContentColor(props.config, style(), "splitImageFallbackReason", style().muted))}>
+              <span style={textStyle(style(), previewContentColor(props.config, style(), "splitImageFallbackReason", style().muted))}>
                 {(blockPreview() as Extract<ImageBlockPreviewModel, { kind: "fallback" }>).reason}
               </span>
             </text>
@@ -198,15 +145,15 @@ export function PreviewPane(props: {
             <>
               <box height={1} flexDirection="row" backgroundColor={style().bg}>
                 <Show when={layout().showPreviewGutter}>
-                  <text style={textStyle(gutterStyle(), splitContentColor(props.config, gutterStyle(), "splitGutter", gutterStyle().muted))}>
+                  <text style={textStyle(gutterStyle(), previewContentColor(props.config, gutterStyle(), "splitGutter", gutterStyle().muted))}>
                     {fitGutter(line.gutter, layout().previewGutterWidth, layout().previewGutterAlign)}
                   </text>
-                  <text style={textStyle(gutterStyle(), splitContentColor(props.config, gutterStyle(), "splitGutterSeparator", gutterStyle().muted))}>
+                  <text style={textStyle(gutterStyle(), previewContentColor(props.config, gutterStyle(), "splitGutterSeparator", gutterStyle().muted))}>
                     {labels().previewGutterSeparator}
                   </text>
                 </Show>
                 <box flexGrow={1} flexDirection="row" justifyContent={justifyContent(layout().previewContentAlign)}>
-                  <text style={textStyle(style(), splitLineToneColor(props.config, style(), props.entry, line.tone, index()))}>
+                  <text style={textStyle(style(), previewLineToneColor("split", props.config, style(), props.entry, line.tone, index()))}>
                     {truncateText(line.text, textWidth(), labels())}
                   </text>
                 </box>
@@ -220,20 +167,6 @@ export function PreviewPane(props: {
       </box>
     </box>
   );
-}
-
-function imagePreviewBackground(config: ResolvedTuiConfig, fallback: string): string {
-  return config.layout.imagePreviewBackground === "auto" ? fallback : config.layout.imagePreviewBackground;
-}
-
-function imagePreviewNotice(config: ResolvedTuiConfig, preview: ImageBlockPreviewModel): string | null {
-  if (preview.kind !== "rendered") return null;
-  if (config.layout.imagePreviewNoticeVisibility === "never") return null;
-  if (preview.notice) return preview.notice;
-  if (config.layout.imagePreviewNoticeVisibility === "always") {
-    return formatTemplate(config.labels.splitImagePreviewSourceTemplate, { source: preview.source });
-  }
-  return null;
 }
 
 // Clip a single metadata line to the available width without wrapping. Unlike
@@ -270,45 +203,19 @@ function PreviewMeta(props: { config: ResolvedTuiConfig; entry: Entry; width: nu
     >
       <box width="100%" flexGrow={1} flexDirection="column" justifyContent={verticalJustify(props.config.layout.previewMetaVerticalAlign)}>
         <box width="100%" flexDirection="row" justifyContent={justifyContent(props.config.layout.previewMetaContentAlign)}>
-          <text style={textStyle(style(), splitContentColor(props.config, style(), "splitMetaHeader", style().accent))}>{header()}</text>
+          <text style={textStyle(style(), previewContentColor(props.config, style(), "splitMetaHeader", style().accent))}>{header()}</text>
         </box>
         <Show when={detailsVisible() && props.config.layout.previewMetaLineSpacing > 0}>
           <box width="100%" height={props.config.layout.previewMetaLineSpacing} backgroundColor={style().bg} />
         </Show>
         <Show when={detailsVisible()}>
           <box width="100%" flexDirection="row" justifyContent={justifyContent(props.config.layout.previewMetaContentAlign)}>
-            <text style={textStyle(style(), splitContentColor(props.config, style(), "splitMetaDetails", style().fg))}>{details()}</text>
+            <text style={textStyle(style(), previewContentColor(props.config, style(), "splitMetaDetails", style().fg))}>{details()}</text>
           </box>
         </Show>
       </box>
     </box>
   );
-}
-
-function justifyContent(align: ContentAlign): "flex-start" | "center" | "flex-end" {
-  if (align === "right") return "flex-end";
-  if (align === "center") return "center";
-  return "flex-start";
-}
-
-function verticalJustify(align: VerticalAlign): "flex-start" | "center" | "flex-end" {
-  if (align === "bottom") return "flex-end";
-  if (align === "center") return "center";
-  return "flex-start";
-}
-
-function fitGutter(value: string, width: number, align: ContentAlign): string {
-  const target = Math.max(1, Math.floor(width));
-  const trimmed = value.trim();
-  const raw = trimmed.length > 0 ? trimmed : value;
-  const clipped = Array.from(raw).slice(0, target).join("");
-  const extra = Math.max(0, target - Array.from(clipped).length);
-  if (align === "right") return `${" ".repeat(extra)}${clipped}`;
-  if (align === "center") {
-    const left = Math.floor(extra / 2);
-    return `${" ".repeat(left)}${clipped}${" ".repeat(extra - left)}`;
-  }
-  return `${clipped}${" ".repeat(extra)}`;
 }
 
 function previewEntryTitle(config: ResolvedTuiConfig, entry: Entry): string {
@@ -318,56 +225,4 @@ function previewEntryTitle(config: ResolvedTuiConfig, entry: Entry): string {
   });
 }
 
-function toneColor(style: TuiSurfaceStyle, tone: "primary" | "secondary" | "muted" | "accent" | "error" | "success"): string {
-  switch (tone) {
-    case "secondary":
-      return style.secondary;
-    case "muted":
-      return style.muted;
-    case "accent":
-      return style.accent;
-    case "error":
-      return style.error;
-    case "success":
-      return style.success;
-    default:
-      return style.fg;
-  }
-}
 
-type PreviewLineTone = "primary" | "secondary" | "muted" | "accent" | "error" | "success";
-
-function splitBorderColor(config: ResolvedTuiConfig, style: TuiSurfaceStyle, entry: Entry | undefined): string {
-  return splitContentColor(config, style, "splitBorder", entry ? entryAccent(style, entry) : style.border);
-}
-
-function splitLineToneColor(config: ResolvedTuiConfig, style: TuiSurfaceStyle, entry: Entry | undefined, tone: PreviewLineTone, index: number): string {
-  if (!entry) return splitContentColor(config, style, index === 0 ? "splitEmptyTitle" : "splitEmptyHelp", toneColor(style, tone));
-  return splitContentColor(config, style, splitLineTonePart(tone), toneColor(style, tone));
-}
-
-function splitLineTonePart(tone: PreviewLineTone): TuiPreviewContentPartName {
-  switch (tone) {
-    case "secondary":
-      return "splitSecondary";
-    case "muted":
-      return "splitMuted";
-    case "accent":
-      return "splitAccent";
-    case "error":
-      return "splitError";
-    case "success":
-      return "splitSuccess";
-    default:
-      return "splitPrimary";
-  }
-}
-
-function splitContentColor(config: ResolvedTuiConfig, style: TuiSurfaceStyle, part: TuiPreviewContentPartName, autoColor: string): string {
-  return configuredToneColor(style, config.previewContentTones[part], autoColor);
-}
-
-function configuredToneColor(style: TuiSurfaceStyle, tone: TuiStatusLineToneName, autoColor: string): string {
-  if (tone === "auto") return autoColor;
-  return style[tone];
-}

@@ -981,7 +981,7 @@
   },
   "$defs": {
     "themeName": {
-      "enum": ["ditoxDark", "ditoxLight", "groknight", "grokday", "tokyonight", "rosepine"]
+      "enum": ["grokbuild", "ditoxDark", "ditoxLight", "groknight", "grokday", "tokyonight", "rosepine"]
     },
     "terminalAltScreen": {
       "enum": ["auto", "always", "never"]

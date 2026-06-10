@@ -1,27 +1,14 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import {
-  imageBlockPreview,
-  imageBlockPreviewAsync,
-  shouldLoadImageBlockPreviewAsync,
-  type ImageBlockPreview as ImageBlockPreviewModel,
-  type ImageProtocolCapabilities,
-} from "../image-preview";
+import { createEffect, For, Show } from "solid-js";
+import { type ImageBlockPreview as ImageBlockPreviewModel, type ImageProtocolCapabilities } from "../image-preview";
 import { entryAccent, previewMetaTemplateValues, previewModel, previewWindow, truncateText } from "../presentation";
 import { visibleFullPreviewLineCapacity } from "../state";
 import { selectNativeImageProtocol, type TerminalImageManagerLike, type TerminalImageState } from "../terminal-image";
-import type { ContentAlign, VerticalAlign } from "../ui-config";
-import {
-  formatTemplate,
-  paddedTitle,
-  surface,
-  textStyle,
-  type ResolvedTuiConfig,
-  type TuiPreviewContentPartName,
-  type TuiStatusLineToneName,
-  type TuiSurfaceStyle,
-} from "../tui-config";
+import { formatTemplate, paddedTitle, surface, textStyle, type ResolvedTuiConfig } from "../tui-config";
 import type { Entry } from "../types";
+import { createImageBlockPreview } from "../use-image-block-preview";
 import { ImagePreviewRows } from "./ImagePreviewRows";
+import { imagePreviewBackground, imagePreviewNotice, previewBorderColor, previewContentColor, previewLineToneColor } from "./preview-shared";
+import { fitGutter, justifyContent, verticalJustify } from "./style-utils";
 
 export function FullPreview(props: {
   config: ResolvedTuiConfig;
@@ -40,60 +27,20 @@ export function FullPreview(props: {
   const spacerStyle = () => surface(props.config, "fullPreviewSpacer");
   const labels = () => props.config.labels;
   const layout = () => props.config.layout;
-  const [loadedBlockPreview, setLoadedBlockPreview] = createSignal<ImageBlockPreviewModel | null>(null);
   const textWidth = () => Math.max(1, props.width - (layout().showFullPreviewGutter ? layout().fullPreviewTextWidthInset : layout().fullPreviewPaddingX * 2));
-  const blockPreviewRequest = createMemo(() => ({
+  const blockPreview = createImageBlockPreview(() => ({
     entry: props.entry,
     maxWidth: Math.min(textWidth(), layout().fullPreviewImageMaxWidth),
     maxRows: Math.min(Math.max(2, props.rows - layout().fullPreviewImageRowInset), layout().fullPreviewImageMaxRows),
-    background: imagePreviewBackground(props.config, style().bg),
+    background: imagePreviewBackground(layout().fullPreviewImageBackground, style().bg),
     mode: layout().fullPreviewImageMode,
     labels: labels(),
     blockGlyph: layout().fullPreviewImageBlockGlyph,
     capabilities: props.imageTerminal?.capabilities ?? props.imageCapabilities,
   }));
-  createEffect(() => {
-    const request = blockPreviewRequest();
-    const syncPreview = imageBlockPreview(
-      request.entry,
-      request.maxWidth,
-      request.maxRows,
-      request.background,
-      request.mode,
-      request.labels,
-      request.blockGlyph,
-      request.capabilities,
-    );
-    setLoadedBlockPreview(syncPreview);
-    if (!shouldLoadImageBlockPreviewAsync(request.entry, request.mode)) return;
-
-    let disposed = false;
-    void imageBlockPreviewAsync(
-      request.entry,
-      request.maxWidth,
-      request.maxRows,
-      request.background,
-      request.mode,
-      request.labels,
-      request.blockGlyph,
-      request.capabilities,
-    ).then((preview) => {
-      if (!disposed) setLoadedBlockPreview(preview);
-    });
-    onCleanup(() => {
-      disposed = true;
-    });
-  });
-  const blockPreview = () => {
-    const request = blockPreviewRequest();
-    return (
-      loadedBlockPreview() ??
-      imageBlockPreview(request.entry, request.maxWidth, request.maxRows, request.background, request.mode, request.labels, request.blockGlyph, request.capabilities)
-    );
-  };
   const lines = () =>
     previewModel(props.entry, layout().maxFullPreviewLines, labels(), layout(), textWidth());
-  const imageNoticeText = () => imagePreviewNotice(props.config, blockPreview());
+  const imageNoticeText = () => imagePreviewNotice(blockPreview(), layout().fullPreviewImageNoticeVisibility, labels().fullImagePreviewSourceTemplate);
   const imageFallbackVisible = () => props.entry?.kind === "image" && blockPreview().kind === "fallback" && layout().fullPreviewImageMode !== "metadata";
   const imageNoticeSpacingRows = () =>
     props.entry?.kind === "image" && blockPreview().kind === "rendered" && imageNoticeText() ? layout().fullPreviewImageNoticeSpacing : 0;
@@ -143,7 +90,7 @@ export function FullPreview(props: {
       flexGrow={1}
       border={props.config.chrome.fullPreviewBorder ? true : undefined}
       borderStyle={props.config.chrome.fullPreviewBorder ? props.config.chrome.fullPreviewBorderStyle : undefined}
-      borderColor={props.config.chrome.fullPreviewBorder ? fullBorderColor(props.config, style(), props.entry) : undefined}
+      borderColor={props.config.chrome.fullPreviewBorder ? previewBorderColor(props.config, style(), props.entry, "fullBorder") : undefined}
       backgroundColor={style().bg}
       paddingX={layout().fullPreviewPaddingX}
       paddingY={layout().fullPreviewPaddingY}
@@ -173,7 +120,7 @@ export function FullPreview(props: {
           >
             <box width="100%" flexGrow={1} flexDirection="column" justifyContent={verticalJustify(layout().fullPreviewMetaVerticalAlign)}>
               <box width="100%" flexDirection="row" justifyContent={justifyContent(layout().fullPreviewMetaContentAlign)}>
-                <text style={textStyle(metaStyle(), fullContentColor(props.config, metaStyle(), "fullMetaHeader", entryAccent(metaStyle(), entry())))}>
+                <text style={textStyle(metaStyle(), previewContentColor(props.config, metaStyle(), "fullMetaHeader", entryAccent(metaStyle(), entry())))}>
                   {fullPreviewMetaHeader(props.config, entry())}
                 </text>
               </box>
@@ -182,7 +129,7 @@ export function FullPreview(props: {
               </Show>
               <Show when={metaDetailsVisible()}>
                 <box width="100%" flexDirection="row" justifyContent={justifyContent(layout().fullPreviewMetaContentAlign)}>
-                  <text style={textStyle(metaStyle(), fullContentColor(props.config, metaStyle(), "fullMetaDetails", metaStyle().fg))}>
+                  <text style={textStyle(metaStyle(), previewContentColor(props.config, metaStyle(), "fullMetaDetails", metaStyle().fg))}>
                     {fullPreviewMetaDetails(props.config, entry())}
                   </text>
                 </box>
@@ -200,7 +147,7 @@ export function FullPreview(props: {
             blockGlyph={layout().fullPreviewImageBlockGlyph}
             align={layout().fullPreviewImageAlign}
             width={textWidth()}
-            background={imagePreviewBackground(props.config, style().bg)}
+            background={imagePreviewBackground(layout().fullPreviewImageBackground, style().bg)}
             entry={props.entry}
             terminal={props.imageTerminal}
             imageManager={props.imageManager}
@@ -212,20 +159,20 @@ export function FullPreview(props: {
         <Show when={imageNoticeText()}>
           {(notice) => (
             <box height={1} flexDirection="row" justifyContent={justifyContent(layout().fullPreviewContentAlign)} backgroundColor={style().bg}>
-              <text style={textStyle(style(), fullContentColor(props.config, style(), "fullImageNotice", style().muted))}>{notice()}</text>
+              <text style={textStyle(style(), previewContentColor(props.config, style(), "fullImageNotice", style().muted))}>{notice()}</text>
             </box>
           )}
         </Show>
         <Show when={imageFallbackVisible()}>
           <box height={1} flexDirection="row" justifyContent={justifyContent(layout().fullPreviewContentAlign)} backgroundColor={style().bg}>
             <text style={textStyle(style())}>
-              <span style={textStyle(style(), fullContentColor(props.config, style(), "fullImageFallbackPrefix", style().muted))}>
+              <span style={textStyle(style(), previewContentColor(props.config, style(), "fullImageFallbackPrefix", style().muted))}>
                 {labels().fullImagePreviewFallbackPrefix}
               </span>
-              <span style={textStyle(style(), fullContentColor(props.config, style(), "fullImageFallbackSeparator", style().muted))}>
+              <span style={textStyle(style(), previewContentColor(props.config, style(), "fullImageFallbackSeparator", style().muted))}>
                 {labels().fullImagePreviewFallbackSeparator}
               </span>
-              <span style={textStyle(style(), fullContentColor(props.config, style(), "fullImageFallbackReason", style().muted))}>
+              <span style={textStyle(style(), previewContentColor(props.config, style(), "fullImageFallbackReason", style().muted))}>
                 {(blockPreview() as Extract<ImageBlockPreviewModel, { kind: "fallback" }>).reason}
               </span>
             </text>
@@ -236,15 +183,15 @@ export function FullPreview(props: {
             <>
               <box height={1} flexDirection="row" backgroundColor={style().bg}>
                 <Show when={layout().showFullPreviewGutter}>
-                  <text style={textStyle(gutterStyle(), fullContentColor(props.config, gutterStyle(), "fullGutter", gutterStyle().muted))}>
+                  <text style={textStyle(gutterStyle(), previewContentColor(props.config, gutterStyle(), "fullGutter", gutterStyle().muted))}>
                     {fitGutter(line.gutter, layout().fullPreviewGutterWidth, layout().fullPreviewGutterAlign)}
                   </text>
-                  <text style={textStyle(gutterStyle(), fullContentColor(props.config, gutterStyle(), "fullGutterSeparator", gutterStyle().muted))}>
+                  <text style={textStyle(gutterStyle(), previewContentColor(props.config, gutterStyle(), "fullGutterSeparator", gutterStyle().muted))}>
                     {labels().fullPreviewGutterSeparator}
                   </text>
                 </Show>
                 <box flexGrow={1} flexDirection="row" justifyContent={justifyContent(layout().fullPreviewContentAlign)}>
-                  <text style={textStyle(style(), fullLineToneColor(props.config, style(), props.entry, line.tone, index()))}>
+                  <text style={textStyle(style(), previewLineToneColor("full", props.config, style(), props.entry, line.tone, index()))}>
                     {truncateText(line.text, textWidth(), labels())}
                   </text>
                 </box>
@@ -270,20 +217,6 @@ function fullPreviewMetaDetails(config: ResolvedTuiConfig, entry: Entry): string
   return formatTemplate(labels.fullPreviewMetaDetailsTemplate, previewMetaTemplateValues(entry, labels, config.layout.fullPreviewMetaHashLength));
 }
 
-function imagePreviewBackground(config: ResolvedTuiConfig, fallback: string): string {
-  return config.layout.fullPreviewImageBackground === "auto" ? fallback : config.layout.fullPreviewImageBackground;
-}
-
-function imagePreviewNotice(config: ResolvedTuiConfig, preview: ImageBlockPreviewModel): string | null {
-  if (preview.kind !== "rendered") return null;
-  if (config.layout.fullPreviewImageNoticeVisibility === "never") return null;
-  if (preview.notice) return preview.notice;
-  if (config.layout.fullPreviewImageNoticeVisibility === "always") {
-    return formatTemplate(config.labels.fullImagePreviewSourceTemplate, { source: preview.source });
-  }
-  return null;
-}
-
 function scrollDirection(event: any): -1 | 1 | null {
   if (event.scroll?.direction === "up") return -1;
   if (event.scroll?.direction === "down") return 1;
@@ -292,82 +225,4 @@ function scrollDirection(event: any): -1 | 1 | null {
   return null;
 }
 
-function justifyContent(align: ContentAlign): "flex-start" | "center" | "flex-end" {
-  if (align === "right") return "flex-end";
-  if (align === "center") return "center";
-  return "flex-start";
-}
 
-function verticalJustify(align: VerticalAlign): "flex-start" | "center" | "flex-end" {
-  if (align === "bottom") return "flex-end";
-  if (align === "center") return "center";
-  return "flex-start";
-}
-
-function fitGutter(value: string, width: number, align: ContentAlign): string {
-  const target = Math.max(1, Math.floor(width));
-  const trimmed = value.trim();
-  const raw = trimmed.length > 0 ? trimmed : value;
-  const clipped = Array.from(raw).slice(0, target).join("");
-  const extra = Math.max(0, target - Array.from(clipped).length);
-  if (align === "right") return `${" ".repeat(extra)}${clipped}`;
-  if (align === "center") {
-    const left = Math.floor(extra / 2);
-    return `${" ".repeat(left)}${clipped}${" ".repeat(extra - left)}`;
-  }
-  return `${clipped}${" ".repeat(extra)}`;
-}
-
-function toneColor(style: TuiSurfaceStyle, tone: "primary" | "secondary" | "muted" | "accent" | "error" | "success"): string {
-  switch (tone) {
-    case "secondary":
-      return style.secondary;
-    case "muted":
-      return style.muted;
-    case "accent":
-      return style.accent;
-    case "error":
-      return style.error;
-    case "success":
-      return style.success;
-    default:
-      return style.fg;
-  }
-}
-
-type PreviewLineTone = "primary" | "secondary" | "muted" | "accent" | "error" | "success";
-
-function fullBorderColor(config: ResolvedTuiConfig, style: TuiSurfaceStyle, entry: Entry | undefined): string {
-  return fullContentColor(config, style, "fullBorder", entry ? entryAccent(style, entry) : style.border);
-}
-
-function fullLineToneColor(config: ResolvedTuiConfig, style: TuiSurfaceStyle, entry: Entry | undefined, tone: PreviewLineTone, index: number): string {
-  if (!entry) return fullContentColor(config, style, index === 0 ? "fullEmptyTitle" : "fullEmptyHelp", toneColor(style, tone));
-  return fullContentColor(config, style, fullLineTonePart(tone), toneColor(style, tone));
-}
-
-function fullLineTonePart(tone: PreviewLineTone): TuiPreviewContentPartName {
-  switch (tone) {
-    case "secondary":
-      return "fullSecondary";
-    case "muted":
-      return "fullMuted";
-    case "accent":
-      return "fullAccent";
-    case "error":
-      return "fullError";
-    case "success":
-      return "fullSuccess";
-    default:
-      return "fullPrimary";
-  }
-}
-
-function fullContentColor(config: ResolvedTuiConfig, style: TuiSurfaceStyle, part: TuiPreviewContentPartName, autoColor: string): string {
-  return configuredToneColor(style, config.previewContentTones[part], autoColor);
-}
-
-function configuredToneColor(style: TuiSurfaceStyle, tone: TuiStatusLineToneName, autoColor: string): string {
-  if (tone === "auto") return autoColor;
-  return style[tone];
-}

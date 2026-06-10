@@ -47,11 +47,21 @@ describe("rpc presentation", () => {
     const dir = mkdtempSync(join(tmpdir(), "ditox-rpc-"));
     const fakeDitoxd = join(dir, "ditoxd");
     const capture = join(dir, "stdin.frame");
+    // The client holds the session open, so the fake server must read exactly
+    // one Content-Length frame (not until EOF) before answering.
     writeFileSync(
       fakeDitoxd,
       [
         "#!/bin/sh",
-        `cat > '${capture}'`,
+        "len=0",
+        "while IFS= read -r line; do",
+        '  line="${line%"\r"}"',
+        '  case "$line" in',
+        '    [Cc]ontent-[Ll]ength:*) len=$(echo "${line#*:}") ;;',
+        '    "") break ;;',
+        "  esac",
+        "done",
+        `printf 'Content-Length: %s\\r\\n\\r\\n%s' "$len" "$(head -c "$len")" > '${capture}'`,
         'body=\'{"jsonrpc":"2.0","id":"fake","result":{"entries":[]}}\'',
         'printf "Content-Length: %s\\r\\n\\r\\n%s" "${#body}" "$body"',
         "",

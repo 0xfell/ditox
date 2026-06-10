@@ -71,8 +71,70 @@ export type ImagePreviewFallbackLabels = Pick<
 >;
 
 const pngSignature = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
-const previewCache = new Map<string, ImageBlockPreview>();
-const asyncPreviewCache = new Map<string, ImageBlockPreview | Promise<ImageBlockPreview>>();
+
+// Decoded previews hold full pixel buffers, so the caches are bounded LRUs:
+// long image-heavy sessions and terminal resizes must not grow memory without
+// limit. The limit comfortably covers a screenful of recently-viewed entries.
+const PREVIEW_CACHE_LIMIT = 48;
+
+class LruCache<V> {
+  private readonly map = new Map<string, V>();
+
+  constructor(private readonly limit: number) {}
+
+  get(key: string): V | undefined {
+    const value = this.map.get(key);
+    if (value !== undefined) {
+      this.map.delete(key);
+      this.map.set(key, value);
+    }
+    return value;
+  }
+
+  set(key: string, value: V): void {
+    if (this.map.has(key)) this.map.delete(key);
+    this.map.set(key, value);
+    while (this.map.size > this.limit) {
+      const oldest = this.map.keys().next().value;
+      if (oldest === undefined) break;
+      this.map.delete(oldest);
+    }
+  }
+}
+
+const previewCache = new LruCache<ImageBlockPreview>(PREVIEW_CACHE_LIMIT);
+const asyncPreviewCache = new LruCache<ImageBlockPreview | Promise<ImageBlockPreview>>(PREVIEW_CACHE_LIMIT);
+
+// Where preview pixels come from. The production TUI installs an RPC-backed
+// source at startup (see App.run) so the UI never reads blob files from the
+// daemon's filesystem; the default filesystem source remains for direct/unit
+// use, where a `readSync` fast path keeps single-pass renders synchronous.
+export type ImageByteSource = {
+  readSync: ((entry: Entry) => Uint8Array) | null;
+  read: (entry: Entry) => Promise<Uint8Array>;
+};
+
+const fileImageByteSource: ImageByteSource = {
+  readSync: (entry) => readFileSync(entry.blob_path!),
+  read: async (entry) => readFileSync(entry.blob_path!),
+};
+
+let imageByteSource: ImageByteSource = fileImageByteSource;
+
+export function setImageByteSource(source: ImageByteSource | null): void {
+  imageByteSource = source ?? fileImageByteSource;
+}
+
+// Decoding happens on the render thread for sync formats; cap the pixel count
+// (matching the JPEG decoder's 32MP guard) so a huge PNG/BMP/GIF cannot block
+// the UI or allocate hundreds of MB.
+const MAX_PREVIEW_PIXELS = 32_000_000;
+
+function assertPreviewableDimensions(format: string, width: number, height: number): void {
+  if (width > 0 && height > 0 && width * height > MAX_PREVIEW_PIXELS) {
+    throw new Error(`${format} is too large for preview (${width}x${height})`);
+  }
+}
 const defaultFallbackLabels: ImagePreviewFallbackLabels = {
   imagePreviewNotImage: "not an image entry",
   imagePreviewBlocksDisabled: "image blocks disabled",
@@ -106,18 +168,20 @@ export function imageBlockPreview(
   if (mode === "metadata") return { kind: "fallback", reason: text.imagePreviewBlocksDisabled };
   if (!entry.blob_path) return { kind: "fallback", reason: text.imagePreviewBlobMissing };
   if (!isBlockPreviewMime(entry.mime)) return { kind: "fallback", reason: unsupportedMimeReason(entry.mime, text) };
-  if (isAsyncBlockPreviewMime(entry.mime)) return { kind: "fallback", reason: text.imagePreviewDecodePending };
 
   const width = Math.max(1, Math.floor(maxWidth));
   const rows = Math.max(1, Math.floor(maxRows));
   const notice = imagePreviewProtocolNotice(mode, capabilities, text);
-  const cacheKey = `${entry.blob_path}:${width}:${rows}:${background}:${glyph}:${fallbackLabelKey(text)}:${notice ?? ""}`;
+  const cacheKey = blockPreviewCacheKey(entry.blob_path, width, rows, background, glyph, text, notice);
   const cached = previewCache.get(cacheKey);
   if (cached) return cached;
+  if (isAsyncBlockPreviewMime(entry.mime) || !imageByteSource.readSync) {
+    return { kind: "fallback", reason: text.imagePreviewDecodePending };
+  }
 
   let result: ImageBlockPreview;
   try {
-    result = imageBlockPreviewFromBytes(readFileSync(entry.blob_path), width, rows, background, entry.mime, text, glyph, previewSourcePrefix(mode, text), notice, imagePreviewProtocol(mode));
+    result = imageBlockPreviewFromBytes(imageByteSource.readSync(entry), width, rows, background, entry.mime, text, glyph, previewSourcePrefix(mode, text), notice, imagePreviewProtocol(mode));
   } catch (error) {
     result = { kind: "fallback", reason: decodeErrorReason(error, text) };
   }
@@ -144,15 +208,16 @@ export async function imageBlockPreviewAsync(
   const width = Math.max(1, Math.floor(maxWidth));
   const rows = Math.max(1, Math.floor(maxRows));
   const notice = imagePreviewProtocolNotice(mode, capabilities, text);
-  const cacheKey = `${entry.blob_path}:${width}:${rows}:${background}:${glyph}:${fallbackLabelKey(text)}:${notice ?? ""}:async`;
-  const cached = asyncPreviewCache.get(cacheKey) ?? previewCache.get(cacheKey.replace(/:async$/, ""));
+  const baseKey = blockPreviewCacheKey(entry.blob_path, width, rows, background, glyph, text, notice);
+  const cacheKey = `${baseKey}:async`;
+  const cached = asyncPreviewCache.get(cacheKey) ?? previewCache.get(baseKey);
   if (cached) return await cached;
 
   const pending = (async () => {
     let result: ImageBlockPreview;
     try {
       result = await imageBlockPreviewFromBytesAsync(
-        readFileSync(entry.blob_path!),
+        await imageByteSource.read(entry),
         width,
         rows,
         background,
@@ -174,7 +239,47 @@ export async function imageBlockPreviewAsync(
 }
 
 export function shouldLoadImageBlockPreviewAsync(entry: Entry | undefined, mode: ImagePreviewMode): boolean {
-  return Boolean(entry && entry.kind === "image" && mode !== "metadata" && entry.blob_path && isAsyncBlockPreviewMime(entry.mime));
+  if (!entry || entry.kind !== "image" || mode === "metadata" || !entry.blob_path || !isBlockPreviewMime(entry.mime)) return false;
+  // WebP decoding is always async; every format is async when the byte source
+  // has no synchronous fast path (the RPC-backed production source).
+  return isAsyncBlockPreviewMime(entry.mime) || imageByteSource.readSync === null;
+}
+
+// Synchronously returns an already-resolved preview for async-decoded formats
+// (WebP), so re-rendering an unchanged entry never downgrades a rendered
+// preview to the "decoding" placeholder while the async path resolves.
+export function imageBlockPreviewCached(
+  entry: Entry | undefined,
+  maxWidth: number,
+  maxRows: number,
+  background: string,
+  mode: ImagePreviewMode,
+  labels?: Partial<ImagePreviewFallbackLabels>,
+  glyph = "▀",
+  capabilities?: Partial<ImageProtocolCapabilities>,
+): ImageBlockPreview | null {
+  if (!entry || entry.kind !== "image" || mode === "metadata" || !entry.blob_path) return null;
+  const text = fallbackLabels(labels);
+  const width = Math.max(1, Math.floor(maxWidth));
+  const rows = Math.max(1, Math.floor(maxRows));
+  const notice = imagePreviewProtocolNotice(mode, capabilities, text);
+  const baseKey = blockPreviewCacheKey(entry.blob_path, width, rows, background, glyph, text, notice);
+  const sync = previewCache.get(baseKey);
+  if (sync) return sync;
+  const resolved = asyncPreviewCache.get(`${baseKey}:async`);
+  return resolved !== undefined && !(resolved instanceof Promise) ? resolved : null;
+}
+
+function blockPreviewCacheKey(
+  blobPath: string,
+  width: number,
+  rows: number,
+  background: string,
+  glyph: string,
+  text: ImagePreviewFallbackLabels,
+  notice: string | null,
+): string {
+  return `${blobPath}:${width}:${rows}:${background}:${glyph}:${fallbackLabelKey(text)}:${notice ?? ""}`;
 }
 
 export function imageBlockPreviewFromBytes(
@@ -328,6 +433,7 @@ export function decodePng(bytes: Uint8Array): DecodedPng {
   }
 
   if (width <= 0 || height <= 0) throw new Error("PNG is missing IHDR");
+  assertPreviewableDimensions("PNG", width, height);
   if (bitDepth !== 8) throw new Error(`unsupported PNG bit depth ${bitDepth}`);
   if (interlace !== 0) throw new Error("interlaced PNG preview is not supported");
   if (idatChunks.length === 0) throw new Error("PNG is missing image data");
@@ -356,6 +462,7 @@ export function decodeBmp(bytes: Uint8Array): DecodedImage {
   const bitDepth = readU16LE(bytes, 28);
   const compression = readU32LE(bytes, 30);
   if (width <= 0 || height <= 0) throw new Error("BMP has invalid dimensions");
+  assertPreviewableDimensions("BMP", width, height);
   if (planes !== 1) throw new Error(`unsupported BMP plane count ${planes}`);
   if (compression !== 0) throw new Error("compressed BMP preview is not supported");
   if (bitDepth !== 24 && bitDepth !== 32) throw new Error(`unsupported BMP bit depth ${bitDepth}`);
@@ -432,6 +539,7 @@ export function decodeGif(bytes: Uint8Array): DecodedImage {
     offset += 9;
 
     if (width <= 0 || height <= 0) throw new Error("GIF image has invalid dimensions");
+    assertPreviewableDimensions("GIF", width, height);
     const hasLocalColorTable = (imagePacked & 0x80) !== 0;
     const interlaced = (imagePacked & 0x40) !== 0;
     const localColorCount = 1 << ((imagePacked & 0x07) + 1);

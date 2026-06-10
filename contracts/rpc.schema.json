@@ -30,6 +30,7 @@
         "entries.list",
         "entries.search",
         "entries.get",
+        "entries.get_image",
         "entries.add",
         "entries.copy",
         "entries.bulk_copy",
@@ -63,6 +64,9 @@
         },
         {
           "$ref": "#/$defs/entriesGetRequest"
+        },
+        {
+          "$ref": "#/$defs/entriesGetImageRequest"
         },
         {
           "$ref": "#/$defs/entriesAddRequest"
@@ -235,6 +239,30 @@
         },
         "method": {
           "const": "entries.get"
+        },
+        "params": {
+          "$ref": "#/$defs/idParams"
+        }
+      }
+    },
+    "entriesGetImageRequest": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "const": "entries.get_image"
         },
         "params": {
           "$ref": "#/$defs/idParams"
@@ -759,6 +787,9 @@
           "$ref": "#/$defs/entriesGetSuccess"
         },
         {
+          "$ref": "#/$defs/entriesGetImageSuccess"
+        },
+        {
           "$ref": "#/$defs/entriesAddSuccess"
         },
         {
@@ -913,6 +944,26 @@
         },
         "result": {
           "$ref": "#/$defs/getResult"
+        }
+      }
+    },
+    "entriesGetImageSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "result": {
+          "$ref": "#/$defs/getImageResult"
         }
       }
     },
@@ -1327,6 +1378,38 @@
         }
       }
     },
+    "getImageResult": {
+      "type": "object",
+      "required": [
+        "mime",
+        "data",
+        "width",
+        "height"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mime": {
+          "type": "string"
+        },
+        "data": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "description": "Raw image bytes, base64-encoded."
+        },
+        "width": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "height": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
     "addResult": {
       "type": "object",
       "required": [
@@ -1441,7 +1524,8 @@
         "ok",
         "pruned_blobs",
         "sanitized_text",
-        "removed_missing_images"
+        "removed_missing_images",
+        "removed_orphan_blobs"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1455,6 +1539,9 @@
           "type": "integer"
         },
         "removed_missing_images": {
+          "type": "integer"
+        },
+        "removed_orphan_blobs": {
           "type": "integer"
         }
       }

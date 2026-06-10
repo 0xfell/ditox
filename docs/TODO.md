@@ -53,7 +53,7 @@ Initial visual polish is implemented:
 - Presentation helpers have direct Bun test coverage.
 - File-backed TUI customization is implemented through `DITOX_TUI_CONFIG` or `~/.config/ditox/tui.json`.
 - `tui/tui-config.schema.json` documents the file-backed TUI config contract, including supported label keys, is linked from the example config for editor completion, and is covered by schema drift tests.
-- Theme presets (`ditoxDark`, `ditoxLight`, `groknight`, `grokday`, `tokyonight`, `rosepine`), terminal alt-screen/screen-mode/background/title/cursor behavior, theme tokens, labels, filter names, search/query prompts/templates/cursor, clear-kind names, delete/clear/confirm prompt templates, header selection templates, header/status line templates, header/status horizontal/vertical body alignment, header-line and status-line placeholder tone routing, row pinned markers, row metadata templates/placeholders/visibility, row content/metadata/preview alignment, row metadata marker/age/size/pinned slot alignment, row metadata hash length, bounded row metadata slots for long templates, entry ID prefixes, preview/list title templates, preview metadata/gutters/separators/templates/placeholders, text preview gutter templates, image metadata preview field ordering/visibility, header separators, key display separators, row field widths/gaps/vertical spacing, row/list/preview/full-preview/split-pane spacer surfaces, compact-mode dense layout defaults, alternate-row striping, selected+marked row styling, history load limit, search-match highlighting, empty-state helper visibility/title alignment/help alignment/vertical alignment/line spacing, shell padding, structural header/status/overlay heights/placement and visibility, header/status/overlay vertical padding, independent list/split-preview/full-preview panel padding, independent search/danger/help overlay padding, overlay row spacing, and horizontal/vertical body alignment with legacy global fallbacks, pane width minima/insets, split-pane gap, split preview visibility, split/full preview metadata and gutter visibility, split/full preview gutter alignment, split/full preview text width insets and horizontal/vertical body alignment, split/full image mode/renderer/alignment/block glyph/background/notice/max sizing/row insets/source notices/source labels/fallback prefixes and separators/notice spacing/line spacing, split/full preview metadata heights, header/detail line spacing, horizontal/vertical padding, horizontal/vertical body alignment, and hash lengths, scrollbar width/placement/glyphs/alignment, text truncation markers, whitespace replacement, symmetric/asymmetric title padding, help key width/alignment, byte and age units, image fallback/protocol notice reasons and display names, watcher error separators/status templates, status hint templates, header brand/filter/query/mode width caps, overlay prompt/hint/action width caps, status operation/watcher/hint width caps, operation/view/pin/entry-count status copy/templates, runtime error templates including unknown exit-status text, per-surface semantic tone colors and text attributes, independent header/list/split-preview/full-preview/status/search/danger/help border visibility/title visibility/border style/title alignment with legacy global fallbacks, list-position and preview bottom-title visibility and alignment, row markers including marker slot width/alignment, scrollbar glyphs/alignment, status separator including empty glyph values, layout, and keybindings are configurable.
+- Theme presets (`grokbuild` (default), `ditoxDark`, `ditoxLight`, `groknight`, `grokday`, `tokyonight`, `rosepine`), terminal alt-screen/screen-mode/background/title/cursor behavior, theme tokens, labels, filter names, search/query prompts/templates/cursor, clear-kind names, delete/clear/confirm prompt templates, header selection templates, header/status line templates, header/status horizontal/vertical body alignment, header-line and status-line placeholder tone routing, row pinned markers, row metadata templates/placeholders/visibility, row content/metadata/preview alignment, row metadata marker/age/size/pinned slot alignment, row metadata hash length, bounded row metadata slots for long templates, entry ID prefixes, preview/list title templates, preview metadata/gutters/separators/templates/placeholders, text preview gutter templates, image metadata preview field ordering/visibility, header separators, key display separators, row field widths/gaps/vertical spacing, row/list/preview/full-preview/split-pane spacer surfaces, compact-mode dense layout defaults, alternate-row striping, selected+marked row styling, history load limit, search-match highlighting, empty-state helper visibility/title alignment/help alignment/vertical alignment/line spacing, shell padding, structural header/status/overlay heights/placement and visibility, header/status/overlay vertical padding, independent list/split-preview/full-preview panel padding, independent search/danger/help overlay padding, overlay row spacing, and horizontal/vertical body alignment with legacy global fallbacks, pane width minima/insets, split-pane gap, split preview visibility, split/full preview metadata and gutter visibility, split/full preview gutter alignment, split/full preview text width insets and horizontal/vertical body alignment, split/full image mode/renderer/alignment/block glyph/background/notice/max sizing/row insets/source notices/source labels/fallback prefixes and separators/notice spacing/line spacing, split/full preview metadata heights, header/detail line spacing, horizontal/vertical padding, horizontal/vertical body alignment, and hash lengths, scrollbar width/placement/glyphs/alignment, text truncation markers, whitespace replacement, symmetric/asymmetric title padding, help key width/alignment, byte and age units, image fallback/protocol notice reasons and display names, watcher error separators/status templates, status hint templates, header brand/filter/query/mode width caps, overlay prompt/hint/action width caps, status operation/watcher/hint width caps, operation/view/pin/entry-count status copy/templates, runtime error templates including unknown exit-status text, per-surface semantic tone colors and text attributes, independent header/list/split-preview/full-preview/status/search/danger/help border visibility/title visibility/border style/title alignment with legacy global fallbacks, list-position and preview bottom-title visibility and alignment, row markers including marker slot width/alignment, scrollbar glyphs/alignment, status separator including empty glyph values, layout, and keybindings are configurable.
 - Search mode has a configurable `searchCopyMatches` / `ctrl+s` yank action for copying every current match.
 - Search mode refreshes results live by default with configurable debounce, and file/env behavior controls whether opening search clears the current query and whether cancelling restores the previous query.
 - Visible literal and fuzzy-subsequence search matches are highlighted in row previews with the configured list/selected-row search color, and highlighting can be disabled without disabling search.
@@ -140,9 +140,30 @@ Initial visual polish is implemented:
 - Copying or pasting an entry (CLI or TUI) records `last_used_at_ms`; history is ordered by the most recent of capture time and last-use, so re-used clips jump to the top, the displayed row age reflects that most-recent activity, and retention/pruning treat recently-used entries as fresh. The TUI refreshes after copy/paste and keeps the cursor on the entry it just used.
 - JSON-RPC contracts now expose method-specific request and success schemas, generated TypeScript discriminated unions, and backend method-specific param validation.
 
+- Native Kitty and Sixel image protocol rendering ships through
+  `TerminalImageManager` (capability-gated via terminal capability flags +
+  pixel resolution, cursor-wrapped placement, placement-diffed so unchanged
+  frames re-emit nothing). Block/text rendering remains the fallback when no
+  protocol is detected.
+- Image previews no longer flicker on refresh polls: the shared
+  `use-image-block-preview` hook compares preview requests semantically (entry
+  identity fields, not object identity), resolved async previews are reused
+  synchronously, preview caches are bounded LRUs, and PNG/BMP/GIF decoding
+  enforces a 32MP dimension guard.
+- The TUI talks to one persistent `ditoxd serve --stdio` session (framed
+  requests answered in order over a single store) instead of spawning a
+  process per RPC call; the first screenful is preloaded before the renderer
+  starts so the first frame already shows history.
+- The daemon capture loop survives capture/storage errors: failures are
+  logged and surfaced through `watcher.status.last_error`, image ticks retry
+  next poll without falling back to the text alternative, and announced
+  clipboard MIME types are verified against magic bytes before storing.
+- Blob prune safety: pruning skips paths still referenced by live entries
+  (shared blobs under `allow_duplicates`), and re-adding an image cancels its
+  stale pending prune record. Blob tmp files use random unique suffixes.
+
 Remaining polish:
 
-- Add native Kitty and Sixel image protocol support if OpenTUI exposes a stable inline image renderable/output path; OpenTUI 0.2.15 exposes capability flags and a supersampled block-buffer renderer that Ditox now uses, but not a stable protocol placement surface yet.
 - Add true terminal-native screenshot artifacts if OpenTUI exposes a stable screenshot path; text-frame, span JSON, SVG visual, deterministic PNG bitmap, and golden artifacts are now in place.
 
 ## 3. Backend Correctness
@@ -189,10 +210,17 @@ First implementation should remain metadata-first.
 - Keep actual terminal rendering modes:
   - metadata fallback.
   - PNG, JPEG, GIF first-frame, WebP, and uncompressed BMP half-block preview.
-- Add actual protocol rendering modes:
-  - Kitty protocol.
-  - Sixel protocol.
-- Keep blob pruning wired to delete, clear, retention, and repair.
+  - Kitty and Sixel protocol placement (capability-gated, placement-diffed).
+- Keep blob pruning wired to delete, clear, retention, and repair, with the
+  liveness check (never unlink a path still referenced by entries) and the
+  re-add-cancels-pending-prune invariant.
+- Image preview bytes flow over the `entries.get_image` RPC (base64 over the
+  persistent session); the TUI never reads blob files from the daemon's
+  filesystem. The filesystem byte source remains only as the unit-test
+  default (`setImageByteSource`).
+- Repair runs an orphan-blob GC sweep: blob files (including stale `.tmp-*`
+  leftovers) with no referencing row and no pending-prune record are removed,
+  reported as `removed_orphan_blobs`.
 - Keep repair/clean text sanitization and missing-image reconciliation covered by storage tests.
 
 ## 6. Power Features
@@ -240,4 +268,6 @@ First implementation should remain metadata-first.
 
 ## Recommended Next Step
 
-Manually verify Kitty/Sixel protocol support opportunities when OpenTUI exposes a stable inline image renderable/output path.
+Manually verify the full Hyprland loop (compositor keybind → TUI → paste-back)
+with the new `grokbuild` default theme, and consider compile-time
+dispatch ↔ schema enforcement for RPC methods.

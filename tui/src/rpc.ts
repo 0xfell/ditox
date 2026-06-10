@@ -66,6 +66,18 @@ export async function pasteEntry(id: number, targetWindow?: string, labels?: Par
   return call<{ pasted: boolean }>("entries.paste", { id, target_window: targetWindow }, labels);
 }
 
+export type ImageBytesResponse = {
+  mime: string;
+  data: Uint8Array;
+  width: number | null;
+  height: number | null;
+};
+
+export async function getImageBytes(id: number, labels?: Partial<RpcErrorLabelSet>): Promise<ImageBytesResponse> {
+  const result = await call<{ mime: string; data: string; width: number | null; height: number | null }>("entries.get_image", { id }, labels);
+  return { ...result, data: Uint8Array.from(Buffer.from(result.data, "base64")) };
+}
+
 export async function deleteEntry(id: number, labels?: Partial<RpcErrorLabelSet>): Promise<{ deleted: boolean }> {
   return call<{ deleted: boolean }>("entries.delete", { id }, labels);
 }
@@ -78,29 +90,128 @@ export async function clearEntries(kind: "all" | "text" | "images", preserveFavo
   return call<{ deleted: number }>("entries.clear", { kind, preserve_favorites: preserveFavorites }, labels);
 }
 
-async function call<T>(method: string, params: Record<string, unknown>, labels?: Partial<RpcErrorLabelSet>): Promise<T> {
-  const id = `tui-${nextId++}`;
-  const body = JSON.stringify({ jsonrpc: "2.0", id, method, params });
-  const frame = `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
-  const ditoxd = Bun.env.DITOXD ?? "ditoxd";
+type PendingRequest = {
+  method: string;
+  labels?: Partial<RpcErrorLabelSet>;
+  resolve: (body: string) => void;
+  reject: (error: Error) => void;
+};
 
-  let proc: ReturnType<typeof Bun.spawnSync>;
-  try {
-    proc = Bun.spawnSync({
-      cmd: [ditoxd, "serve", "--stdio"],
-      stdin: Buffer.from(frame),
+// One long-lived `ditoxd serve --stdio` session per TUI process. Requests are
+// written as Content-Length frames and the server answers strictly in order,
+// so responses are matched FIFO. Spawning a fresh process per call (the old
+// model) paid process startup on every keystroke action.
+class RpcConnection {
+  private buffer: Buffer = Buffer.alloc(0);
+  private readonly queue: PendingRequest[] = [];
+  private stderrText = "";
+  private failure: { exitCode: number | null } | null = null;
+  private readonly proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
+
+  constructor(binary: string) {
+    this.proc = Bun.spawn([binary, "serve", "--stdio"], {
+      stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
     });
+    // The session must never keep the TUI process alive: on exit the pipe
+    // closes and the server quits on stdin EOF.
+    this.proc.unref();
+    void this.readStdout();
+    void this.readStderr();
+    void this.proc.exited.then((exitCode) => this.handleExit(exitCode));
+  }
+
+  get alive(): boolean {
+    return this.failure === null;
+  }
+
+  request(method: string, body: string, labels?: Partial<RpcErrorLabelSet>): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      if (this.failure) {
+        reject(new RpcError(formatProcessError(method, this.stderrText, this.failure.exitCode, labels), -32000));
+        return;
+      }
+      const pending: PendingRequest = { method, labels, resolve, reject };
+      this.queue.push(pending);
+      try {
+        this.proc.stdin.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+        void this.proc.stdin.flush();
+      } catch (error) {
+        const index = this.queue.indexOf(pending);
+        if (index >= 0) this.queue.splice(index, 1);
+        reject(new RpcError(formatProcessError(method, this.stderrText, this.proc.exitCode, labels), -32000, { cause: error }));
+      }
+    });
+  }
+
+  private async readStdout(): Promise<void> {
+    try {
+      for await (const chunk of this.proc.stdout) {
+        this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
+        this.drainFrames();
+      }
+    } catch {
+      // Stream closed; handleExit settles any remaining requests.
+    }
+  }
+
+  private drainFrames(): void {
+    while (true) {
+      const frame = extractResponseFrame(this.buffer);
+      if (!frame) return;
+      this.buffer = this.buffer.subarray(frame.consumed);
+      this.queue.shift()?.resolve(frame.body);
+    }
+  }
+
+  private async readStderr(): Promise<void> {
+    try {
+      for await (const chunk of this.proc.stderr) this.stderrText += Buffer.from(chunk).toString();
+    } catch {
+      // Stream closed.
+    }
+  }
+
+  private handleExit(exitCode: number | null): void {
+    this.failure = { exitCode };
+    for (const pending of this.queue.splice(0)) {
+      pending.reject(new RpcError(formatProcessError(pending.method, this.stderrText, exitCode, pending.labels), -32000));
+    }
+    if (connection === this) connection = null;
+  }
+}
+
+let connection: RpcConnection | null = null;
+
+function getConnection(labels?: Partial<RpcErrorLabelSet>): RpcConnection {
+  if (connection?.alive) return connection;
+  const binary = Bun.env.DITOXD ?? "ditoxd";
+  try {
+    connection = new RpcConnection(binary);
   } catch (error) {
-    throw new RpcError(formatDitoxdMissing(ditoxd, labels), -32000, { cause: error });
+    connection = null;
+    throw new RpcError(formatDitoxdMissing(binary, labels), -32000, { cause: error });
   }
+  return connection;
+}
 
-  if (proc.exitCode !== 0) {
-    throw new RpcError(formatProcessError(method, proc.stderr?.toString() ?? "", proc.exitCode, labels), -32000);
-  }
+function extractResponseFrame(buffer: Buffer): { body: string; consumed: number } | null {
+  const headerEnd = buffer.indexOf("\r\n\r\n");
+  if (headerEnd < 0) return null;
+  const match = /content-length:\s*(\d+)/i.exec(buffer.subarray(0, headerEnd).toString());
+  if (!match) return null;
+  const length = Number.parseInt(match[1]!, 10);
+  const bodyStart = headerEnd + 4;
+  if (buffer.length < bodyStart + length) return null;
+  return { body: buffer.subarray(bodyStart, bodyStart + length).toString(), consumed: bodyStart + length };
+}
 
-  const response = parseFrame<RpcResponse<T>>(proc.stdout?.toString() ?? "");
+async function call<T>(method: string, params: Record<string, unknown>, labels?: Partial<RpcErrorLabelSet>): Promise<T> {
+  const id = `tui-${nextId++}`;
+  const body = JSON.stringify({ jsonrpc: "2.0", id, method, params });
+  const raw = await getConnection(labels).request(method, body, labels);
+  const response = JSON.parse(raw) as RpcResponse<T>;
   if ("error" in response) throw new RpcError(formatRpcError(method, response.error.message, labels), response.error.code);
   return response.result;
 }

@@ -40,7 +40,6 @@ export type NativeImageRequest = {
   contentPixelHeight: number;
   contentOffsetX: number;
   contentOffsetY: number;
-  frameId?: number;
 };
 
 export type TerminalImageManagerLike = {
@@ -104,16 +103,22 @@ export function computeNativeImagePlacement(options: {
 export class TerminalImageManager implements TerminalImageManagerLike {
   private pending: NativeImageRequest | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private lastFrameKey = "";
+  private lastEmitKey = "";
   private lastKittyPayloadKey: string | null = null;
   private lastKittyImageId: number | null = null;
 
   constructor(private readonly writer: TerminalWriter = (chunk) => process.stdout.write(chunk)) {}
 
   queue(request: NativeImageRequest): void {
-    const frameKey = `${request.frameId ?? "unknown"}:${request.protocol}:${request.sourceKey}:${request.screenX},${request.screenY}:${request.cols}x${request.rows}:${request.pixelWidth}x${request.pixelHeight}:${request.contentPixelWidth}x${request.contentPixelHeight}:${request.contentOffsetX},${request.contentOffsetY}:${request.background}`;
-    if (frameKey === this.lastFrameKey) return;
-    this.lastFrameKey = frameKey;
+    // Dedupe on the placement-relevant fields only. renderAfter queues a
+    // request on every OpenTUI frame, so keying on the frame id would re-emit
+    // the full graphics sequence per frame and make the image flicker; an
+    // identical placement that is already on screen needs no rewrite. Kitty
+    // placements persist independently of cell redraws, and OpenTUI diffs cell
+    // updates, so unchanged image cells are not overdrawn between emissions.
+    const emitKey = `${request.protocol}:${request.sourceKey}:${request.screenX},${request.screenY}:${request.cols}x${request.rows}:${request.pixelWidth}x${request.pixelHeight}:${request.contentPixelWidth}x${request.contentPixelHeight}:${request.contentOffsetX},${request.contentOffsetY}:${request.background}`;
+    if (emitKey === this.lastEmitKey) return;
+    this.lastEmitKey = emitKey;
     this.pending = request;
     if (this.timer) return;
     this.timer = setTimeout(() => {
@@ -124,7 +129,7 @@ export class TerminalImageManager implements TerminalImageManagerLike {
 
   clear(): void {
     this.pending = null;
-    this.lastFrameKey = "";
+    this.lastEmitKey = "";
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -166,10 +171,15 @@ export class TerminalImageManager implements TerminalImageManagerLike {
     const deleteOld = this.lastKittyImageId !== null && this.lastKittyImageId !== imageId ? kittyDeleteImage(this.lastKittyImageId, true) : "";
     this.lastKittyPayloadKey = payloadKey;
     this.lastKittyImageId = imageId;
+    // Re-placing the same image id with the same placement id (p=1) replaces
+    // the existing placement atomically, so moves and redraws never blank the
+    // image. The old image's data is freed only after the new placement is
+    // established; a blanket delete-visible would flash the image off-screen
+    // between frames, so it is reserved for clear().
     return cursorWrapped(
       request.screenY + 1,
       request.screenX + 1,
-      `${kittyDeleteVisibleImages()}${deleteOld}${transmit}${kittyPlaceImage(imageId, request.cols, request.rows)}`,
+      `${transmit}${kittyPlaceImage(imageId, request.cols, request.rows)}${deleteOld}`,
     );
   }
 }

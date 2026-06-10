@@ -41,22 +41,22 @@ pub fn main(init: std.process.Init) !void {
     defer opened.cfg.deinit();
     defer opened.store.close();
 
-    if (isAddCommand(command)) {
+    if (matchesAlias(command, &command_aliases.add)) {
         const content = if (args.len > 2) try joinArgs(allocator, args[2..]) else try core.util.readAllStdin(allocator);
         defer allocator.free(content);
         const id = try opened.store.addText(opened.cfg, content);
         try stdout.print("{}\n", .{id});
-    } else if (isCopyInputCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.copy_input)) {
         const content = if (args.len > 2) try joinArgs(allocator, args[2..]) else try core.util.readAllStdin(allocator);
         defer allocator.free(content);
         try core.clipboard.writeText(allocator, init, content);
         const hash = core.util.sha256Hex(content);
         try opened.store.markSelfWrite(&hash);
-    } else if (isPrintClipboardCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.print_clipboard)) {
         const content = try core.clipboard.readText(allocator, init);
         defer allocator.free(content);
         try stdout.writeAll(content);
-    } else if (isWlStoreCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.wl_store)) {
         try storeWlData(allocator, init, opened.cfg, &opened.store);
     } else if (std.mem.eql(u8, command, "list")) {
         const query = optionValue(args, "--query") orelse "";
@@ -80,7 +80,7 @@ pub fn main(init: std.process.Init) !void {
         const id = try parseRequiredId(args);
         const target = optionValue(args, "--target-window");
         _ = try core.app.pasteEntry(allocator, init, opened.cfg, &opened.store, id, target);
-    } else if (isAutoPasteCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.auto_paste)) {
         const target = optionValue(args, "--target-window");
         try core.app.autoPaste(allocator, init, opened.cfg, target);
     } else if (std.mem.eql(u8, command, "delete")) {
@@ -95,25 +95,27 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "clear")) {
         const kind = if (args.len > 2) args[2] else "all";
         try stdout.print("{}\n", .{try opened.store.clearWithOptions(kind, hasFlag(args, "--keep-pinned"))});
-    } else if (isAliasClearPinnedCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.clear_pinned)) {
         try stdout.print("{}\n", .{try opened.store.clearWithOptions("all", true)});
-    } else if (isAliasClearAllCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.clear_all)) {
         try stdout.print("{}\n", .{try opened.store.clearWithOptions("all", false)});
-    } else if (isAliasClearImagesCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.clear_images)) {
         try stdout.print("{}\n", .{try opened.store.clearWithOptions("images", false)});
-    } else if (isAliasClearTextCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.clear_text)) {
         try stdout.print("{}\n", .{try opened.store.clearWithOptions("text", false)});
     } else if (std.mem.eql(u8, command, "status")) {
+        const watcher = try core.app.watcherStatus(&opened.store, opened.cfg);
+        defer if (watcher.last_error) |message| allocator.free(message);
         try std.json.Stringify.value(.{
             .config = core.app.configView(opened.cfg),
-            .watcher = try core.app.watcherStatus(&opened.store, opened.cfg),
+            .watcher = watcher,
             .stats = try opened.store.stats(),
         }, .{}, stdout);
         try stdout.writeByte('\n');
-    } else if (isRepairCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.repair)) {
         try std.json.Stringify.value(try opened.store.repair(opened.cfg), .{}, stdout);
         try stdout.writeByte('\n');
-    } else if (isKillCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.kill)) {
         try std.json.Stringify.value(try core.app.killWatcher(&opened.store), .{}, stdout);
         try stdout.writeByte('\n');
     } else if (isPauseCommand(command)) {
@@ -130,18 +132,18 @@ pub fn main(init: std.process.Init) !void {
         defer allocator.free(contents);
         try stdout.writeAll(contents);
         if (contents.len > 0 and contents[contents.len - 1] != '\n') try stdout.writeByte('\n');
-    } else if (isOutputAllCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.output_all)) {
         const format = if (args.len > 2) args[2] else "unescaped";
         try outputAllText(&opened.store, opened.cfg.max_entries, format, stdout);
-    } else if (isUnsupportedPlatformListenCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.unsupported_platform_listen)) {
         try stdout.print("{s} is not supported yet; Ditox currently supports Wayland listening through -listen and -listen-shell.\n", .{command});
-    } else if (isListenShellCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.listen_shell)) {
         try runDaemon(allocator, init, args[0], true);
-    } else if (isListenCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.listen)) {
         try runDaemon(allocator, init, args[0], false);
-    } else if (isKeepCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.keep)) {
         try launchTui(allocator, init, opened.cfg.terminal_command, .{ .keep_open = true });
-    } else if (isEnableRealtimeCommand(command)) {
+    } else if (matchesAlias(command, &command_aliases.enable_realtime)) {
         try launchTui(allocator, init, opened.cfg.terminal_command, .{ .realtime = true });
     } else if (std.mem.eql(u8, command, "launch")) {
         try launchTui(allocator, init, opened.cfg.terminal_command, .{ .keep_open = hasFlag(args, "--keep"), .realtime = hasFlag(args, "--enable-real-time") });
@@ -292,41 +294,12 @@ fn storeWlData(allocator: std.mem.Allocator, init: std.process.Init, cfg: core.c
     defer allocator.free(input);
     if (input.len == 0) return;
 
-    if (detectImageMime(input)) |mime| {
+    if (core.util.detectImageMime(input)) |mime| {
         _ = try store.addImage(cfg, mime, input, core.util.imageMetadata(input, mime));
         return;
     }
 
     _ = try store.addText(cfg, input);
-}
-
-fn detectImageMime(bytes: []const u8) ?[]const u8 {
-    if (isPng(bytes)) return "image/png";
-    if (isJpeg(bytes)) return "image/jpeg";
-    if (isGif(bytes)) return "image/gif";
-    if (isWebp(bytes)) return "image/webp";
-    if (isBmp(bytes)) return "image/bmp";
-    return null;
-}
-
-fn isPng(bytes: []const u8) bool {
-    return bytes.len >= 8 and std.mem.eql(u8, bytes[0..8], "\x89PNG\r\n\x1a\n");
-}
-
-fn isJpeg(bytes: []const u8) bool {
-    return bytes.len >= 3 and bytes[0] == 0xff and bytes[1] == 0xd8 and bytes[2] == 0xff;
-}
-
-fn isGif(bytes: []const u8) bool {
-    return bytes.len >= 6 and (std.mem.eql(u8, bytes[0..6], "GIF87a") or std.mem.eql(u8, bytes[0..6], "GIF89a"));
-}
-
-fn isWebp(bytes: []const u8) bool {
-    return bytes.len >= 12 and std.mem.eql(u8, bytes[0..4], "RIFF") and std.mem.eql(u8, bytes[8..12], "WEBP");
-}
-
-fn isBmp(bytes: []const u8) bool {
-    return bytes.len >= 2 and std.mem.eql(u8, bytes[0..2], "BM");
 }
 
 fn outputAllText(store: anytype, limit: u32, format: []const u8, stdout: *Io.Writer) !void {
@@ -374,83 +347,49 @@ fn daemonPath(allocator: std.mem.Allocator, init: std.process.Init, self_path: [
     return allocator.dupe(u8, "ditoxd");
 }
 
-fn isAddCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "add") or std.mem.eql(u8, command, "-a") or std.mem.eql(u8, command, "--add");
+// Accepted spellings for each aliased command, in one place instead of
+// eighteen near-identical predicate functions. Spellings must stay exactly
+// as the compat surface promises (see printHelp and the CLI smoke tests).
+const command_aliases = struct {
+    const add = [_][]const u8{ "add", "-a", "--add" };
+    const copy_input = [_][]const u8{ "-c", "--copy-input" };
+    const print_clipboard = [_][]const u8{ "-p", "--paste", "--print-clipboard" };
+    const wl_store = [_][]const u8{ "-wl-store", "--wl-store" };
+    const auto_paste = [_][]const u8{ "-auto-paste", "--auto-paste" };
+    const clear_pinned = [_][]const u8{ "-clear", "--clear" };
+    const clear_all = [_][]const u8{ "-clear-all", "--clear-all" };
+    const clear_images = [_][]const u8{ "-clear-images", "--clear-images" };
+    const clear_text = [_][]const u8{ "-clear-text", "--clear-text" };
+    const repair = [_][]const u8{ "repair", "-clean", "--clean" };
+    const kill = [_][]const u8{ "-kill", "--kill" };
+    const pause = [_][]const u8{ "pause", "-pause", "--pause" };
+    const pause_prefixes = [_][]const u8{ "-pause=", "--pause=" };
+    const output_all = [_][]const u8{ "-output-all", "--output-all" };
+    const enable_realtime = [_][]const u8{ "-enable-real-time", "--enable-real-time" };
+    // Recognized listener spellings for platforms Ditox does not support yet.
+    const unsupported_platform_listen = [_][]const u8{ "-listen-x11", "--listen-x11", "-listen-darwin", "--listen-darwin" };
+    const listen_shell = [_][]const u8{ "-listen-shell", "--listen-shell" };
+    const listen = [_][]const u8{ "-listen", "--listen" };
+    const keep = [_][]const u8{ "keep", "--keep" };
+};
+
+fn matchesAlias(command: []const u8, aliases: []const []const u8) bool {
+    for (aliases) |alias| {
+        if (std.mem.eql(u8, command, alias)) return true;
+    }
+    return false;
 }
 
-fn isCopyInputCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "-c") or std.mem.eql(u8, command, "--copy-input");
-}
-
-fn isPrintClipboardCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "-p") or std.mem.eql(u8, command, "--paste") or std.mem.eql(u8, command, "--print-clipboard");
-}
-
-fn isWlStoreCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "-wl-store") or std.mem.eql(u8, command, "--wl-store");
-}
-
-fn isAutoPasteCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "-auto-paste") or std.mem.eql(u8, command, "--auto-paste");
-}
-
-fn isAliasClearPinnedCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "-clear") or std.mem.eql(u8, command, "--clear");
-}
-
-fn isAliasClearAllCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "-clear-all") or std.mem.eql(u8, command, "--clear-all");
-}
-
-fn isAliasClearImagesCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "-clear-images") or std.mem.eql(u8, command, "--clear-images");
-}
-
-fn isAliasClearTextCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "-clear-text") or std.mem.eql(u8, command, "--clear-text");
-}
-
-fn isRepairCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "repair") or std.mem.eql(u8, command, "-clean") or std.mem.eql(u8, command, "--clean");
-}
-
-fn isKillCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "-kill") or std.mem.eql(u8, command, "--kill");
+fn matchesAnyPrefix(command: []const u8, prefixes: []const []const u8) bool {
+    for (prefixes) |prefix| {
+        if (std.mem.startsWith(u8, command, prefix)) return true;
+    }
+    return false;
 }
 
 fn isPauseCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "pause") or
-        std.mem.eql(u8, command, "-pause") or
-        std.mem.eql(u8, command, "--pause") or
-        std.mem.startsWith(u8, command, "-pause=") or
-        std.mem.startsWith(u8, command, "--pause=");
-}
-
-fn isOutputAllCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "-output-all") or std.mem.eql(u8, command, "--output-all");
-}
-
-fn isEnableRealtimeCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "-enable-real-time") or std.mem.eql(u8, command, "--enable-real-time");
-}
-
-fn isUnsupportedPlatformListenCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "-listen-x11") or
-        std.mem.eql(u8, command, "--listen-x11") or
-        std.mem.eql(u8, command, "-listen-darwin") or
-        std.mem.eql(u8, command, "--listen-darwin");
-}
-
-fn isListenShellCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "-listen-shell") or std.mem.eql(u8, command, "--listen-shell");
-}
-
-fn isListenCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "-listen") or std.mem.eql(u8, command, "--listen");
-}
-
-fn isKeepCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "keep") or std.mem.eql(u8, command, "--keep");
+    return matchesAlias(command, &command_aliases.pause) or
+        matchesAnyPrefix(command, &command_aliases.pause_prefixes);
 }
 
 fn launchTui(allocator: std.mem.Allocator, init: std.process.Init, command: []const u8, options: TuiLaunchOptions) !void {

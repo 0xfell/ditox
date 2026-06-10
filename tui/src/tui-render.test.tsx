@@ -4924,6 +4924,7 @@ describe("OpenTUI render snapshots", () => {
       },
       chrome: {
         selectedMarker: ">",
+        selectedMarkedMarker: "*",
         markedMarker: "+",
         normalMarker: ".",
         statusSeparator: "/",

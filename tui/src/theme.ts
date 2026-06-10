@@ -1,4 +1,4 @@
-export const themeNames = ["ditoxDark", "ditoxLight", "groknight", "grokday", "tokyonight", "rosepine"] as const;
+export const themeNames = ["grokbuild", "ditoxDark", "ditoxLight", "groknight", "grokday", "tokyonight", "rosepine"] as const;
 
 export type ThemeName = (typeof themeNames)[number];
 
@@ -29,6 +29,31 @@ export type TuiTheme = {
 };
 
 export const themes: Record<ThemeName, TuiTheme> = {
+  grokbuild: {
+    name: "grokbuild",
+    bgBase: "#0a0a0a",
+    bgPanel: "#111111",
+    bgElevated: "#161616",
+    bgSelected: "#1f1f1f",
+    bgSubtle: "#131313",
+    border: "#2a2a2a",
+    borderFocused: "#4d4d4d",
+    textPrimary: "#ececec",
+    textSecondary: "#a0a0a0",
+    textMuted: "#6e6e6e",
+    textDim: "#4c4c4c",
+    selectionFg: "#ffffff",
+    accentText: "#7aa2f7",
+    accentImage: "#7aa2f7",
+    accentFavorite: "#e0af68",
+    accentError: "#f7768e",
+    accentSuccess: "#9ece6a",
+    accentWarning: "#e0af68",
+    accentSearch: "#7aa2f7",
+    accentCommand: "#7aa2f7",
+    scrollbarTrack: "#1c1c1c",
+    scrollbarThumb: "#4d4d4d",
+  },
   ditoxDark: {
     name: "ditoxDark",
     bgBase: "#101214",

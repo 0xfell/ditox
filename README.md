@@ -151,8 +151,9 @@ overview, not an exhaustive reference.
 
 What you can configure:
 
-- **Themes** — presets (`ditoxDark`, `ditoxLight`, `groknight`, `grokday`,
-  `tokyonight`, `rosepine`), per-token colors, and a `themeFile` pointing at a
+- **Themes** — presets (`grokbuild` (default), `ditoxDark`, `ditoxLight`,
+  `groknight`, `grokday`, `tokyonight`, `rosepine`), per-token colors, and a
+  `themeFile` pointing at a
   `custom_theme.json` (start from `tui/custom_theme.example.json`).
 - **Terminal** — alt-screen / screen mode, renderer background, footer height,
   clear-on-shutdown, title and cursor style, opt-in Kitty keyboard protocol, and
