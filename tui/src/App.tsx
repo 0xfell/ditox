@@ -45,7 +45,7 @@ import { ModeOverlay } from "./components/Overlay";
 import { FullPreview } from "./components/FullPreview";
 import { setImageByteSource, type ImageProtocolCapabilities } from "./image-preview";
 import { useDitoxKeymap } from "./keymap";
-import { fullPreviewTextWidth as layoutFullPreviewTextWidth, fullPreviewVisibleRows, fullPreviewWidth as layoutFullPreviewWidth } from "./layout";
+import { fullPreviewTextWidth as layoutFullPreviewTextWidth, fullPreviewVisibleRows, fullPreviewWidth as layoutFullPreviewWidth, listInteriorRows } from "./layout";
 import { exitAfter, installTerminalExitReset, shutdownTui } from "./terminal-lifecycle";
 import { TerminalImageManager, type TerminalImageState } from "./terminal-image";
 
@@ -91,7 +91,7 @@ export function App(props: { config?: ResolvedTuiConfig; initialUiState?: UiStat
   const headerRows = () => (config.layout.showHeader ? config.layout.headerHeight : 0);
   const statusRows = () => (config.layout.showStatusLine ? config.layout.statusHeight : 0);
   const listRows = () => Math.max(1, contentHeight() - headerRows() - statusRows() - overlayHeight());
-  const visibleListEntries = () => visibleEntryCapacity(listRows(), config.layout.rowSpacing);
+  const visibleListEntries = () => visibleEntryCapacity(listInteriorRows(config, listRows()), config.layout.rowSpacing);
   const splitPaneTotalWidth = () => Math.max(1, contentWidth());
   const splitPaneGap = () =>
     config.layout.showPreviewPane ? Math.min(config.layout.splitPaneGap, Math.max(0, splitPaneTotalWidth() - config.layout.minPaneWidth * 2)) : 0;

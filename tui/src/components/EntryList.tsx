@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 import { entryAccent, entryMeta, entryPreviewSegments, fitRowMeta, scrollbarCells } from "../presentation";
+import { listInteriorRows } from "../layout";
 import { visibleEntries, visibleEntryCapacity } from "../state";
 import type { ContentAlign } from "../ui-config";
 import {
@@ -30,7 +31,8 @@ export function EntryList(props: {
   const rowSpacerStyle = () => surface(props.config, "rowSpacer");
   const layout = () => props.config.layout;
   const chrome = () => props.config.chrome;
-  const visibleCount = () => visibleEntryCapacity(props.rows, layout().rowSpacing);
+  const interiorRows = () => listInteriorRows(props.config, props.rows);
+  const visibleCount = () => visibleEntryCapacity(interiorRows(), layout().rowSpacing);
   const visible = () => visibleEntries(props.entries, props.selectedIndex, visibleCount());
   return (
     <box
@@ -70,7 +72,7 @@ export function EntryList(props: {
       >
         <box flexDirection="row" width="100%" height="100%">
           <Show when={layout().showScrollbar && layout().scrollbarPlacement === "left"}>
-            <Scrollbar config={props.config} total={props.entries.length} selectedIndex={props.selectedIndex} rows={props.rows} />
+            <Scrollbar config={props.config} total={props.entries.length} selectedIndex={props.selectedIndex} rows={interiorRows()} />
           </Show>
           <box flexDirection="column" flexGrow={1}>
             <For each={visible()}>
@@ -99,7 +101,7 @@ export function EntryList(props: {
             </For>
           </box>
           <Show when={layout().showScrollbar && layout().scrollbarPlacement === "right"}>
-            <Scrollbar config={props.config} total={props.entries.length} selectedIndex={props.selectedIndex} rows={props.rows} />
+            <Scrollbar config={props.config} total={props.entries.length} selectedIndex={props.selectedIndex} rows={interiorRows()} />
           </Show>
         </box>
       </Show>

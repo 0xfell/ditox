@@ -46,3 +46,30 @@ export function fullPreviewVisibleRows(entry: Entry | undefined, config: Resolve
     fullPreviewReservedRows(entry, config, rows),
   );
 }
+
+// The `rows` each pane receives from App is the full pane height including
+// the pane's own chrome (border rows + vertical padding). Yoga children do
+// not shrink by default, so a pane that fills `rows` with content AND draws
+// chrome grows past its slot and pushes the status line/bottom borders off
+// screen. Every content-capacity computation must budget interior rows only.
+
+/** Rows the list pane spends on its own chrome (border + vertical padding). */
+export function listChromeRows(config: ResolvedTuiConfig): number {
+  return (config.chrome.listBorder ? 2 : 0) + config.layout.listPaddingY * 2;
+}
+
+/** Interior rows available for list entries inside a pane of `rows` height. */
+export function listInteriorRows(config: ResolvedTuiConfig, rows: number): number {
+  return Math.max(1, Math.floor(rows) - listChromeRows(config));
+}
+
+/** Rows the split preview pane spends on its own chrome. */
+export function splitPreviewChromeRows(config: ResolvedTuiConfig): number {
+  return (config.chrome.previewBorder ? 2 : 0) + config.layout.previewPaddingY * 2;
+}
+
+/** Interior rows available for split-preview content (metadata + image +
+ * text) inside a pane of `rows` height. */
+export function splitPreviewInteriorRows(config: ResolvedTuiConfig, rows: number): number {
+  return Math.max(1, Math.floor(rows) - splitPreviewChromeRows(config));
+}

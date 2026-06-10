@@ -3476,7 +3476,7 @@ describe("OpenTUI render snapshots", () => {
               onSelectEntry={() => {}}
               onScroll={() => {}}
             />
-            <PreviewPane config={config} entry={entries[0]} rows={4} width={34} />
+            <PreviewPane config={config} entry={entries[0]} rows={8} width={34} />
           </box>
           <ModeOverlay config={config} state={state} />
         </Shell>
@@ -5104,6 +5104,56 @@ describe("OpenTUI render snapshots", () => {
         expect(frame, item.name).toContain(expected);
       }
     }
+  });
+
+  test("full list and long soft-wrapped preview text keep the status line and pane borders on screen", async () => {
+    // Regression: each pane's `rows` budget includes its own border/padding
+    // chrome. A full history list or a long wrapped preview used to render
+    // `rows` content rows PLUS chrome, growing past the pane slot and pushing
+    // the bottom borders and status line off the terminal.
+    const config = resolveTuiConfig({});
+    const longText = Array.from({ length: 30 }, (_, index) => `line ${index} ${"persistently-long-token ".repeat(8)}`).join("\n");
+    const entries = [textEntry(1, longText, false), ...Array.from({ length: 40 }, (_, index) => textEntry(index + 2, `short clip ${index}`, false))];
+    const state = { ...initialState(), entries, selectedIndex: 0, status: "ready", watcher: null };
+
+    const width = 100;
+    const height = 30;
+    const headerRows = config.layout.showHeader ? config.layout.headerHeight : 0;
+    const statusRows = config.layout.showStatusLine ? config.layout.statusHeight : 0;
+    const listRows = Math.max(1, height - headerRows - statusRows);
+
+    const frame = await captureFrame(
+      () => (
+        <Shell config={config}>
+          <HeaderBar config={config} state={state} selectedCount={0} width={width} />
+          <box flexDirection="row" flexGrow={1}>
+            <EntryList
+              config={config}
+              entries={entries}
+              selectedIndex={0}
+              selectedIds={new Set<number>()}
+              rows={listRows}
+              width={40}
+              query=""
+              onSelectEntry={() => {}}
+              onScroll={() => {}}
+            />
+            <PreviewPane config={config} entry={entries[0]} rows={listRows} width={58} />
+          </box>
+          <StatusLine config={config} status={state.status} watcher={state.watcher} width={width} mode="browse" />
+        </Shell>
+      ),
+      width,
+      height,
+    );
+
+    expectFrameWithin(frame, width, height);
+    const lines = frame.replace(/\n$/, "").split("\n");
+    // Status line is the last laid-out row, with both pane bottom borders
+    // right above it.
+    expect(lines[height - 1]).toContain("ready");
+    expect(lines[height - 2]).toContain("╰");
+    expect(lines[height - 2]).toContain("╯");
   });
 });
 

@@ -1,5 +1,6 @@
 import { createEffect, For, Show } from "solid-js";
 import { type ImageBlockPreview as ImageBlockPreviewModel, type ImageProtocolCapabilities } from "../image-preview";
+import { splitPreviewInteriorRows } from "../layout";
 import { previewMetaTemplateValues, previewModel, truncateText } from "../presentation";
 import { visiblePreviewLineCapacity } from "../state";
 import { selectNativeImageProtocol, type TerminalImageManagerLike, type TerminalImageState } from "../terminal-image";
@@ -65,8 +66,14 @@ export function PreviewPane(props: {
     if (!nativeImageActive()) props.imageManager?.clear();
   });
   const metadataRows = () => (layout().showMetadata && props.entry ? layout().previewMetaHeight : 0);
+  // Budget text rows against the pane interior (rows minus the pane's own
+  // border/padding chrome); soft-wrapped content otherwise grows the pane past
+  // its slot and pushes the status line off screen.
   const visibleTextRows = () =>
-    visiblePreviewLineCapacity(Math.min(layout().maxPreviewLines, Math.max(0, props.rows - metadataRows() - imagePreviewRows())), layout().previewLineSpacing);
+    visiblePreviewLineCapacity(
+      Math.min(layout().maxPreviewLines, Math.max(0, splitPreviewInteriorRows(props.config, props.rows) - metadataRows() - imagePreviewRows())),
+      layout().previewLineSpacing,
+    );
   const lines = () =>
     previewModel(
       props.entry,
