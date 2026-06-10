@@ -1,6 +1,6 @@
 import { createEffect, For, Show } from "solid-js";
 import { type ImageBlockPreview as ImageBlockPreviewModel, type ImageProtocolCapabilities } from "../image-preview";
-import { splitPreviewInteriorRows } from "../layout";
+import { splitImagePreviewMaxRows, splitPreviewInteriorRows } from "../layout";
 import { previewMetaTemplateValues, previewModel, truncateText } from "../presentation";
 import { visiblePreviewLineCapacity } from "../state";
 import { selectNativeImageProtocol, type TerminalImageManagerLike, type TerminalImageState } from "../terminal-image";
@@ -35,12 +35,13 @@ export function PreviewPane(props: {
   const blockPreview = createImageBlockPreview(() => ({
     entry: props.entry,
     maxWidth: Math.min(textWidth(), layout().imagePreviewMaxWidth),
-    maxRows: Math.min(Math.max(2, props.rows - layout().imagePreviewRowInset), layout().imagePreviewMaxRows),
+    maxRows: splitImagePreviewMaxRows(props.config, props.rows, layout().showMetadata),
     background: imagePreviewBackground(layout().imagePreviewBackground, style().bg),
     mode: layout().imagePreviewMode,
     labels: labels(),
     blockGlyph: layout().imagePreviewBlockGlyph,
     capabilities: props.imageTerminal?.capabilities ?? props.imageCapabilities,
+    debounceMs: layout().imagePreviewDebounceMs,
   }));
   const imageNoticeText = () => imagePreviewNotice(blockPreview(), layout().imagePreviewNoticeVisibility, labels().splitImagePreviewSourceTemplate);
   const imageFallbackVisible = () => props.entry?.kind === "image" && blockPreview().kind === "fallback" && layout().imagePreviewMode !== "metadata";

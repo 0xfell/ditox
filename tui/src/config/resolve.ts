@@ -238,6 +238,11 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
     defaultLayout.previewBodyVerticalAlign,
   );
   const imagePreviewRowInset = clampNumber(numberValue(fileConfig.layout?.imagePreviewRowInset, compactFallback("imagePreviewRowInset")), 0, 20);
+  const imagePreviewDebounceMs = clampNumber(
+    envNumber(env, "DITOX_TUI_IMAGE_DEBOUNCE_MS", numberValue(fileConfig.layout?.imagePreviewDebounceMs, defaultLayout.imagePreviewDebounceMs)),
+    0,
+    1000,
+  );
   const imagePreviewMode = imagePreviewModeValue(
     env.DITOX_TUI_IMAGE_PREVIEW,
     fileConfig.layout?.imagePreviewMode,
@@ -375,6 +380,7 @@ export function resolveTuiConfig(fileConfig: TuiConfigFile = {}, env: EnvMap = {
       previewBodyVerticalAlign,
     ),
     imagePreviewRowInset,
+    imagePreviewDebounceMs,
     fullPreviewImageRowInset: clampNumber(
       envNumber(
         env,

@@ -183,8 +183,10 @@ describe("App helpers", () => {
       },
     });
 
-    expect(estimatedImagePreviewRows(imageEntry, config, 6)).toBe(7);
-    expect(fullPreviewReservedRows(imageEntry, config, 6)).toBe(8);
+    // Image budget = pane interior (rows minus border) minus metadata minus
+    // inset: max(2, 6 - 2 - 1 - 0) = 3, plus the notice row and its spacing.
+    expect(estimatedImagePreviewRows(imageEntry, config, 6)).toBe(6);
+    expect(fullPreviewReservedRows(imageEntry, config, 6)).toBe(7);
   });
 
   test("does not reserve notice spacing when the full preview notice is hidden", () => {

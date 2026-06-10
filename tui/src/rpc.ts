@@ -75,7 +75,10 @@ export type ImageBytesResponse = {
 
 export async function getImageBytes(id: number, labels?: Partial<RpcErrorLabelSet>): Promise<ImageBytesResponse> {
   const result = await call<{ mime: string; data: string; width: number | null; height: number | null }>("entries.get_image", { id }, labels);
-  return { ...result, data: Uint8Array.from(Buffer.from(result.data, "base64")) };
+  // Wrap the decoded buffer instead of copying it; image payloads run to
+  // megabytes and the extra copy is pure waste on the render thread.
+  const buffer = Buffer.from(result.data, "base64");
+  return { ...result, data: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength) };
 }
 
 export async function deleteEntry(id: number, labels?: Partial<RpcErrorLabelSet>): Promise<{ deleted: boolean }> {

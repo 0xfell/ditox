@@ -150,24 +150,26 @@ export class TerminalImageManager implements TerminalImageManagerLike {
     this.pending = null;
     if (!request) return;
 
-    const pixels = renderContainedRgba(request);
     if (request.protocol === "kitty") {
-      this.writer(this.kittySequence(request, pixels));
+      this.writer(this.kittySequence(request));
       return;
     }
     this.writer(
       cursorWrapped(
         request.screenY + 1,
         request.screenX + 1,
-        sixelEncodeRgba(pixels, request.pixelWidth, request.pixelHeight),
+        sixelEncodeRgba(renderContainedRgba(request), request.pixelWidth, request.pixelHeight),
       ),
     );
   }
 
-  private kittySequence(request: NativeImageRequest, pixels: Uint8Array): string {
+  private kittySequence(request: NativeImageRequest): string {
     const payloadKey = `${request.sourceKey}:${request.pixelWidth}x${request.pixelHeight}:${request.background}`;
     const imageId = stableImageId(payloadKey);
-    const transmit = payloadKey === this.lastKittyPayloadKey ? "" : kittyTransmitRgba(imageId, pixels, request.pixelWidth, request.pixelHeight);
+    // Scaling the image to terminal pixels costs tens of milliseconds for
+    // large sources; only do it when the payload actually needs transmitting
+    // (moves and re-places of an already-transmitted image skip it).
+    const transmit = payloadKey === this.lastKittyPayloadKey ? "" : kittyTransmitRgba(imageId, renderContainedRgba(request), request.pixelWidth, request.pixelHeight);
     const deleteOld = this.lastKittyImageId !== null && this.lastKittyImageId !== imageId ? kittyDeleteImage(this.lastKittyImageId, true) : "";
     this.lastKittyPayloadKey = payloadKey;
     this.lastKittyImageId = imageId;
@@ -214,17 +216,17 @@ function renderContainedRgba(request: NativeImageRequest): Uint8Array {
 
 export function kittyTransmitRgba(imageId: number, pixels: Uint8Array, width: number, height: number): string {
   const payload = Buffer.from(pixels).toString("base64");
-  const chunks = payload.match(/.{1,4096}/g) ?? [""];
-  return chunks
-    .map((chunk, index) => {
-      const more = index < chunks.length - 1 ? 1 : 0;
-      const options =
-        index === 0
-          ? `a=t,f=32,s=${width},v=${height},i=${imageId},m=${more},q=2`
-          : `m=${more},q=2`;
-      return `\x1b_G${options};${chunk}\x1b\\`;
-    })
-    .join("");
+  // Chunk by slicing; a /.{1,4096}/g regex walk over multi-megabyte payloads
+  // is measurably slower on the render thread.
+  const parts: string[] = [];
+  const total = Math.max(1, Math.ceil(payload.length / 4096));
+  for (let index = 0; index < total; index += 1) {
+    const chunk = payload.slice(index * 4096, (index + 1) * 4096);
+    const more = index < total - 1 ? 1 : 0;
+    const options = index === 0 ? `a=t,f=32,s=${width},v=${height},i=${imageId},m=${more},q=2` : `m=${more},q=2`;
+    parts.push(`\x1b_G${options};${chunk}\x1b\\`);
+  }
+  return parts.join("");
 }
 
 export function kittyPlaceImage(imageId: number, cols: number, rows: number): string {

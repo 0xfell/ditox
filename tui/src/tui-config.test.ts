@@ -82,6 +82,7 @@ describe("tui config", () => {
     expect(config.layout.fullPreviewBodyVerticalAlign).toBe("top");
     expect(config.layout.imagePreviewRowInset).toBe(3);
     expect(config.layout.fullPreviewImageRowInset).toBe(3);
+    expect(config.layout.imagePreviewDebounceMs).toBe(80);
     expect(config.layout.fullPreviewScrollInsetRows).toBe(2);
     expect(config.layout.previewLineNumberWidth).toBe(3);
     expect(config.layout.previewGutterWidth).toBe(4);
@@ -867,6 +868,7 @@ describe("tui config", () => {
         imagePreviewNoticeVisibility: "always",
         imagePreviewNoticeSpacing: 2,
         imagePreviewRowInset: 7,
+        imagePreviewDebounceMs: 9999,
       },
     });
     expect(legacy.labels.previewGutterSeparator).toBe("::");
@@ -894,6 +896,8 @@ describe("tui config", () => {
     expect(legacy.layout.imagePreviewNoticeSpacing).toBe(2);
     expect(legacy.layout.fullPreviewImageNoticeSpacing).toBe(2);
     expect(legacy.layout.imagePreviewRowInset).toBe(7);
+    // File value, clamped to the supported range.
+    expect(legacy.layout.imagePreviewDebounceMs).toBe(1000);
     expect(legacy.layout.fullPreviewImageRowInset).toBe(7);
 
     const explicit = resolveTuiConfig({
@@ -2379,6 +2383,7 @@ describe("tui config", () => {
         DITOX_TUI_FULL_PREVIEW_IMAGE_MODE: "kitty",
         DITOX_TUI_IMAGE_PREVIEW_MAX_WIDTH: "24",
         DITOX_TUI_IMAGE_PREVIEW_MAX_ROWS: "8",
+        DITOX_TUI_IMAGE_DEBOUNCE_MS: "120",
         DITOX_TUI_FULL_PREVIEW_IMAGE_MAX_WIDTH: "32",
         DITOX_TUI_FULL_PREVIEW_IMAGE_MAX_ROWS: "6",
         DITOX_TUI_IMAGE_RENDERER: "text",
@@ -2480,6 +2485,7 @@ describe("tui config", () => {
     expect(config.layout.fullPreviewImageMode).toBe("kitty");
     expect(config.layout.imagePreviewMaxWidth).toBe(24);
     expect(config.layout.imagePreviewMaxRows).toBe(8);
+    expect(config.layout.imagePreviewDebounceMs).toBe(120);
     expect(config.layout.fullPreviewImageMaxWidth).toBe(32);
     expect(config.layout.fullPreviewImageMaxRows).toBe(6);
     expect(config.layout.imagePreviewRenderer).toBe("text");

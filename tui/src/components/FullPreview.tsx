@@ -1,6 +1,7 @@
 import { createEffect, For, Show } from "solid-js";
 import { type ImageBlockPreview as ImageBlockPreviewModel, type ImageProtocolCapabilities } from "../image-preview";
 import { entryAccent, previewMetaTemplateValues, previewModel, previewWindow, truncateText } from "../presentation";
+import { fullImagePreviewMaxRows } from "../layout";
 import { visibleFullPreviewLineCapacity } from "../state";
 import { selectNativeImageProtocol, type TerminalImageManagerLike, type TerminalImageState } from "../terminal-image";
 import { formatTemplate, paddedTitle, surface, textStyle, type ResolvedTuiConfig } from "../tui-config";
@@ -31,12 +32,13 @@ export function FullPreview(props: {
   const blockPreview = createImageBlockPreview(() => ({
     entry: props.entry,
     maxWidth: Math.min(textWidth(), layout().fullPreviewImageMaxWidth),
-    maxRows: Math.min(Math.max(2, props.rows - layout().fullPreviewImageRowInset), layout().fullPreviewImageMaxRows),
+    maxRows: fullImagePreviewMaxRows(props.config, props.rows, layout().showFullPreviewMetadata),
     background: imagePreviewBackground(layout().fullPreviewImageBackground, style().bg),
     mode: layout().fullPreviewImageMode,
     labels: labels(),
     blockGlyph: layout().fullPreviewImageBlockGlyph,
     capabilities: props.imageTerminal?.capabilities ?? props.imageCapabilities,
+    debounceMs: layout().imagePreviewDebounceMs,
   }));
   const lines = () =>
     previewModel(props.entry, layout().maxFullPreviewLines, labels(), layout(), textWidth());

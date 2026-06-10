@@ -105,6 +105,49 @@ class LruCache<V> {
 const previewCache = new LruCache<ImageBlockPreview>(PREVIEW_CACHE_LIMIT);
 const asyncPreviewCache = new LruCache<ImageBlockPreview | Promise<ImageBlockPreview>>(PREVIEW_CACHE_LIMIT);
 
+// Decoded RGBA frames, keyed by content-addressed blob path and bounded by a
+// byte budget. Decoding dominates preview cost (a 1440p PNG takes ~85ms on
+// this thread), and the same blob is re-rendered at several geometries
+// (split pane, full preview, resizes) — without this cache every geometry
+// change paid a full re-fetch + re-decode.
+const DECODED_CACHE_BYTE_LIMIT = 64 * 1024 * 1024;
+
+class DecodedImageCache {
+  private readonly map = new Map<string, DecodedImage>();
+  private bytes = 0;
+
+  get(key: string): DecodedImage | undefined {
+    const value = this.map.get(key);
+    if (value !== undefined) {
+      this.map.delete(key);
+      this.map.set(key, value);
+    }
+    return value;
+  }
+
+  set(key: string, value: DecodedImage): void {
+    // A single frame larger than half the budget would immediately evict
+    // everything else; let those stay uncached.
+    if (value.pixels.byteLength > DECODED_CACHE_BYTE_LIMIT / 2) return;
+    const existing = this.map.get(key);
+    if (existing) {
+      this.bytes -= existing.pixels.byteLength;
+      this.map.delete(key);
+    }
+    this.map.set(key, value);
+    this.bytes += value.pixels.byteLength;
+    while (this.bytes > DECODED_CACHE_BYTE_LIMIT) {
+      const oldest = this.map.keys().next().value;
+      if (oldest === undefined) break;
+      const evicted = this.map.get(oldest);
+      this.map.delete(oldest);
+      this.bytes -= evicted?.pixels.byteLength ?? 0;
+    }
+  }
+}
+
+const decodedImageCache = new DecodedImageCache();
+
 // Where preview pixels come from. The production TUI installs an RPC-backed
 // source at startup (see App.run) so the UI never reads blob files from the
 // daemon's filesystem; the default filesystem source remains for direct/unit
@@ -175,15 +218,17 @@ export function imageBlockPreview(
   const cacheKey = blockPreviewCacheKey(entry.blob_path, width, rows, background, glyph, text, notice);
   const cached = previewCache.get(cacheKey);
   if (cached) return cached;
-  if (isAsyncBlockPreviewMime(entry.mime) || !imageByteSource.readSync) {
+  const decoded = decodedImageCache.get(entry.blob_path);
+  if (!decoded && (isAsyncBlockPreviewMime(entry.mime) || !imageByteSource.readSync)) {
     return { kind: "fallback", reason: text.imagePreviewDecodePending };
   }
 
   let result: ImageBlockPreview;
   try {
-    result = imageBlockPreviewFromBytes(imageByteSource.readSync(entry), width, rows, background, entry.mime, text, glyph, previewSourcePrefix(mode, text), notice, imagePreviewProtocol(mode));
+    const image = decoded ?? decodeAndCache(entry, imageByteSource.readSync!(entry));
+    result = renderImageBlocks(image, width, rows, background, glyph, previewSourcePrefix(mode, text), notice, imagePreviewProtocol(mode));
   } catch (error) {
-    result = { kind: "fallback", reason: decodeErrorReason(error, text) };
+    result = { kind: "fallback", reason: imagePreviewErrorReason(error, entry.mime, text) };
   }
   previewCache.set(cacheKey, result);
   return result;
@@ -216,26 +261,28 @@ export async function imageBlockPreviewAsync(
   const pending = (async () => {
     let result: ImageBlockPreview;
     try {
-      result = await imageBlockPreviewFromBytesAsync(
-        await imageByteSource.read(entry),
-        width,
-        rows,
-        background,
-        entry.mime,
-        text,
-        glyph,
-        previewSourcePrefix(mode, text),
-        notice,
-        imagePreviewProtocol(mode),
-      );
+      const image = decodedImageCache.get(entry.blob_path!) ?? (await decodeAndCacheAsync(entry, await imageByteSource.read(entry)));
+      result = renderImageBlocks(image, width, rows, background, glyph, previewSourcePrefix(mode, text), notice, imagePreviewProtocol(mode));
     } catch (error) {
-      result = { kind: "fallback", reason: decodeErrorReason(error, text) };
+      result = { kind: "fallback", reason: imagePreviewErrorReason(error, entry.mime, text) };
     }
     asyncPreviewCache.set(cacheKey, result);
     return result;
   })();
   asyncPreviewCache.set(cacheKey, pending);
   return await pending;
+}
+
+function decodeAndCache(entry: Entry, bytes: Uint8Array): DecodedImage {
+  const image = decodeImage(bytes, entry.mime);
+  if (entry.blob_path) decodedImageCache.set(entry.blob_path, image);
+  return image;
+}
+
+async function decodeAndCacheAsync(entry: Entry, bytes: Uint8Array): Promise<DecodedImage> {
+  const image = await decodeImageAsync(bytes, entry.mime);
+  if (entry.blob_path) decodedImageCache.set(entry.blob_path, image);
+  return image;
 }
 
 export function shouldLoadImageBlockPreviewAsync(entry: Entry | undefined, mode: ImagePreviewMode): boolean {
@@ -592,13 +639,21 @@ export function renderImageBlocks(
   const cellGlyph = Array.from(glyph)[0] ?? "▀";
   const target = targetSize(image.width, image.height, maxWidth, maxRows);
   const native = nativeBuffer(image, target, bg);
+  // The native supersample buffer already holds exactly the averaged pixel
+  // each half-block cell needs (top = row 2k, bottom = row 2k+1), so derive
+  // the cell colors from it instead of running the full-image averaging pass
+  // a second time.
   const rows: ImageCell[][] = [];
   for (let row = 0; row < target.cellRows; row += 1) {
     const cells: ImageCell[] = [];
     for (let col = 0; col < target.cols; col += 1) {
-      const top = averagePixel(image, col, row * 2, target.cols, target.pixelRows, bg);
-      const bottom = averagePixel(image, col, row * 2 + 1, target.cols, target.pixelRows, bg);
-      cells.push({ char: cellGlyph, fg: rgbToHex(top), bg: rgbToHex(bottom) });
+      const top = (row * 2 * target.cols + col) * 4;
+      const bottom = ((row * 2 + 1) * target.cols + col) * 4;
+      cells.push({
+        char: cellGlyph,
+        fg: rgbBytesToHex(native.pixels[top]!, native.pixels[top + 1]!, native.pixels[top + 2]!),
+        bg: rgbBytesToHex(native.pixels[bottom]!, native.pixels[bottom + 1]!, native.pixels[bottom + 2]!),
+      });
     }
     rows.push(cells);
   }
@@ -1013,6 +1068,10 @@ function parseHexColor(value: string): Rgba | null {
 
 function rgbToHex(color: Rgba): string {
   return `#${hex(color.r)}${hex(color.g)}${hex(color.b)}`;
+}
+
+function rgbBytesToHex(r: number, g: number, b: number): string {
+  return `#${hex(r)}${hex(g)}${hex(b)}`;
 }
 
 function hex(value: number): string {

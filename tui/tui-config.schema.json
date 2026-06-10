@@ -224,6 +224,7 @@
         "fullPreviewImageMode": { "enum": ["metadata", "blocks", "kitty", "sixel"] },
         "imagePreviewMaxWidth": { "type": "integer" },
         "imagePreviewMaxRows": { "type": "integer" },
+        "imagePreviewDebounceMs": { "type": "integer", "description": "Delay (ms) before decoding an image preview while the selection is still moving rapidly; 0 decodes immediately." },
         "fullPreviewImageMaxWidth": { "type": "integer" },
         "fullPreviewImageMaxRows": { "type": "integer" },
         "imagePreviewRenderer": { "$ref": "#/$defs/imagePreviewRenderer" },

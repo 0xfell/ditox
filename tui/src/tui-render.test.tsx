@@ -4371,14 +4371,17 @@ describe("OpenTUI render snapshots", () => {
         },
       });
 
+      // rows=10: pane interior (10 - 2 border) minus meta (3) leaves the 4
+      // image cell rows this scene pins; the budget now correctly excludes
+      // the pane's own chrome.
       const splitFrame = await captureFrame(
         () => (
           <Shell config={config}>
-            <PreviewPane config={config} entry={entry} rows={8} width={48} />
+            <PreviewPane config={config} entry={entry} rows={10} width={48} />
           </Shell>
         ),
         58,
-        10,
+        12,
       );
       expect(splitFrame).toContain("IMGHEADER");
       expect(splitFrame).toContain("SRC image blocks 2x4");

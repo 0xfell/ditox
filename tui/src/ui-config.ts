@@ -54,6 +54,7 @@ export type UiConfig = {
   previewBodyVerticalAlign: VerticalAlign;
   fullPreviewBodyVerticalAlign: VerticalAlign;
   imagePreviewRowInset: number;
+  imagePreviewDebounceMs: number;
   fullPreviewImageRowInset: number;
   fullPreviewScrollInsetRows: number;
   previewLineNumberWidth: number;

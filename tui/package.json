@@ -9,6 +9,7 @@
     "build": "bun build.ts",
     "contracts": "json2ts -i ../contracts/rpc.schema.json -o src/generated/rpc-schema.d.ts",
     "test": "bun test",
+    "bench": "bun bench/perf.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {

@@ -29,7 +29,7 @@ export function estimatedImagePreviewRows(entry: Entry | undefined, config: Reso
   if (entry?.kind !== "image" || config.layout.fullPreviewImageMode === "metadata") return 0;
   const canRenderBlocks = entry.blob_path !== null && isBlockPreviewMime(entry.mime);
   if (!canRenderBlocks) return 1;
-  const renderedRows = Math.min(Math.max(2, rows - config.layout.fullPreviewImageRowInset), config.layout.fullPreviewImageMaxRows);
+  const renderedRows = fullImagePreviewMaxRows(config, rows, config.layout.showFullPreviewMetadata);
   const noticeRows =
     config.layout.fullPreviewImageNoticeVisibility === "always" ||
     (config.layout.fullPreviewImageNoticeVisibility === "protocol" && (config.layout.fullPreviewImageMode === "kitty" || config.layout.fullPreviewImageMode === "sixel"))
@@ -72,4 +72,35 @@ export function splitPreviewChromeRows(config: ResolvedTuiConfig): number {
  * text) inside a pane of `rows` height. */
 export function splitPreviewInteriorRows(config: ResolvedTuiConfig, rows: number): number {
   return Math.max(1, Math.floor(rows) - splitPreviewChromeRows(config));
+}
+
+/** Rows the full preview pane spends on its own chrome. */
+export function fullPreviewChromeRows(config: ResolvedTuiConfig): number {
+  return (config.chrome.fullPreviewBorder ? 2 : 0) + config.layout.fullPreviewPaddingY * 2;
+}
+
+export function fullPreviewInteriorRows(config: ResolvedTuiConfig, rows: number): number {
+  return Math.max(1, Math.floor(rows) - fullPreviewChromeRows(config));
+}
+
+/** Cell-row budget for the split-pane image preview: pane interior minus the
+ * metadata block minus the configured inset (notice/spacing slack). Budgeting
+ * against the raw pane height let tall images overflow the pane and bleed
+ * over the bottom border and status line. */
+export function splitImagePreviewMaxRows(config: ResolvedTuiConfig, rows: number, hasMetadata: boolean): number {
+  const metadataRows = hasMetadata ? config.layout.previewMetaHeight : 0;
+  return Math.min(
+    Math.max(2, splitPreviewInteriorRows(config, rows) - metadataRows - config.layout.imagePreviewRowInset),
+    config.layout.imagePreviewMaxRows,
+  );
+}
+
+/** Cell-row budget for the full-preview image, mirrored by
+ * `estimatedImagePreviewRows` for scroll bounds. */
+export function fullImagePreviewMaxRows(config: ResolvedTuiConfig, rows: number, hasMetadata: boolean): number {
+  const metadataRows = hasMetadata ? config.layout.fullPreviewMetaHeight : 0;
+  return Math.min(
+    Math.max(2, fullPreviewInteriorRows(config, rows) - metadataRows - config.layout.fullPreviewImageRowInset),
+    config.layout.fullPreviewImageMaxRows,
+  );
 }

@@ -21,6 +21,9 @@ export type ImageBlockPreviewRequest = {
   labels: Partial<ImagePreviewFallbackLabels>;
   blockGlyph: string;
   capabilities: Partial<ImageProtocolCapabilities> | undefined;
+  /** Decode delay applied only while the request is changing rapidly (fast
+   * navigation); the first request after an idle period decodes immediately. */
+  debounceMs?: number;
 };
 
 // Refresh polls rebuild the entry list, so the selected entry (and the
@@ -40,7 +43,8 @@ export function sameImageBlockPreviewRequest(a: ImageBlockPreviewRequest, b: Ima
     a.blockGlyph === b.blockGlyph &&
     a.capabilities?.kittyGraphics === b.capabilities?.kittyGraphics &&
     a.capabilities?.sixel === b.capabilities?.sixel &&
-    a.capabilities?.nativeRenderer === b.capabilities?.nativeRenderer
+    a.capabilities?.nativeRenderer === b.capabilities?.nativeRenderer &&
+    a.debounceMs === b.debounceMs
   );
 }
 
@@ -54,32 +58,54 @@ export function createImageBlockPreview(request: Accessor<ImageBlockPreviewReque
   const renderer = useRenderer();
   const stableRequest = createMemo(request, undefined, { equals: sameImageBlockPreviewRequest });
   const [loaded, setLoaded] = createSignal<ImageBlockPreview | null>(null);
+  let lastRequestAt = 0;
   createEffect(() => {
     const current = stableRequest();
+    // Track request churn across ALL entries (text included) so holding an
+    // arrow key through a mixed list keeps the rapid-navigation window open.
+    const now = Date.now();
+    const sinceLastChange = now - lastRequestAt;
+    lastRequestAt = now;
     const wantsAsync = shouldLoadImageBlockPreviewAsync(current.entry, current.mode);
     const cached = wantsAsync ? cachedPreview(current) : null;
     setLoaded(cached ?? syncPreview(current));
     if (!wantsAsync || cached) return;
 
     let disposed = false;
-    void imageBlockPreviewAsync(
-      current.entry,
-      current.maxWidth,
-      current.maxRows,
-      current.background,
-      current.mode,
-      current.labels,
-      current.blockGlyph,
-      current.capabilities,
-    ).then((preview) => {
-      if (!disposed) {
-        setLoaded(preview);
-        // Nothing else may be scheduled when the decode lands, so ask for a
-        // fresh frame explicitly; the placeholder would otherwise linger until
-        // an unrelated re-render.
-        renderer.requestRender();
-      }
-    });
+    const startDecode = () => {
+      void imageBlockPreviewAsync(
+        current.entry,
+        current.maxWidth,
+        current.maxRows,
+        current.background,
+        current.mode,
+        current.labels,
+        current.blockGlyph,
+        current.capabilities,
+      ).then((preview) => {
+        if (!disposed) {
+          setLoaded(preview);
+          // Nothing else may be scheduled when the decode lands, so ask for a
+          // fresh frame explicitly; the placeholder would otherwise linger
+          // until an unrelated re-render.
+          renderer.requestRender();
+        }
+      });
+    };
+    // Decoding blocks this thread for tens of milliseconds on large images.
+    // While the user is skimming the list (requests arriving faster than the
+    // debounce window) defer the decode; entries only pay once the selection
+    // settles. The first request after an idle period decodes immediately.
+    const debounceMs = Math.max(0, current.debounceMs ?? 0);
+    if (debounceMs > 0 && sinceLastChange < debounceMs) {
+      const timer = setTimeout(startDecode, debounceMs);
+      onCleanup(() => {
+        disposed = true;
+        clearTimeout(timer);
+      });
+      return;
+    }
+    startDecode();
     onCleanup(() => {
       disposed = true;
     });

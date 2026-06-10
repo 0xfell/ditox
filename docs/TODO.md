@@ -120,6 +120,20 @@ Initial visual polish is implemented:
 - Pin/unpin actions keep configurable success status text after the history refresh.
 - PNG, JPEG, GIF first frames, WebP, and uncompressed BMP image entries can render as OpenTUI-supersampled or text-span block previews with configurable source labels, source-notice spacing, and metadata fallback; Kitty/Sixel requests keep their configured mode and currently use capability-aware labeled block fallbacks with configurable protocol display names.
 - Image preview rows, protocol/source notices, notice spacing, and fallback rows reserve space before text metadata is windowed, so image-heavy panes stay bounded instead of crowding later preview lines.
+- Image cell-row budgets subtract the pane's own chrome and metadata block
+  (`splitImagePreviewMaxRows` / `fullImagePreviewMaxRows` in `layout.ts`), so
+  tall images can no longer bleed over the pane border and status line.
+- Image preview performance (`bun run --cwd tui bench` measures these):
+  decoded RGBA frames are cached per blob in a byte-budgeted LRU, so pane
+  resizes and split/full transitions re-render cells (~19ms for 1440p)
+  instead of re-fetching and re-decoding (~170ms, 8.9x); the half-block
+  renderer derives cell colors from the supersample buffer in a single pass
+  (2x); Kitty payload scaling is skipped when the payload was already
+  transmitted, and transmit chunking avoids regex (2.3x).
+- Fast list navigation never decodes images: an adaptive debounce
+  (`imagePreviewDebounceMs`, default 80ms, `DITOX_TUI_IMAGE_DEBOUNCE_MS`)
+  defers decode while the selection is still moving and decodes immediately
+  once it settles (first request after idle pays no delay).
 - The first image preview upgrades from the low-res block fallback to the native renderer as soon as the terminal reports its pixel resolution (tracked in a reactive signal), instead of staying blurry until another entry is selected. The OpenTUI supersampled block renderer also re-requests a render when the pixel resolution lands, so a first/selected image redraws at full fidelity in place instead of staying at its initial blurry draw until the selection moves.
 - The image preview renderer is configurable (`auto`, `opentui`, `text`); split/full preview image alignment, custom text block glyphs, and transparent-pixel background colors remain configurable for terminals or themes that render alternate block cells more cleanly.
 - Image copy/paste restores the stored blob to the clipboard with its MIME type instead of copying the storage hash as text.
